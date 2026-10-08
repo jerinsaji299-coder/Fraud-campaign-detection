@@ -1,5 +1,7 @@
 # Early Discovery of Emerging Fraud Campaigns from Fragmented Cross-Institution Evidence
 
+**Repository:** https://github.com/jerinsaji299-coder/Fraud-campaign-detection
+
 A final-year B.Tech (AI & Data Science) major project (journal paper also
 planned) studying how the benefit of cross-bank collaboration for early
 money-laundering-campaign discovery changes as each bank's visibility of a
@@ -8,6 +10,10 @@ repository has two parts: a Python research pipeline that is the single
 source of truth for every number, and a React frontend that presents the
 dataset, campaigns, visibility, and (later) experiment results — the
 frontend never invents or computes research results itself.
+
+```bash
+git clone https://github.com/jerinsaji299-coder/Fraud-campaign-detection.git
+```
 
 ## Table of contents
 
@@ -28,7 +34,8 @@ frontend never invents or computes research results itself.
 15. [Testing](#testing)
 16. [Known limitations and open questions](#known-limitations-and-open-questions)
 17. [Future phases](#future-phases)
-18. [Changelog](#changelog)
+18. [Version history](#version-history)
+19. [Changelog](#changelog)
 
 ## Research question, hypothesis, and contribution
 
@@ -1052,8 +1059,35 @@ is the one piece that most warrants a look in a browser before the demo.
 - **Phase 7 — Analysis and paper:** write up findings against the related
   work positioning in the Research question section.
 
+## Version history
+
+Tagged points in the repository, newest first. Check one out with
+`git checkout <tag>`.
+
+| Tag | Date | What it contains |
+|---|---|---|
+| `v0.1-data-pipeline` | 2026-10-08 | Phase 2 complete, plus the stage 3.0 Kaggle runner. The research pipeline (campaign ground truth, splits, topology groups, institutions, visibility), the artifact export, the read-only FastAPI server, and the full React frontend — 69 backend tests and 48 frontend tests passing. **No models and no experiment results**: the four conditions are defined and the result schema is fixed, but nothing has been trained or run, and the full-data regression numbers are still unverified (that is what stage 3.0's Kaggle run is for). |
+
 ## Changelog
 
+- **2026-10-08** — Published to GitHub at
+  https://github.com/jerinsaji299-coder/Fraud-campaign-detection and tagged
+  `v0.1-data-pipeline`. Initialised the repository (branch `main`), filled
+  the gaps in `.gitignore` (`*.env`, `kaggle.json`, `*.pem`, `*.key`,
+  `credentials.json`, `Thumbs.db`, `desktop.ini`, `.vscode/`, `.idea/`,
+  `*.swp`, `venv/`, `build/`, `dist/`) and changed `backend/data/` to
+  `backend/data/*` with `!backend/data/.gitkeep`, because the directory-wide
+  rule also hid the placeholder and a fresh clone therefore lost the folder.
+  Verified before staging that no secrets exist in the project (the only
+  `.env`-shaped file is `frontend/.env.example`, holding just
+  `VITE_API_URL`), that nothing over 5 MB would be committed (largest:
+  `package-lock.json` at 123 KB), and that the evidence notebook (32.9 KB)
+  and `.env.example` are **not** ignored while data, artifacts,
+  `node_modules`, `dist` and credential files are. First commit: 95 files,
+  14,027 insertions. Added the repository URL and clone command to the top
+  of this README, a Version history section, and the real clone URL in
+  `backend/scripts/kaggle/run_on_kaggle.md` (it previously carried a
+  `<YOUR-USERNAME>/<YOUR-REPO>` placeholder).
 - **2026-10-07** — Phase 3 begins. Stage 3.0: Kaggle runner and the means to
   verify Phase 2 on the full data. Added
   `backend/src/fraudcamp/regression.py` (every expected number with the

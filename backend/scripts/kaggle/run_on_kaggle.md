@@ -8,27 +8,26 @@ directory Kaggle keeps after the session ends.
 
 ---
 
-## 0. One-time: put the code on GitHub
+## 0. Source
 
-**The project is not a git repository yet** (checked 2026-10-07), so there is
-nothing to clone. From the project root:
+The code lives at:
 
-```bash
-git init
-git add .
-git status                       # review what is staged before committing
-git commit -m "Phase 2 complete: pipeline, artifacts, API, frontend"
-git branch -M main
-git remote add origin https://github.com/<YOUR-USERNAME>/<YOUR-REPO>.git
-git push -u origin main
+```
+https://github.com/jerinsaji299-coder/Fraud-campaign-detection
 ```
 
-Before pushing to a **public** repo, check `git status` output: `.gitignore`
-already excludes `backend/data/`, the contents of `backend/artifacts/`,
-`node_modules/`, `.venv/` and `.env`, so no dataset copies and no secrets
-should be included. The repo contains no credentials of any kind.
+Pushed and tagged `v0.1-data-pipeline` on 2026-10-08. The notebook clones
+`main` by default; to pin a session to the tagged state instead, add
+`--branch v0.1-data-pipeline` to the clone in Cell 2.
 
-Replace `<YOUR-USERNAME>/<YOUR-REPO>` below with your actual repo.
+The repository contains no dataset copies and no credentials — `.gitignore`
+excludes `backend/data/`, the contents of `backend/artifacts/`,
+`node_modules/`, `.venv/`, `.env`, `*.env` and `kaggle.json`. If you later
+need Kaggle API credentials in a notebook, use Kaggle's own Secrets feature;
+never commit `kaggle.json`.
+
+After pushing new work locally, remember the notebook clones a **fresh copy**
+each run, so a Kaggle session only ever sees what has been pushed.
 
 ---
 
@@ -67,7 +66,7 @@ small, since only reports and the artifact archive need to persist.
 
 ```python
 !rm -rf /kaggle/temp/repo
-!git clone --depth 1 https://github.com/<YOUR-USERNAME>/<YOUR-REPO>.git /kaggle/temp/repo
+!git clone --depth 1 https://github.com/jerinsaji299-coder/Fraud-campaign-detection.git /kaggle/temp/repo
 %cd /kaggle/temp/repo/backend
 ```
 
