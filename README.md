@@ -74,11 +74,11 @@ bank).
 regression numbers reproduced on the full dataset via Kaggle on 2026-10-08
 (`docs/reference/verify_report.md`), and the exported artifacts are
 installed locally and serving.
-**Next step:** stage 3.1 (window builder + features + leakage tests). One
-open question first: the visibility assignment is not reproducible across
-processes (see [Known limitations](#known-limitations-and-open-questions)) —
-it does not affect Phase 3, which is centralized-only, but it should be
-settled before Phase 4.
+**Next step:** stage 3.1 (window builder + features + leakage tests). Note
+that the visibility artifacts need regenerating on Kaggle after the
+2026-10-08 determinism fix (see
+[Known limitations](#known-limitations-and-open-questions)); that does not
+block Phase 3, which is centralized-only and never reads them.
 
 **Phase 2 — pipeline, artifacts, API, frontend (complete)**
 
@@ -317,6 +317,8 @@ not this session):
 | 2026-10-06 | Achieved visibility is exported for **every** campaign (all 370), not only the reassignable ones | The frozen definition says to recompute "every campaign's" achieved visibility, and the frontend must be able to show visibility for any campaign the user opens, including hub and non-`eval_ok` ones. Rows carry `campaign_reassigned` so analysis can still restrict to the treated set | README frozen definitions, Stage 2 |
 | 2026-10-07 | Phase 3 gate: verify every Phase 2 regression number on the full data **before** any model work | The 24 full-data tests have never run — the dataset only exists on Kaggle. Every Phase 3 result would silently inherit any discrepancy in the campaign table, splits or group assignment, and a model built on wrong ground truth is worse than no model | user instruction, stage 3.0 |
 | 2026-10-07 | `pandas>=2.2` pinned in requirements.txt | `campaigns.build_campaign_table` passes `include_groups=` to `groupby.apply`, which pandas added in 2.2 and older versions reject with a `TypeError`. Unpinned, a Kaggle image with pandas 2.1 would fail deep in the pipeline with a confusing error | implementation, stage 3.0 |
+| 2026-10-08 | Every collection is sorted before any seeded random step. **Bug:** a campaign's accounts were held in a Python `set`, and per-process string-hash randomisation made set iteration order differ between runs, so the seeded search followed a different trajectory each process — same seed, different assignment. **Evidence:** two Kaggle runs of the same pipeline disagreed on the unfragmentable count (3 vs 2); reproduced locally by varying `PYTHONHASHSEED`. **Fix:** accounts are now sorted tuples, and `sorted()` is applied at every point where order reaches the RNG. The algorithm, targets, iteration count and seeds are unchanged — only enumeration order is pinned, so no frozen definition moved. **Why now:** Phase 3 is centralized-only and never touches these assignments, but Phase 4-5 *is* the visibility sweep and the `unfragmentable` label defines the control group; fixing it after results existed would have invalidated them | `tests/test_determinism.py`, stage 3.0 follow-up |
+| 2026-10-08 | "Unfragmentable campaigns" is a **pending** regression metric: reported on every run, never failed | The reference notebook's exploratory value (2) came from a simpler procedure without shared-account conflict resolution, so it is not a valid expectation, and the pre-fix Kaggle runs disagreed with each other. It will be pinned from the first post-fix run that two independent Kaggle sessions agree on | `regression.PENDING_KEYS` |
 | 2026-10-07 | torch, torch_geometric, xgboost and scikit-learn are **not** added to requirements.txt yet | They are only needed from stages 3.3-3.4. Installing ~2GB of unused ML dependencies now would slow every Kaggle session and risk disturbing the pre-installed CUDA stack during a run whose only job is verifying Phase 2. Each lands with the stage that uses it | implementation, stage 3.0 |
 
 ## Verified numbers
@@ -336,6 +338,11 @@ These are also used as the full-data regression test suite
 | `eval_ok` fragmentable campaigns | 152 (test: 37) | `b7e46dec` |
 | Fragmentable test campaigns with `shares_train_account` | 7 of 37 | `cb0caa40` |
 | `base_type` counts | CYCLE 54, GATHER-SCATTER 51, BIPARTITE 49, FAN-OUT 48, SCATTER-GATHER 44, STACK 43, RANDOM 41, FAN-IN 40 | `11875435` |
+| Unfragmentable campaigns | **pending** | to be pinned from the first post-determinism-fix Kaggle run (see Decision log) |
+
+All of the pinned numbers above were reproduced on the full dataset on
+2026-10-08 (`docs/reference/verify_report.md`). The pending row is reported
+by every run but never fails one, until it is pinned.
 
 Note on "eval_ok fragmentable = 152": this is the **topology** count —
 `eval_ok` campaigns with a non-hub `base_type`, i.e. the `reassignable`
@@ -403,6 +410,7 @@ project-root/
       test_pipeline.py            end-to-end build() on the synthetic dataset; determinism; reassignable set
       test_export.py              every artifact's shape, contents, determinism, empty results/
       test_api.py                 every endpoint via TestClient against a real exported fixture artifact set
+      test_determinism.py         cross-process reproducibility: subprocess runs under differing PYTHONHASHSEED
       test_fulldata.py            @pytest.mark.fulldata, one test per regression number; skip if no data
     data/                         gitignored: raw/, sample/, processed/
     artifacts/                    gitignored except .gitkeep; summary.json, campaigns.parquet,
@@ -644,7 +652,11 @@ committed.
   counts), `assign_institutions` (deterministic greedy volume balancing
   across `K` institutions), `natural_institution` (bank-based institution
   of an account).
-- **`visibility.py`** — `visibility_of` (max-over-institutions seen
+- **`visibility.py`** — **determinism:** every account collection is sorted
+  before anything random touches it, because sets iterate in a
+  hash-dependent order that varies per process and would otherwise make the
+  seeded search irreproducible (see Decision log, 2026-10-08).
+  `visibility_of` (max-over-institutions seen
   fraction), `assign_campaign`/`_local_search_free` (per-campaign
   institution assignment toward a target, respecting already-locked
   shared accounts), `build_global_assignment` (processes eval_ok
@@ -987,6 +999,16 @@ campaign_id)`:
   leading-zero banks, cutoff, eval_ok, splits, volume balancing,
   visibility (`A->B->C` chain = 1.0, fan-out = 1.0), conflict resolution,
   recomputation.
+- **Backend determinism tests** (`test_determinism.py`): the visibility build
+  must be reproducible from its seed alone. Because one process has one hash
+  seed, in-process tests cannot detect hash-order dependence, so these run
+  the build in **subprocesses** with `PYTHONHASHSEED=1/2/3` and require the
+  account order, the account-to-institution map, the achieved visibilities,
+  the unfragmentable count and the whole serialised payload to be identical.
+  Also covers two in-process runs at each of the four targets, and asserts
+  the accounts invariant (sorted sequence, never a set) directly. Verified to
+  *fail* when the old set-iteration is reintroduced — 4 of the 10 break,
+  including the byte-identical check.
 - **Backend pipeline and export tests** (`test_pipeline.py`,
   `test_export.py`) run the whole pipeline against the `mini_dataset`
   fixture — a synthetic 18-row, 4-campaign dataset built in `conftest.py`
@@ -1053,9 +1075,9 @@ campaign_id)`:
     stubbed in these tests.
 
 **Current pass status (2026-10-08):**
-- Backend: `python -m pytest tests/` from `backend/` → 75 passed, 24 skipped
-  (fulldata, no dataset present on this machine), 0 failed. The 24 skipped
-  ones passed on Kaggle against the full data on 2026-10-08.
+- Backend: `python -m pytest tests/` from `backend/` → 85 passed, 25 skipped,
+  0 failed. The skips are the full-data suite (no dataset on this machine;
+  24 of them passed on Kaggle on 2026-10-08) plus the one pending metric.
 - Frontend: `npm run test` from `frontend/` → 48 passed, 0 failed.
   `npm run build` (tsc + bundle) and `npm run lint` both clean.
 
@@ -1084,21 +1106,22 @@ is the one piece that most warrants a look in a browser before the demo.
 - No model, training, federated-learning or experiment code exists yet. The
   four experimental conditions are defined and the result schema is fixed,
   but nothing has been run, so the project has no findings of any kind.
-- **The visibility assignment is not reproducible across processes.** The
-  pipeline seeds its RNG explicitly, but `build_global_assignment` iterates
-  a campaign's accounts from a Python **set**, and string hash
-  randomisation makes that order differ between processes. The seeded draws
-  therefore follow a different trajectory each run. Demonstrated by running
-  the same build under `PYTHONHASHSEED=1/2/3`: the resulting
-  account-to-institution maps differ. It also explains why the Kaggle
-  `verify` run reported 3 unfragmentable campaigns while the `pipeline` run
-  that produced the shipped artifacts reported 2. No regression number is
-  affected (none depends on the search), and Phase 3 is centralized-only so
-  it does not use these assignments at all — but Phase 4-5 and the
-  `unfragmentable` control-group label do. The fix is a one-line
-  determinisation (sort the accounts before searching), which would change
-  the exported visibility values, so it needs an explicit decision before
-  anyone builds on the current `visibility/seed_*.parquet`. **Open.**
+- **The local visibility artifacts are stale.** The determinism fix
+  (2026-10-08, see Decision log) changes the search trajectory, so the
+  `visibility/seed_*.parquet` files currently in `backend/artifacts/` were
+  produced by the old, order-dependent code. Everything else in the
+  artifacts — campaigns, splits, groups, institutions, campaign
+  transactions — is unaffected, and so is every pinned regression number.
+  What is stale is the per-account institution assignments, the achieved
+  visibility values, and the `unfragmentable` group label. Regenerate them
+  with the procedure in `backend/scripts/kaggle/run_on_kaggle.md` §5b, which
+  also verifies reproducibility by comparing two independent sessions. Until
+  then the Visibility Lab and the campaign visibility view show values that
+  cannot be reproduced. Phase 3 is unaffected: it is centralized-only and
+  never reads these files.
+- **The unfragmentable count is not yet pinned.** It is a pending metric in
+  the regression table — reported on every run, never asserted — until two
+  post-fix Kaggle sessions agree on it.
 - The frontend has not been visually inspected in a browser from the
   development environment used so far (no browser tooling available); the
   Cytoscape campaign graph in particular is covered only by stubbed tests.
@@ -1136,6 +1159,42 @@ Tagged points in the repository, newest first. Check one out with
 
 ## Changelog
 
+- **2026-10-08** — **Fixed a reproducibility defect in the visibility
+  search.** A campaign's accounts were held in a Python `set`, and
+  per-process string-hash randomisation made set iteration order vary, so
+  the seeded search followed a different trajectory in every process:
+  identical seed, different account-to-institution map. It surfaced as two
+  Kaggle runs disagreeing on the unfragmentable count (3 vs 2) and was
+  reproduced locally by varying `PYTHONHASHSEED`. Fixed by sorting at every
+  point where order reaches the RNG — `visibility.build_global_assignment`
+  (accounts sorted before the locked/free split), `visibility.assign_campaign`
+  and `visibility._local_search_free` (free list sorted), plus
+  `pipeline._edges_and_accounts` and `campaigns.campaign_accounts` now
+  return sorted **tuples** instead of sets, with `PipelineResult` typed
+  accordingly and `groupby(sort=True)` made explicit. An audit of the rest
+  of the backend found the other order-sensitive spots already pinned in
+  earlier work (`institutions.bank_volume` tie-breaks by bank id,
+  `pipeline.ordered_reassignable` sorts by `[start, campaign_id]`,
+  `export.build_visibility_table` sorts campaigns and accounts,
+  `find_nested_artifacts` sorts `iterdir`) and the remaining set usage to be
+  membership tests or `len()` only, where order cannot leak. No frozen
+  definition changed: same algorithm, targets, iteration count and seeds —
+  only enumeration order is pinned. Added `tests/test_determinism.py` (10
+  tests) which runs the build in subprocesses under `PYTHONHASHSEED=1/2/3`
+  and requires byte-identical results; confirmed it *fails* when the bug is
+  reintroduced. Added "Unfragmentable campaigns" as a **pending** regression
+  metric — reported every run, never failed — since the notebook's
+  exploratory 2 came from a procedure without conflict resolution and the
+  pre-fix runs disagreed; `regression.py` now supports pending entries and
+  the full-data suite skips them with the actual value in the skip reason.
+  `kaggle_runner pipeline` now prints a SHA-256 for each
+  `visibility/seed_*.parquet` and writes `visibility_hashes.json`, so two
+  independent sessions can be compared directly; verified locally that
+  parquet bytes are stable across processes, which is what makes that
+  comparison meaningful. Added §5b to `run_on_kaggle.md` with the
+  two-session regeneration and comparison procedure. Backend: 85 passed, 25
+  skipped. **The local `visibility/seed_*.parquet` files are now stale** and
+  must be regenerated — see Known limitations.
 - **2026-10-08** — **Phase 2 verified on the full dataset.** A Kaggle
   `verify` run reproduced all 23 regression numbers (pytest exit 0, pandas
   2.3.3, 39.3s, 3,207 MB peak); the report is in

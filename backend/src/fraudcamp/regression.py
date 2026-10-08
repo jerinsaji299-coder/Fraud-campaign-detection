@@ -20,8 +20,14 @@ from . import constants, pipeline, splits
 class Metric:
     key: str
     label: str
-    expected: int
+    #: None means PENDING: the value is reported but never fails, until it is
+    #: pinned from a verified run.
+    expected: int | None
     evidence: str
+
+    @property
+    def pending(self) -> bool:
+        return self.expected is None
 
 
 #: Every regression number, in the order the report prints them.
@@ -84,9 +90,25 @@ METRICS: tuple[Metric, ...] = (
     Metric("base_type_STACK", "base_type STACK", 43, "notebook cell 11875435"),
     Metric("base_type_RANDOM", "base_type RANDOM", 41, "notebook cell 11875435"),
     Metric("base_type_FAN-IN", "base_type FAN-IN", 40, "notebook cell 11875435"),
+    # PENDING. The reference notebook's exploratory run reported 2, but it
+    # used a simpler procedure without shared-account conflict resolution, so
+    # it is not a usable expectation. The two Kaggle runs before the
+    # determinism fix disagreed with each other (3 vs 2), which is what
+    # exposed that bug. To be pinned from the first run after the fix.
+    Metric(
+        "unfragmentable_campaigns",
+        "Unfragmentable campaigns",
+        None,
+        "PENDING: pin from the first Kaggle run after the determinism fix",
+    ),
 )
 
-EXPECTED: dict[str, int] = {metric.key: metric.expected for metric in METRICS}
+#: Only the pinned metrics. Pending ones are deliberately absent.
+EXPECTED: dict[str, int] = {
+    metric.key: metric.expected for metric in METRICS if metric.expected is not None
+}
+
+PENDING_KEYS: tuple[str, ...] = tuple(m.key for m in METRICS if m.pending)
 
 
 def compute_actuals(result: pipeline.PipelineResult) -> dict[str, int]:
@@ -107,6 +129,7 @@ def compute_actuals(result: pipeline.PipelineResult) -> dict[str, int]:
         "laundering_rows": int(laundering.sum()),
         "unassigned_laundering_rows": int((laundering & ~in_campaign).sum()),
         "eval_ok_total": int(camp["eval_ok"].sum()),
+        "unfragmentable_campaigns": int((camp["group"] == "unfragmentable").sum()),
         "reassignable_total": int(reassignable.sum()),
         "reassignable_test": int((reassignable & (camp["split"] == "test")).sum()),
         "reassignable_test_shares_train_account": int(
@@ -132,8 +155,21 @@ class Comparison:
     actual: int | None
 
     @property
+    def status(self) -> str:
+        if self.metric.pending:
+            return "PENDING"
+        if self.actual is None:
+            return "MISSING"
+        return "PASS" if self.actual == self.metric.expected else "FAIL"
+
+    @property
     def passed(self) -> bool:
-        return self.actual == self.metric.expected
+        """True when nothing is wrong. A pending metric cannot be wrong."""
+        return self.status in ("PASS", "PENDING")
+
+    @property
+    def is_failure(self) -> bool:
+        return self.status in ("FAIL", "MISSING")
 
 
 def compare(actuals: dict[str, int]) -> list[Comparison]:
@@ -150,26 +186,33 @@ def is_full_dataset(actuals: dict[str, int]) -> bool:
 
 
 def format_table(comparisons: list[Comparison]) -> str:
-    """A fixed-width PASS/FAIL table, for pasting back into a report."""
+    """A fixed-width PASS/FAIL/PENDING table, for pasting into a report."""
     label_width = max(len(c.metric.label) for c in comparisons)
     header = f"{'metric'.ljust(label_width)}  {'expected':>12}  {'actual':>12}  result"
     lines = [header, "-" * len(header)]
 
-    for comparison in comparisons:
-        actual = "missing" if comparison.actual is None else f"{comparison.actual:,}"
+    for c in comparisons:
+        expected = "pending" if c.metric.pending else f"{c.metric.expected:,}"
+        actual = "missing" if c.actual is None else f"{c.actual:,}"
         lines.append(
-            f"{comparison.metric.label.ljust(label_width)}  "
-            f"{comparison.metric.expected:>12,}  "
+            f"{c.metric.label.ljust(label_width)}  "
+            f"{expected:>12}  "
             f"{actual:>12}  "
-            f"{'PASS' if comparison.passed else 'FAIL'}"
+            f"{c.status}"
         )
 
-    failed = [c for c in comparisons if not c.passed]
+    failed = [c for c in comparisons if c.is_failure]
+    pending = [c for c in comparisons if c.metric.pending]
+    checked = len(comparisons) - len(pending)
+
+    summary = f"{checked - len(failed)} of {checked} pinned numbers passed"
+    if failed:
+        summary += f"  ({len(failed)} FAILED)"
+    if pending:
+        summary += f"  |  {len(pending)} pending, reported but not checked"
+
     lines.append("-" * len(header))
-    lines.append(
-        f"{len(comparisons) - len(failed)} of {len(comparisons)} passed"
-        + ("" if not failed else f"  ({len(failed)} FAILED)")
-    )
+    lines.append(summary)
     return "\n".join(lines)
 
 
@@ -179,10 +222,12 @@ def format_markdown(comparisons: list[Comparison]) -> str:
         "|---|---:|---:|---|---|",
     ]
     for c in comparisons:
+        expected = "_pending_" if c.metric.pending else f"{c.metric.expected:,}"
         actual = "missing" if c.actual is None else f"{c.actual:,}"
+        result = f"**{c.status}**" if c.is_failure else c.status
         rows.append(
-            f"| {c.metric.label} | {c.metric.expected:,} | {actual} | "
-            f"{'PASS' if c.passed else '**FAIL**'} | {c.metric.evidence} |"
+            f"| {c.metric.label} | {expected} | {actual} | "
+            f"{result} | {c.metric.evidence} |"
         )
     return "\n".join(rows)
 

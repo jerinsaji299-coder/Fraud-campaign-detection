@@ -161,6 +161,70 @@ data.
 
 ---
 
+## 5b. Regenerating the visibility artifacts after the determinism fix
+
+The visibility search was not reproducible across processes until
+2026-10-08: a campaign's accounts were iterated from a Python set, and
+per-process string hashing made the seeded draws follow a different
+trajectory each run. Two earlier Kaggle runs disagreed about how many
+campaigns were `unfragmentable` (3 vs 2), which is how it was found.
+
+Any `visibility/seed_*.parquet` produced before that fix is stale. Regenerate
+it, and **confirm reproducibility by running twice in two fresh sessions**.
+
+### Session 1
+
+```python
+!rm -rf /kaggle/temp/repo
+!git clone --depth 1 https://github.com/jerinsaji299-coder/Fraud-campaign-detection.git /kaggle/temp/repo
+%cd /kaggle/temp/repo/backend
+!git log --oneline -1          # confirm you have the determinism fix
+!pip install -q -r requirements.txt
+!python scripts/kaggle/kaggle_runner.py verify
+!python scripts/kaggle/kaggle_runner.py pipeline
+```
+
+Record from the `pipeline` output:
+
+- the **Unfragmentable campaigns** row of the regression table (it prints as
+  `PENDING` with an actual value — that value is what gets pinned), and
+- the **SHA-256 block** for the five visibility files.
+
+Both are also saved to `/kaggle/working/visibility_hashes.json`, which is the
+easiest thing to send back.
+
+### Session 2 — a genuinely fresh session
+
+Stop the first session (**Run → Stop session**, not just "restart kernel"), start a
+new notebook, and run the *same* cells again. A new session means a new
+Python process with a new hash seed, which is exactly what the old code was
+sensitive to.
+
+### Compare
+
+```python
+import json
+a = json.load(open("/kaggle/input/<session-1-output>/visibility_hashes.json"))
+b = json.load(open("/kaggle/working/visibility_hashes.json"))
+print("unfragmentable:", a["unfragmentable_campaigns"], "vs", b["unfragmentable_campaigns"])
+print("hashes identical:", a["visibility_sha256"] == b["visibility_sha256"])
+for name in sorted(b["visibility_sha256"]):
+    same = a["visibility_sha256"].get(name) == b["visibility_sha256"][name]
+    print(f"  {'OK  ' if same else 'DIFF'} {name}")
+```
+
+(Or simply paste both JSON files back and I will compare them.)
+
+**Expected:** the unfragmentable count is the same in both sessions and every
+digest matches. Parquet writing itself is byte-stable for identical data
+within one environment, which was verified locally, so differing digests mean
+the *search* differed — i.e. something is still order-dependent. Report that
+rather than picking one of the two runs.
+
+Once both sessions agree, send me the unfragmentable count and I will pin it
+in the regression table (it is deliberately `PENDING` until then, so it is
+reported but never fails a run).
+
 ## 6. Later stages
 
 `kaggle_runner.py` also accepts `train` and `evaluate`. Both currently exit

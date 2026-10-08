@@ -61,11 +61,19 @@ def actuals() -> dict[str, int]:
 
 @pytest.mark.parametrize("metric", regression.METRICS, ids=lambda m: m.key)
 def test_regression_number(metric: regression.Metric, actuals: dict[str, int]):
+    if metric.pending:
+        pytest.skip(
+            f"{metric.label} is pending (actual: {actuals.get(metric.key)}). "
+            f"{metric.evidence}"
+        )
     assert actuals[metric.key] == metric.expected, (
         f"{metric.label}: expected {metric.expected:,}, got {actuals[metric.key]:,} "
         f"(evidence: {metric.evidence})"
     )
 
 
-def test_every_expected_metric_was_computed(actuals: dict[str, int]):
-    assert set(actuals) >= set(regression.EXPECTED)
+def test_every_metric_was_computed(actuals: dict[str, int]):
+    """Pending metrics must still be computed — they are reported, just not
+    asserted — so a missing one would otherwise go unnoticed."""
+    expected_keys = set(regression.EXPECTED) | set(regression.PENDING_KEYS)
+    assert set(actuals) >= expected_keys

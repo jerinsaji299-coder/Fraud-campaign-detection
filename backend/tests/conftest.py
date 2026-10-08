@@ -76,10 +76,12 @@ def _pattern_line(ts, from_bank, acct, to_bank, acct1, amount):
     )
 
 
-@pytest.fixture
-def mini_dataset(tmp_path):
-    """A tiny but complete dataset: writes HI-Small-shaped CSV + pattern
-    files and a config YAML pointing at them. Returns the config path."""
+def write_mini_dataset(tmp_path):
+    """Write the tiny dataset into `tmp_path` and return its config path.
+
+    Separate from the fixture so suites that need a session-scoped copy
+    (test_determinism, which spawns subprocesses) can reuse it.
+    """
     rows = [_csv_row(ts, fb, a, tb, a1, amt, 1) for _, _, ts, fb, a, tb, a1, amt in CAMPAIGN_TXNS]
     rows += [_csv_row(*t) for t in NON_CAMPAIGN_TXNS]
 
@@ -115,3 +117,10 @@ def mini_dataset(tmp_path):
         )
     )
     return config_path
+
+
+@pytest.fixture
+def mini_dataset(tmp_path):
+    """A tiny but complete dataset: HI-Small-shaped CSV + pattern files and a
+    config YAML pointing at them. Returns the config path."""
+    return write_mini_dataset(tmp_path)

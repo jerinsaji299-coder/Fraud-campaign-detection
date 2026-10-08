@@ -19,6 +19,7 @@ See run_on_kaggle.md in this directory for the notebook cells to paste.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import shutil
@@ -96,6 +97,27 @@ def step(name: str, children: bool = False):
         )
 
 
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with open(path, "rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def visibility_hashes(artifacts_dir: Path) -> dict[str, str]:
+    """SHA-256 of each visibility/seed_*.parquet.
+
+    The point is comparing two independent Kaggle sessions: the visibility
+    search is seeded, so identical seeds must produce identical bytes. If
+    these digests differ between sessions, the build is not reproducible.
+    """
+    visibility = artifacts_dir / "visibility"
+    if not visibility.is_dir():
+        return {}
+    return {path.name: sha256(path) for path in sorted(visibility.glob("seed_*.parquet"))}
+
+
 def steps_markdown() -> str:
     lines = ["| Step | Seconds | Memory | True peak |", "|---|---:|---:|---|"]
     for entry in STEPS:
@@ -151,7 +173,7 @@ def command_verify(args: argparse.Namespace) -> int:
     print("=" * 72)
     print(table, flush=True)
 
-    failed = [c for c in comparisons if not c.passed]
+    failed = [c for c in comparisons if c.is_failure]
     run_info = payload.get("run", {})
 
     report = out / "verify_report.md"
@@ -248,13 +270,20 @@ def command_pipeline(args: argparse.Namespace) -> int:
         )
     print(f"  {archive}: {Path(archive).stat().st_size / (1024 * 1024):,.2f} MB")
 
+    hashes = visibility_hashes(artifacts_dir)
+    print("\n=== SHA-256 of the visibility files ===")
+    print("Compare these across two independent sessions: the search is")
+    print("seeded, so identical seeds must give identical bytes.")
+    for name, digest in hashes.items():
+        print(f"  {digest}  {name}")
+
     # The same numbers verify prints, so a pipeline run is self-checking --
     # but only against the real dataset. On the 1% sample every row would
     # read FAIL for no useful reason, so say that instead.
     actuals = regression.compute_actuals(result)
     full_dataset = regression.is_full_dataset(actuals)
     comparisons = regression.compare(actuals)
-    failed = [c for c in comparisons if not c.passed] if full_dataset else []
+    failed = [c for c in comparisons if c.is_failure] if full_dataset else []
 
     if full_dataset:
         print("\n" + regression.format_table(comparisons), flush=True)
@@ -286,6 +315,15 @@ def command_pipeline(args: argparse.Namespace) -> int:
                     f"the full dataset's {regression.EXPECTED['total_rows']:,}."
                 ),
                 "",
+                "## Visibility file digests (SHA-256)",
+                "",
+                "Compare these across two independent sessions; the seeded",
+                "search must reproduce identical bytes.",
+                "",
+                "| File | SHA-256 |",
+                "|---|---|",
+                *(f"| `{name}` | `{digest}` |" for name, digest in hashes.items()),
+                "",
                 "## Timing",
                 "",
                 steps_markdown(),
@@ -294,7 +332,19 @@ def command_pipeline(args: argparse.Namespace) -> int:
         ),
         encoding="utf-8",
     )
+    json_path = out / "visibility_hashes.json"
+    json_path.write_text(
+        json.dumps(
+            {
+                "unfragmentable_campaigns": actuals.get("unfragmentable_campaigns"),
+                "visibility_sha256": hashes,
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
     print(f"\nWrote {report}")
+    print(f"Wrote {json_path}")
     print(f"Download: {archive}")
 
     if failed:

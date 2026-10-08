@@ -8,11 +8,25 @@ natural institution. Conflicts (an account shared by several campaigns)
 are resolved in favor of the account's earliest campaign; achieved
 visibility is then recomputed for every campaign from the final global
 assignment. See README.md "Frozen research definitions".
+
+Determinism
+-----------
+Every random step is seeded, but a seed only reproduces a run if the RNG is
+asked for things in the same order. Account collections arrive here as
+Python sets (a campaign's accounts are a set union of its endpoints), and
+string hashing is randomised per process, so set iteration order differs
+between runs. That made the seeded draws follow a different trajectory each
+process: same seed, different assignment.
+
+So every collection is sorted before anything random touches it. The search
+itself is unchanged -- same targets, same iteration count, same seeds; only
+the enumeration order is pinned.
 """
 
 from __future__ import annotations
 
 import random
+from collections.abc import Iterable, Sequence
 
 import pandas as pd
 
@@ -34,7 +48,7 @@ def visibility_of(edges: list[tuple[str, str]], assignment: dict[str, int], k: i
 
 def _local_search_free(
     edges: list[tuple[str, str]],
-    free: list[str],
+    free: Iterable[str],
     locked: dict[str, int],
     target: float,
     rng: random.Random,
@@ -46,6 +60,7 @@ def _local_search_free(
     if it does not increase |achieved - target|. `locked` accounts are
     held fixed throughout. Returns (assignment restricted to free
     accounts, achieved visibility over the whole campaign)."""
+    free = sorted(free)  # see "Determinism" in this module's docstring
     assignment = dict(locked)
     for a in free:
         assignment[a] = rng.randrange(k)
@@ -69,7 +84,7 @@ def _local_search_free(
 
 def assign_campaign(
     edges: list[tuple[str, str]],
-    free: list[str],
+    free: Iterable[str],
     locked: dict[str, int],
     target: float,
     rng: random.Random,
@@ -79,6 +94,7 @@ def assign_campaign(
     already-`locked` accounts (from earlier-starting campaigns that share
     an account), aiming for `target` visibility. Returns only the
     assignment for `free` accounts."""
+    free = sorted(free)  # see "Determinism" in this module's docstring
     if target >= 0.999:
         if not free:
             return {}
@@ -89,7 +105,7 @@ def assign_campaign(
 
 
 def build_global_assignment(
-    campaigns_ordered: list[tuple[int, list[tuple[str, str]], set[str]]],
+    campaigns_ordered: Sequence[tuple[int, list[tuple[str, str]], Iterable[str]]],
     target: float,
     seed: int,
     k: int = constants.K_INSTITUTIONS,
@@ -98,13 +114,20 @@ def build_global_assignment(
     each campaign's not-yet-locked accounts toward `target` visibility.
     `campaigns_ordered` is a list of (campaign_id, edges, accounts) already
     sorted by campaign start time ascending. Returns the global account ->
-    institution map (only for accounts that were reassigned)."""
+    institution map (only for accounts that were reassigned).
+
+    Accounts are sorted before anything random happens, so the result
+    depends only on `seed` — see "Determinism" in this module's docstring.
+    """
     rng = random.Random(seed)
     global_assignment: dict[str, int] = {}
 
     for _cid, edges, accounts in campaigns_ordered:
-        locked = {a: global_assignment[a] for a in accounts if a in global_assignment}
-        free = [a for a in accounts if a not in global_assignment]
+        ordered_accounts = sorted(accounts)
+        locked = {
+            a: global_assignment[a] for a in ordered_accounts if a in global_assignment
+        }
+        free = [a for a in ordered_accounts if a not in global_assignment]
         new = assign_campaign(edges, free, locked, target, rng, k)
         global_assignment.update(new)
 

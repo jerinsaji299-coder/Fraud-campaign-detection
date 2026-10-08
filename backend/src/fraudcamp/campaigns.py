@@ -137,9 +137,12 @@ def add_eval_fields(camp: pd.DataFrame, cutoff=constants.CUTOFF) -> pd.DataFrame
     return camp
 
 
-def campaign_accounts(pattern_df: pd.DataFrame, campaign_id: int) -> set[str]:
+def campaign_accounts(pattern_df: pd.DataFrame, campaign_id: int) -> tuple[str, ...]:
+    """A campaign's accounts as a sorted tuple. Sorted rather than a set
+    because these feed the seeded visibility search, where iteration order
+    must not vary between processes."""
     g = pattern_df[pattern_df["campaign_id"] == campaign_id]
-    return set(g["src"]) | set(g["dst"])
+    return tuple(sorted(set(g["src"]) | set(g["dst"])))
 
 
 def campaign_edges(pattern_df: pd.DataFrame, campaign_id: int) -> list[tuple[str, str]]:

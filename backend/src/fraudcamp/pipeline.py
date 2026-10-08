@@ -27,17 +27,25 @@ class PipelineResult:
     bank2inst: dict[int, int]
     loads: list[int]
     edges_by_campaign: dict[int, list[tuple[str, str]]]
-    accounts_by_campaign: dict[int, set[str]]
+    #: Sorted tuples, never sets: these feed the seeded visibility search.
+    accounts_by_campaign: dict[int, tuple[str, ...]]
     floor_achieved: dict[int, float] = field(default_factory=dict)
 
 
 def _edges_and_accounts(pattern_df: pd.DataFrame):
+    """Per-campaign edge lists and account collections.
+
+    Accounts come back as a **sorted tuple**, not a set: they feed the
+    seeded visibility search, and Python's per-process string hashing makes
+    set iteration order vary between runs. `groupby` is left at its default
+    `sort=True`, so campaign ids are enumerated in order too, and each
+    campaign's edge order follows the pattern file.
+    """
     edges: dict[int, list[tuple[str, str]]] = {}
-    accounts: dict[int, set[str]] = {}
-    for cid, g in pattern_df.groupby("campaign_id"):
-        e = list(zip(g["src"], g["dst"]))
-        edges[int(cid)] = e
-        accounts[int(cid)] = set(g["src"]) | set(g["dst"])
+    accounts: dict[int, tuple[str, ...]] = {}
+    for cid, g in pattern_df.groupby("campaign_id", sort=True):
+        edges[int(cid)] = list(zip(g["src"], g["dst"]))
+        accounts[int(cid)] = tuple(sorted(set(g["src"]) | set(g["dst"])))
     return edges, accounts
 
 
