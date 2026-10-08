@@ -1070,6 +1070,18 @@ Tagged points in the repository, newest first. Check one out with
 
 ## Changelog
 
+- **2026-10-08** — Added `.gitattributes` with `* text=auto eol=lf`, so text
+  files are stored and checked out as LF on every platform and a Windows
+  clone sees the same bytes as a Linux/Kaggle one. `git add --renormalize .`
+  changed **nothing**: the system-wide `core.autocrlf=true` had already been
+  normalising content to LF on commit, so the index was LF throughout (an
+  audit with `git ls-files --eol` showed 76 LF, 7 empty, 0 binary files).
+  What the file actually fixes is *checkout* — 12 working-tree files had
+  picked up CRLF, which is where the "LF will be replaced by CRLF" warnings
+  came from. Those 12 were restored from the index so the local tree now
+  matches a fresh clone: all 89 text files are LF on both sides. Backend
+  (69 passed) and frontend (48 passed, lint clean) re-run afterwards, since
+  source files were rewritten in place.
 - **2026-10-08** — Published to GitHub at
   https://github.com/jerinsaji299-coder/Fraud-campaign-detection and tagged
   `v0.1-data-pipeline`. Initialised the repository (branch `main`), filled
