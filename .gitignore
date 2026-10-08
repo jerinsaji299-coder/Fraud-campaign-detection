@@ -1,0 +1,38 @@
+# --- data and artifacts (never commit: large, derived, or both) ---
+# Keep the folders themselves so a fresh clone has the expected layout.
+backend/data/*
+!backend/data/.gitkeep
+backend/artifacts/*
+!backend/artifacts/.gitkeep
+
+# --- secrets and credentials ---
+.env
+.env.local
+*.env
+kaggle.json
+*.pem
+*.key
+credentials.json
+
+# --- python ---
+.venv/
+venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+*.egg-info/
+build/
+dist/
+
+# --- node / frontend ---
+node_modules/
+frontend/node_modules/
+frontend/dist/
+
+# --- OS and editor junk ---
+.DS_Store
+Thumbs.db
+desktop.ini
+.vscode/
+.idea/
+*.swp

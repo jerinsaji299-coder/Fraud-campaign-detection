@@ -1,0 +1,103 @@
+"""
+All frozen research definitions, in one place, so the pipeline and the
+FastAPI `/methodology` endpoint can never disagree.
+
+See README.md "Frozen research definitions" for the reasoning behind each
+of these. Do not change any value here without explicit approval — see
+CLAUDE.md.
+"""
+
+from __future__ import annotations
+
+import datetime as _dt
+
+# ---------------------------------------------------------------------------
+# Raw data shape
+# ---------------------------------------------------------------------------
+
+TRANSACTION_COLUMNS = [
+    "Timestamp",
+    "From Bank",
+    "Account",
+    "To Bank",
+    "Account.1",
+    "Amount Received",
+    "Receiving Currency",
+    "Amount Paid",
+    "Payment Currency",
+    "Payment Format",
+    "Is Laundering",
+]
+
+TIMESTAMP_FORMAT = "%Y/%m/%d %H:%M"
+
+# ---------------------------------------------------------------------------
+# Cutoff
+# ---------------------------------------------------------------------------
+
+CUTOFF = _dt.datetime(2022, 9, 11, 0, 0)
+
+# ---------------------------------------------------------------------------
+# Campaign evaluation
+# ---------------------------------------------------------------------------
+
+EVAL_OK_MIN_TXN = 3
+EVAL_OK_MIN_ACCOUNTS = 3
+
+# ---------------------------------------------------------------------------
+# Splits, by campaign start date
+# ---------------------------------------------------------------------------
+
+TRAIN_END = _dt.datetime(2022, 9, 5, 0, 0)  # start < this -> train
+VAL_END = _dt.datetime(2022, 9, 6, 0, 0)  # start < this -> val
+TEST_END = _dt.datetime(2022, 9, 8, 0, 0)  # start < this -> test
+# start >= TEST_END (and before/through the stress window, Sept 8-10) -> stress
+
+SPLIT_ORDER = ["train", "val", "test", "stress"]
+
+# ---------------------------------------------------------------------------
+# Groups / topology
+# ---------------------------------------------------------------------------
+
+HUB_TYPES = frozenset({"FAN-IN", "FAN-OUT", "GATHER-SCATTER"})
+
+# Seed and target used to determine, once, which fragmentable campaigns can
+# never be pulled below 0.9 visibility ("unfragmentable").
+UNFRAGMENTABLE_SEED = 42
+UNFRAGMENTABLE_TARGET = 0.25
+UNFRAGMENTABLE_THRESHOLD = 0.9
+
+# ---------------------------------------------------------------------------
+# Institutions
+# ---------------------------------------------------------------------------
+
+K_INSTITUTIONS = 8
+
+# ---------------------------------------------------------------------------
+# Visibility
+# ---------------------------------------------------------------------------
+
+VISIBILITY_TARGETS = [1.0, 0.75, 0.5, 0.25]
+VISIBILITY_SEEDS = [0, 1, 2, 3, 4]
+LOCAL_SEARCH_ITERS = 400
+
+# Bin thresholds: "100" >= 0.9; "75" in [0.65, 0.9); "50" in [0.45, 0.65);
+# "low" < 0.45.
+VISIBILITY_BIN_THRESHOLDS = {
+    "100": 0.9,
+    "75": 0.65,
+    "50": 0.45,
+}
+VISIBILITY_BIN_ORDER = ["100", "75", "50", "low"]
+
+# ---------------------------------------------------------------------------
+# Planned evaluation rules (Phase 3 — documented here, not implemented yet)
+# ---------------------------------------------------------------------------
+
+DETECTION_WINDOW_STEP_H = 6
+DETECTION_WINDOW_LOOKBACK_MIN_H = 24
+DETECTION_WINDOW_LOOKBACK_MAX_H = 72
+MATCH_MIN_ACCOUNT_FRACTION = 0.5
+MATCH_MIN_ACCOUNTS = 3
+TEST_SUBSETS = ["all", "fully_observed", "no_shared_accounts"]
+CONDITIONS = ["isolated", "fedavg_only", "fedavg_embedding", "centralized"]

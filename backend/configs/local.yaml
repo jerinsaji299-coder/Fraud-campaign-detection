@@ -1,0 +1,6 @@
+# Paths for the downloaded 1% sample (run on a laptop).
+data:
+  trans_csv: data/sample/HI-Small_Trans.csv
+  patterns_txt: data/sample/HI-Small_Patterns.txt
+
+artifacts_dir: artifacts

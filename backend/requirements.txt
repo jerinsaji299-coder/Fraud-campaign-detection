@@ -1,0 +1,10 @@
+# pandas >= 2.2 is required: campaigns.build_campaign_table passes
+# include_groups= to groupby.apply, which older versions reject.
+pandas>=2.2
+numpy
+pyarrow
+pyyaml
+pytest
+fastapi
+uvicorn
+pydantic
