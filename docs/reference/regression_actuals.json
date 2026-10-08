@@ -1,0 +1,78 @@
+{
+  "actuals": {
+    "total_rows": 5078345,
+    "rows_on_or_after_cutoff": 1108,
+    "campaigns": 370,
+    "pattern_transactions": 3209,
+    "matched_pattern_transactions": 3209,
+    "laundering_rows": 5177,
+    "unassigned_laundering_rows": 1968,
+    "eval_ok_total": 258,
+    "reassignable_total": 152,
+    "reassignable_test": 37,
+    "reassignable_test_shares_train_account": 7,
+    "eval_ok_train": 100,
+    "eval_ok_val": 26,
+    "eval_ok_test": 56,
+    "eval_ok_stress": 76,
+    "base_type_CYCLE": 54,
+    "base_type_GATHER-SCATTER": 51,
+    "base_type_BIPARTITE": 49,
+    "base_type_FAN-OUT": 48,
+    "base_type_SCATTER-GATHER": 44,
+    "base_type_STACK": 43,
+    "base_type_RANDOM": 41,
+    "base_type_FAN-IN": 40
+  },
+  "expected": {
+    "total_rows": 5078345,
+    "rows_on_or_after_cutoff": 1108,
+    "campaigns": 370,
+    "pattern_transactions": 3209,
+    "matched_pattern_transactions": 3209,
+    "laundering_rows": 5177,
+    "unassigned_laundering_rows": 1968,
+    "eval_ok_total": 258,
+    "eval_ok_train": 100,
+    "eval_ok_val": 26,
+    "eval_ok_test": 56,
+    "eval_ok_stress": 76,
+    "reassignable_total": 152,
+    "reassignable_test": 37,
+    "reassignable_test_shares_train_account": 7,
+    "base_type_CYCLE": 54,
+    "base_type_GATHER-SCATTER": 51,
+    "base_type_BIPARTITE": 49,
+    "base_type_FAN-OUT": 48,
+    "base_type_SCATTER-GATHER": 44,
+    "base_type_STACK": 43,
+    "base_type_RANDOM": 41,
+    "base_type_FAN-IN": 40
+  },
+  "run": {
+    "pandas_version": "2.3.3",
+    "trans_csv": "/kaggle/input/datasets/ealtman2019/ibm-transactions-for-anti-money-laundering-aml/HI-Small_Trans.csv",
+    "patterns_txt": "/kaggle/input/datasets/ealtman2019/ibm-transactions-for-anti-money-laundering-aml/HI-Small_Patterns.txt",
+    "k_institutions": 8,
+    "institution_loads": [
+      1269310,
+      1269310,
+      1269309,
+      1269309,
+      1269309,
+      1269309,
+      1269309,
+      1269309
+    ],
+    "group_counts": {
+      "fragmentable": 228,
+      "hub": 139,
+      "unfragmentable": 3
+    },
+    "unfragmentable": 3,
+    "date_range": [
+      "2022-09-01T00:00:00",
+      "2022-09-18T16:18:00"
+    ]
+  }
+}
