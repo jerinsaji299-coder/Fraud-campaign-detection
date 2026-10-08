@@ -1,0 +1,10 @@
+# Normalize line endings for everyone.
+#
+# text=auto  -> Git decides per file whether it is text (binary files are
+#               detected and left byte-for-byte alone).
+# eol=lf     -> text files are checked out with LF on every platform, so a
+#               Windows clone and a Linux/Kaggle clone see identical bytes.
+#
+# Without this, Windows' core.autocrlf=true hands the working tree CRLF,
+# which shows up as spurious diffs and can break scripts run on Linux.
+* text=auto eol=lf
