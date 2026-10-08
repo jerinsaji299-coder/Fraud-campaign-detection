@@ -70,11 +70,15 @@ bank).
 
 ## Project status
 
-**Current stage:** Phase 3, stage 3.0 — Kaggle runner and Phase 2
-verification (code done, **not yet run on the full data**).
-**Next step:** run `verify` and `pipeline` on Kaggle (see
-`backend/scripts/kaggle/run_on_kaggle.md`) and confirm every regression
-number passes. Stage 3.1 does not begin until that is confirmed.
+**Current stage:** Phase 3, stage 3.0 — **done and verified**. All 23
+regression numbers reproduced on the full dataset via Kaggle on 2026-10-08
+(`docs/reference/verify_report.md`), and the exported artifacts are
+installed locally and serving.
+**Next step:** stage 3.1 (window builder + features + leakage tests). One
+open question first: the visibility assignment is not reproducible across
+processes (see [Known limitations](#known-limitations-and-open-questions)) —
+it does not affect Phase 3, which is centralized-only, but it should be
+settled before Phase 4.
 
 **Phase 2 — pipeline, artifacts, API, frontend (complete)**
 
@@ -96,7 +100,7 @@ no visibility reassignment is used in this phase.
 
 | Stage | Description | Status |
 |---|---|---|
-| 3.0 | Kaggle runner + Phase 2 full-data verification | code done, awaiting the Kaggle run |
+| 3.0 | Kaggle runner + Phase 2 full-data verification | done — all 23 numbers PASS (2026-10-08) |
 | 3.1 | Window builder + features + leakage tests | not started |
 | 3.2 | Evaluation module (extraction, matching, lead time, bootstrap CIs) + oracle and random scorers | not started |
 | 3.3 | XGBoost baseline: train, select tau on validation, evaluate on test | not started |
@@ -564,6 +568,51 @@ project-root/
   npm run test
   ```
 
+### Installing artifacts from Kaggle
+
+After a Kaggle `pipeline` run, download `/kaggle/working/artifacts.zip` and
+unpack it so that these sit **directly** in `backend/artifacts/`:
+
+```
+backend/artifacts/
+  summary.json
+  campaigns.parquet
+  campaign_transactions.parquet
+  institutions.json
+  visibility/seed_0.parquet ... seed_4.parquet
+  results/          (empty until Phase 5)
+  .gitkeep          (tracked - leave it alone)
+```
+
+On Windows, **do not** use Explorer's "Extract All" directly onto
+`backend/artifacts/`: it creates a folder named after the archive, giving
+`backend/artifacts/artifacts/summary.json`. That is one level too deep, and
+the API then reports every artifact as missing. Either extract elsewhere and
+move the *contents* in, or use PowerShell, which lets you control the
+destination exactly:
+
+```powershell
+cd "C:\Users\ASUS\Downloads\FRAUD CAMPAIGN DETECTION PROJECT"
+Expand-Archive -Path "$HOME\Downloads\artifacts.zip" -DestinationPath "backend\artifacts" -Force
+# if it still landed nested, flatten it:
+if (Test-Path "backend\artifacts\artifacts\summary.json") {
+  Move-Item "backend\artifacts\artifacts\*" "backend\artifacts" -Force
+  Remove-Item "backend\artifacts\artifacts"
+}
+Get-ChildItem backend\artifacts        # summary.json must be listed here
+```
+
+**Restart the backend afterwards.** Artifacts are read once at startup and
+cached, so a running server will keep reporting them missing no matter what
+is on disk. `--reload` only restarts on *code* changes, not data.
+
+If `/api/health` still shows `core_artifacts_available: false`, read its
+`hint` field: the server detects the nesting mistake and names the offending
+directory, both in that response and in a warning logged at startup.
+
+The artifacts stay gitignored — they are derived data and must never be
+committed.
+
 ## Backend: modules
 
 - **`constants.py`** — every frozen definition (cutoff, split boundaries,
@@ -652,7 +701,11 @@ project-root/
   them; `require_*` accessors raise 503 (not exported yet) or 404
   (campaign not found) with actionable messages. `to_records` converts
   DataFrame rows to JSON-safe dicts (numpy scalars unwrapped, `NaN`/`NaT`
-  → `null`).
+  → `null`). When core artifacts are missing it logs a warning naming each
+  one and the directory searched, and `find_nested_artifacts` detects the
+  common case of artifacts extracted one directory too deep
+  (`artifacts/artifacts/summary.json`) and says so explicitly — in the log
+  and in `/api/health`'s `nested_artifacts_dir` and `hint` fields.
 - **`services/methodology.py`** — builds the `/methodology` document,
   reading every value from `fraudcamp.constants` so the published
   definitions cannot disagree with the pipeline.
@@ -752,8 +805,11 @@ Status codes used throughout:
 
 **`/api/health`** — `status`, `artifacts_dir`, `artifacts` (a map of every
 expected artifact path to whether it exists), `core_artifacts_available`,
-`results_available`. Works even with no artifacts at all, so the frontend's
-API-status indicator can always render.
+`results_available`, plus `missing_artifacts`, `nested_artifacts_dir` and a
+human-readable `hint` when something is wrong (see
+[Installing artifacts from Kaggle](#installing-artifacts-from-kaggle)).
+Works even with no artifacts at all, so the frontend's API-status indicator
+can always render.
 
 **`/api/summary`** — `summary.json` verbatim, validated against the
 response model (see [Artifacts](#artifacts) for every field).
@@ -959,10 +1015,10 @@ campaign_id)`:
   `FRAUDCAMP_REGRESSION_OUT` is set, writes the computed numbers as JSON so
   the Kaggle runner can print its table without a second full build. Skips
   automatically when the dataset is absent.
-  > **These have never actually run.** They are skipped on every machine used
-  > so far, because the full dataset only exists on Kaggle. Confirming them is
-  > the entire point of stage 3.0, and no Phase 3 model work starts until they
-  > pass.
+  > **Confirmed on 2026-10-08:** a Kaggle `verify` run reproduced all 23
+  > numbers (pytest exit 0, pandas 2.3.3, 39.3s, 3,207 MB peak). The report
+  > is kept at `docs/reference/verify_report.md`. They still skip on any
+  > machine without the full dataset, which is every local machine.
 - **Frontend tests** (Vitest + React Testing Library), in `frontend/src`:
   - `pages/campaignFilters.test.ts` — explorer filter logic: query building
     (including that a `false` boolean survives rather than being dropped as
@@ -996,9 +1052,10 @@ campaign_id)`:
     note). Cytoscape needs a real canvas, so the graph component itself is
     stubbed in these tests.
 
-**Current pass status (2026-10-07):**
-- Backend: `python -m pytest tests/` from `backend/` → 69 passed, 24 skipped
-  (fulldata, no dataset present on this machine), 0 failed.
+**Current pass status (2026-10-08):**
+- Backend: `python -m pytest tests/` from `backend/` → 75 passed, 24 skipped
+  (fulldata, no dataset present on this machine), 0 failed. The 24 skipped
+  ones passed on Kaggle against the full data on 2026-10-08.
 - Frontend: `npm run test` from `frontend/` → 48 passed, 0 failed.
   `npm run build` (tsc + bundle) and `npm run lint` both clean.
 
@@ -1027,12 +1084,21 @@ is the one piece that most warrants a look in a browser before the demo.
 - No model, training, federated-learning or experiment code exists yet. The
   four experimental conditions are defined and the result schema is fixed,
   but nothing has been run, so the project has no findings of any kind.
-- **The full-data regression numbers are unconfirmed.** Every number in
-  [Verified numbers](#verified-numbers) comes from the reference notebook,
-  and the pipeline reproduces them only in principle: the tests that check
-  this have been skipped on every machine used so far, because the dataset
-  lives on Kaggle. Until stage 3.0's `verify` run passes, the pipeline's
-  agreement with the notebook is an assumption, not a verified fact.
+- **The visibility assignment is not reproducible across processes.** The
+  pipeline seeds its RNG explicitly, but `build_global_assignment` iterates
+  a campaign's accounts from a Python **set**, and string hash
+  randomisation makes that order differ between processes. The seeded draws
+  therefore follow a different trajectory each run. Demonstrated by running
+  the same build under `PYTHONHASHSEED=1/2/3`: the resulting
+  account-to-institution maps differ. It also explains why the Kaggle
+  `verify` run reported 3 unfragmentable campaigns while the `pipeline` run
+  that produced the shipped artifacts reported 2. No regression number is
+  affected (none depends on the search), and Phase 3 is centralized-only so
+  it does not use these assignments at all — but Phase 4-5 and the
+  `unfragmentable` control-group label do. The fix is a one-line
+  determinisation (sort the accounts before searching), which would change
+  the exported visibility values, so it needs an explicit decision before
+  anyone builds on the current `visibility/seed_*.parquet`. **Open.**
 - The frontend has not been visually inspected in a browser from the
   development environment used so far (no browser tooling available); the
   Cytoscape campaign graph in particular is covered only by stubbed tests.
@@ -1070,6 +1136,31 @@ Tagged points in the repository, newest first. Check one out with
 
 ## Changelog
 
+- **2026-10-08** — **Phase 2 verified on the full dataset.** A Kaggle
+  `verify` run reproduced all 23 regression numbers (pytest exit 0, pandas
+  2.3.3, 39.3s, 3,207 MB peak); the report is in
+  `docs/reference/verify_report.md`. Phase 2's agreement with the reference
+  notebook is now a measured fact rather than an assumption, which clears
+  the stage 3.0 gate.
+  Installed the exported artifacts locally: they had been unpacked into
+  `backend/artifacts/artifacts/`, one directory too deep, which is why
+  `/api/health` reported every core artifact missing. Moved the contents up,
+  restored the tracked `backend/artifacts/.gitkeep` (the extraction had
+  removed it), and validated every file through the API's own
+  `ArtifactStore`: 370 campaigns, 258 eval_ok, 152 reassignable, 3,209
+  campaign transactions, 14,384 rows per visibility seed file, splits
+  100/26/56/76 — all matching the verified numbers.
+  Made that failure self-diagnosing: the server now logs a warning at
+  startup naming each missing core artifact and the directory it searched,
+  and `find_nested_artifacts` detects the extracted-too-deep case and
+  reports it in both the log and `/api/health` (new `missing_artifacts`,
+  `nested_artifacts_dir` and `hint` fields, mirrored in the frontend's
+  `Health` type). Six new API tests cover detection, the health response,
+  that `visibility/` and `results/` are never mistaken for an extra nesting
+  level, and the all-present and absent-directory cases — backend is now 75
+  passed, 24 skipped. Added an "Installing artifacts from Kaggle"
+  subsection to How to run with the PowerShell commands, the Explorer
+  "Extract All" pitfall and the restart requirement.
 - **2026-10-08** — Added `.gitattributes` with `* text=auto eol=lf`, so text
   files are stored and checked out as LF on every platform and a Windows
   clone sees the same bytes as a Linux/Kaggle one. `git add --renormalize .`

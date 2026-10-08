@@ -4,6 +4,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.main import create_app
+from app.services import artifacts as artifacts_service
 from conftest import N_CAMPAIGNS, N_PATTERN_TXNS
 from fraudcamp import constants, export, pipeline
 
@@ -43,6 +44,58 @@ def test_health_works_without_artifacts(empty_client):
     assert body["status"] == "ok"
     assert body["core_artifacts_available"] is False
     assert all(v is False for v in body["artifacts"].values())
+
+
+def test_health_lists_what_is_missing_and_how_to_fix_it(empty_client):
+    body = empty_client.get("/api/health").json()
+    assert sorted(body["missing_artifacts"]) == sorted(artifacts_service.CORE_ARTIFACTS)
+    assert body["nested_artifacts_dir"] is None
+    assert "--export" in body["hint"]
+    assert "restart" in body["hint"]
+
+
+# --- the "extracted one level too deep" trap ----------------------------------
+
+
+def test_nested_artifacts_are_detected(tmp_path, mini_dataset):
+    """Windows' "Extract All" produces artifacts/artifacts/summary.json, which
+    otherwise looks like every artifact being mysteriously absent."""
+    root = tmp_path / "artifacts"
+    export.export_all(pipeline.build(mini_dataset), root / "artifacts")
+
+    found = artifacts_service.find_nested_artifacts(root)
+    assert found == root / "artifacts"
+
+
+def test_nested_artifacts_reported_by_health(tmp_path, mini_dataset):
+    root = tmp_path / "artifacts"
+    export.export_all(pipeline.build(mini_dataset), root / "artifacts")
+
+    client = TestClient(create_app(root))
+    body = client.get("/api/health").json()
+
+    assert body["core_artifacts_available"] is False
+    assert body["nested_artifacts_dir"] == str(root / "artifacts")
+    assert "one directory too deep" in body["hint"]
+    assert "restart" in body["hint"]
+
+
+def test_nested_detection_ignores_the_real_subdirectories(artifacts_dir):
+    """visibility/ and results/ belong inside the artifacts directory and
+    must never be reported as an accidental nesting level."""
+    assert artifacts_service.find_nested_artifacts(artifacts_dir) is None
+
+
+def test_no_nesting_claimed_when_everything_is_in_place(client):
+    body = client.get("/api/health").json()
+    assert body["core_artifacts_available"] is True
+    assert body["missing_artifacts"] == []
+    assert body["nested_artifacts_dir"] is None
+    assert body["hint"] is None
+
+
+def test_nested_detection_on_an_absent_directory(tmp_path):
+    assert artifacts_service.find_nested_artifacts(tmp_path / "nope") is None
 
 
 def test_endpoints_explain_missing_artifacts(empty_client):

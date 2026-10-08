@@ -14,12 +14,32 @@ router = APIRouter()
 @router.get("/health", response_model=HealthResponse, tags=["meta"])
 def health(store: ArtifactStore = Depends(get_store)) -> HealthResponse:
     present = store.present()
+    missing = store.missing_core()
+
+    hint: str | None = None
+    if missing and store.nested_dir is not None:
+        hint = (
+            f"The artifacts are one directory too deep, in {store.nested_dir}. "
+            f"Move its contents up into {store.artifacts_dir} so that "
+            "summary.json sits directly there, then restart the server."
+        )
+    elif missing:
+        hint = (
+            f"{len(missing)} core artifact(s) missing from {store.artifacts_dir}: "
+            f"{', '.join(missing)}. Run the pipeline with --export, or unpack "
+            "artifacts.zip from a Kaggle run into that folder, then restart "
+            "the server (artifacts are read only at startup)."
+        )
+
     return HealthResponse(
         status="ok",
         artifacts_dir=str(store.artifacts_dir),
         artifacts=present,
-        core_artifacts_available=all(present[name] for name in CORE_ARTIFACTS),
+        core_artifacts_available=not missing,
         results_available=store.results_available,
+        missing_artifacts=missing,
+        nested_artifacts_dir=str(store.nested_dir) if store.nested_dir else None,
+        hint=hint,
     )
 
 

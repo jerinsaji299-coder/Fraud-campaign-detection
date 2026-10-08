@@ -20,6 +20,13 @@ class HealthResponse(BaseModel):
     artifacts: dict[str, bool]
     core_artifacts_available: bool
     results_available: bool
+    #: Core artifacts the server could not find, empty when all are present.
+    missing_artifacts: list[str] = []
+    #: Set when the artifacts were found one directory too deep (the Windows
+    #: "Extract All" trap), so the cause is obvious from /api/health alone.
+    nested_artifacts_dir: str | None = None
+    #: A human-readable explanation of whatever is wrong, if anything is.
+    hint: str | None = None
 
 
 # --- summary ----------------------------------------------------------------

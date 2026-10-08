@@ -10,6 +10,12 @@ export interface Health {
   artifacts: Record<string, boolean>
   core_artifacts_available: boolean
   results_available: boolean
+  /** Core artifacts the server could not find; empty when all are present. */
+  missing_artifacts: string[]
+  /** Set when the artifacts sit one directory too deep. */
+  nested_artifacts_dir: string | null
+  /** Human-readable explanation of whatever is wrong, if anything is. */
+  hint: string | null
 }
 
 export interface RowCounts {
