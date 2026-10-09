@@ -101,3 +101,24 @@ MATCH_MIN_ACCOUNT_FRACTION = 0.5
 MATCH_MIN_ACCOUNTS = 3
 TEST_SUBSETS = ["all", "fully_observed", "no_shared_accounts"]
 CONDITIONS = ["isolated", "fedavg_only", "fedavg_embedding", "centralized"]
+
+# ---------------------------------------------------------------------------
+# Phase 3 detection windows
+# ---------------------------------------------------------------------------
+# A detection time t is a moment at which a model is asked "is a campaign
+# forming?". At t it may see ONLY transactions in [t - L, t); never t itself,
+# and never anything after it.
+
+DATA_START = _dt.datetime(2022, 9, 1, 0, 0)
+
+#: Lookback windows to choose between on validation. Development uses 24h.
+LOOKBACKS_H = (24, 48, 72)
+DEFAULT_LOOKBACK_H = 24
+
+# Detection-time splits. These are about *when detection runs*, and are
+# distinct from the campaign splits above, which are about when a campaign
+# starts. Boundaries are inclusive of the upper end.
+DETECTION_TRAIN_END = _dt.datetime(2022, 9, 5, 0, 0)  # t <= this -> train
+DETECTION_VAL_END = _dt.datetime(2022, 9, 6, 0, 0)  # t <= this -> val
+DETECTION_TEST_END = CUTOFF  # t <= this -> test
+DETECTION_SPLIT_ORDER = ["train", "val", "test"]

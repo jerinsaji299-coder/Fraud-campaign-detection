@@ -34,8 +34,9 @@ git clone https://github.com/jerinsaji299-coder/Fraud-campaign-detection.git
 15. [Testing](#testing)
 16. [Known limitations and open questions](#known-limitations-and-open-questions)
 17. [Future phases](#future-phases)
-18. [Version history](#version-history)
-19. [Changelog](#changelog)
+18. [Phase 3 definitions](#phase-3-definitions-centralized-baselines)
+19. [Version history](#version-history)
+20. [Changelog](#changelog)
 
 ## Research question, hypothesis, and contribution
 
@@ -70,15 +71,12 @@ bank).
 
 ## Project status
 
-**Current stage:** Phase 3, stage 3.0 — **done and verified**. All 23
-regression numbers reproduced on the full dataset via Kaggle on 2026-10-08
-(`docs/reference/verify_report.md`), and the exported artifacts are
-installed locally and serving.
-**Next step:** stage 3.1 (window builder + features + leakage tests). Note
-that the visibility artifacts need regenerating on Kaggle after the
-2026-10-08 determinism fix (see
-[Known limitations](#known-limitations-and-open-questions)); that does not
-block Phase 3, which is centralized-only and never reads them.
+**Current stage:** Phase 3, stage 3.1 — **done**. Detection windows,
+features and the leakage property tests are in place; stage 3.0 before it is
+verified on the full data and reproducible.
+**Next step:** stage 3.2 — the evaluation module (campaign extraction,
+matching, lead time, bootstrap CIs) plus the oracle and random sanity
+scorers, run on the sample data.
 
 **Phase 2 — pipeline, artifacts, API, frontend (complete)**
 
@@ -100,8 +98,8 @@ no visibility reassignment is used in this phase.
 
 | Stage | Description | Status |
 |---|---|---|
-| 3.0 | Kaggle runner + Phase 2 full-data verification | done — all 23 numbers PASS (2026-10-08) |
-| 3.1 | Window builder + features + leakage tests | not started |
+| 3.0 | Kaggle runner + Phase 2 full-data verification | done — all 24 numbers PASS, determinism confirmed |
+| 3.1 | Window builder + features + leakage tests | done |
 | 3.2 | Evaluation module (extraction, matching, lead time, bootstrap CIs) + oracle and random scorers | not started |
 | 3.3 | XGBoost baseline: train, select tau on validation, evaluate on test | not started |
 | 3.4 | GNN centralized (GINEConv edge classification) | not started |
@@ -299,6 +297,62 @@ not this session):
   (`crosses_cutoff == False`), `no_shared_accounts`
   (`shares_train_account == False`).
 
+## Phase 3 definitions (centralized baselines)
+
+Additive to the frozen Phase 2 definitions above; nothing there changed.
+Phase 3 answers one gate question: **can a centralized model, with full
+visibility and no reassignment, discover campaigns early — and does a graph
+model beat a non-graph baseline at it?** Nothing federated, no institutions
+in training, no visibility sweep.
+
+**Detection times.** Every 6 hours, aligned to 00:00 / 06:00 / 12:00 /
+18:00, over `(2022-09-01 00:00, CUTOFF]` — 40 times. Sept 1 00:00 is
+excluded because its window is empty by construction.
+
+**Causal windows.** At detection time `t` a model sees only transactions
+with `t - L <= timestamp < t`. The upper bound is strict: a transaction
+stamped exactly `t` is already the future. Lookback `L ∈ {24, 48, 72}`
+hours, chosen on validation; development uses 24.
+
+**Detection-time splits** (distinct from the campaign splits, which are
+about when a campaign *starts*): train `t <= 2022-09-05 00:00`, val
+`(2022-09-05, 2022-09-06]`, test `(2022-09-06, CUTOFF]`. With any lookback,
+the last training window therefore ends exactly at Sept 5 00:00, so no
+training transaction is from Sept 5 or later.
+
+**Labels.** Edge label = `Is Laundering`, including laundering transactions
+that belong to no campaign. The positive rate is ~0.1%, so training uses a
+class-weighted loss with weight `n_negative / n_positive` per window — about
+**1,000** at that rate (measured: 1,014 on a 400k-transaction window at a
+0.098% positive rate).
+
+**Edge features** (32 dims): `log1p` of amount paid and amount received, a
+same-currency flag, hour-of-day as sin/cos, a self-transfer flag
+(`src == dst`), a cross-bank flag (`From Bank != To Bank`), day-of-week
+one-hot (7), and one-hot payment currency, receiving currency and payment
+format against vocabularies fitted on training windows, each with a
+trailing `__other__` column for categories unseen in training.
+
+**Node features** (6 dims), computed from the current window only:
+in-degree, out-degree, `log1p` total in-amount (sum of amount received when
+the account is the receiver), `log1p` total out-amount (amount paid when it
+is the sender), distinct counterparties, and distinct currencies — both
+pooled over incoming and outgoing transactions.
+
+**What is never a feature:** account identity, bank identity, institution,
+anything label-derived, and anything from at or after `t`. Banks enter only
+as the equality `From Bank != To Bank` and accounts only as `src == dst`;
+nothing identifies *which* bank or account is involved. Each of these is a
+property test, not a convention — see Testing.
+
+**Scaling.** Mean/std standardisation of the continuous columns only
+(one-hot, cyclical and binary features are left alone), fitted on training
+windows **only** and saved as JSON so validation, test and every later
+condition replay exactly the training transformation. Fitting is *refused*
+if any non-training window is passed in. Arithmetic is float64; matrices are
+stored float32, which matters because a busy 24h window holds ~1M
+transactions.
+
 ## Decision log
 
 | Date | Decision | Reason | Evidence |
@@ -402,6 +456,8 @@ project-root/
       pipeline.py                 end-to-end orchestration shared by the runner and the exporter
       export.py                   writes backend/artifacts/
       regression.py               the full-data expected numbers + actual/expected comparison
+      windows.py                  detection-time grid, causal window slicing, detection-time splits
+      features.py                 edge + node features, training-only vocabularies and scaler
       models/README.md            placeholder — Phase 3+ (not this session)
       federation/README.md        placeholder — Phase 4+ (not this session)
       evaluation/README.md        placeholder — Phase 3+ (not this session)
@@ -434,6 +490,8 @@ project-root/
       test_export.py              every artifact's shape, contents, determinism, empty results/
       test_api.py                 every endpoint via TestClient against a real exported fixture artifact set
       test_determinism.py         cross-process reproducibility: subprocess runs under differing PYTHONHASHSEED
+      test_windows.py             detection-time grid, splits, strict causal window bounds
+      test_features.py            feature shapes + the leakage properties (future, labels, identity)
       test_fulldata.py            @pytest.mark.fulldata, one test per regression number; skip if no data
     data/                         gitignored: raw/, sample/, processed/
     artifacts/                    gitignored except .gitkeep; summary.json, campaigns.parquet,
@@ -703,6 +761,20 @@ committed.
   `build_institutions`, `build_visibility_table(seed)`, and `export_all`,
   which writes every file described in [Artifacts](#artifacts) and creates
   an empty `results/`.
+- **`windows.py`** — the only place allowed to slice a window, so the
+  causality rule lives in one place: `detection_times` (the aligned grid),
+  `split_of_detection_time`, `detection_times_for_split`, `window_slice`
+  (`t - L <= ts < t`, upper bound strict), `build_window`/`iter_windows`
+  (which skip empty windows), and `window_summary` for checking a
+  configuration's size and label balance before spending GPU time on it.
+- **`features.py`** — `fit_feature_spec(train_windows)` learns the
+  category vocabularies and the scaler and **refuses** anything that is not
+  a training window; `FeatureSpec.save/load` persists them;
+  `build_window_features(window, spec)` returns a `WindowFeatures` holding
+  node features, edge features, `edge_index`, labels, campaign ids and
+  timestamps, with `xgboost_matrix()` flattening to edge + both endpoints'
+  features for the non-graph baseline and `class_weight()` giving the
+  imbalance weight.
 - **`regression.py`** — the single source for the full-data expectations:
   `METRICS` (each with its expected value and the notebook cell it came
   from), `compute_actuals(result)`, `compare`, `format_table` /
@@ -1022,6 +1094,29 @@ campaign_id)`:
   leading-zero banks, cutoff, eval_ok, splits, volume balancing,
   visibility (`A->B->C` chain = 1.0, fan-out = 1.0), conflict resolution,
   recomputation.
+- **Backend leakage tests** (`test_features.py`, `test_windows.py`), written
+  as properties rather than spot checks, because a leak is easier to prove
+  by invariance than by inspection:
+  - **No future.** Deleting every transaction from `t` onward must not
+    change a single number in either matrix — and a sharper version sets the
+    post-`t` rows to absurd values (1e12 amounts, an invented currency, all
+    labels flipped to 1) and requires the features to be bit-identical.
+  - **No labels.** Flipping every `Is Laundering` leaves the features
+    identical while the targets differ.
+  - **No identity.** Relabelling every account leaves the edge features
+    identical and the set of node rows unchanged (only their order moves);
+    renumbering banks while preserving which pairs differ leaves everything
+    identical, since only the `!=` equality is permitted.
+  - **No training data from Sept 5 onward**, checked over every training
+    window; and no window of any lookback reaches at or past its `t`.
+  - **Scaler provenance.** Fitting on a validation or test window raises;
+    fitting is unchanged by whether later data exists in the dataframe at
+    all; and the scaler's identity columns are exactly the non-continuous
+    features.
+  - Plus the grid's alignment, 6-hour spacing, inclusive split boundaries,
+    partitioning, that longer lookbacks are supersets of shorter ones, and
+    that unseen categories land in the `__other__` column without shifting
+    the known ones.
 - **Backend determinism tests** (`test_determinism.py`): the visibility build
   must be reproducible from its seed alone. Because one process has one hash
   seed, in-process tests cannot detect hash-order dependence, so these run
@@ -1098,9 +1193,10 @@ campaign_id)`:
     stubbed in these tests.
 
 **Current pass status (2026-10-08):**
-- Backend: `python -m pytest tests/` from `backend/` → 85 passed, 25 skipped,
-  0 failed. The skips are the full-data suite (no dataset on this machine;
-  24 of them passed on Kaggle on 2026-10-08) plus the one pending metric.
+- Backend: `python -m pytest tests/` from `backend/` → 128 passed, 25
+  skipped, 0 failed. The skips are the full-data suite, which needs the
+  dataset that only exists on Kaggle; all 24 of its numbers passed there on
+  2026-10-08/09.
 - Frontend: `npm run test` from `frontend/` → 48 passed, 0 failed.
   `npm run build` (tsc + bundle) and `npm run lint` both clean.
 
@@ -1174,6 +1270,30 @@ Tagged points in the repository, newest first. Check one out with
 
 ## Changelog
 
+- **2026-10-09** — **Stage 3.1: detection windows, features, leakage
+  tests.** Added `windows.py` (the aligned 6-hourly detection grid over
+  `(DATA_START, CUTOFF]` = 40 times, detection-time splits, and
+  `window_slice` as the single place a window is ever cut, with a strict
+  `ts < t` upper bound) and `features.py` (32 edge features, 6 window-local
+  node features, training-only category vocabularies with an `__other__`
+  column, and a mean/std scaler over the continuous columns that refuses to
+  be fitted on anything but training windows). `WindowFeatures` carries
+  node/edge matrices, `edge_index`, labels, campaign ids and timestamps,
+  with `xgboost_matrix()` for the non-graph baseline and `class_weight()`
+  for the imbalance. New detection-time constants (`DATA_START`,
+  `LOOKBACKS_H`, `DETECTION_{TRAIN,VAL,TEST}_END`) are additive — no frozen
+  Phase 2 definition changed — and are written up in a new "Phase 3
+  definitions" README section. 43 new tests: the leakage properties are
+  invariance checks (delete the future, poison the future with absurd
+  values, flip every label, relabel every account, renumber every bank) plus
+  the grid, split boundaries, lookback nesting and unseen-category handling.
+  Two implementation notes: one-hot encoding uses a dict map rather than
+  `pd.Categorical`, whose out-of-category behaviour is deprecated and is
+  exactly the `__other__` path; and matrices are stored float32 after
+  float64 arithmetic, which halves memory without affecting
+  bit-reproducibility. Measured on a synthetic 400k-transaction window:
+  32 + 6 dims, a 44-column XGBoost matrix, ~8s to build, and a class weight
+  of 1,014 at a 0.098% positive rate. Backend: 128 passed, 25 skipped.
 - **2026-10-09** — **Determinism confirmed; unfragmentable count pinned at
   2.** Two independent Kaggle sessions and three separate pipeline processes
   at commit `55b645e` (Python 3.13.15, pandas 2.3.3) produced byte-identical
