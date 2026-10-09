@@ -318,7 +318,7 @@ not this session):
 | 2026-10-07 | Phase 3 gate: verify every Phase 2 regression number on the full data **before** any model work | The 24 full-data tests have never run — the dataset only exists on Kaggle. Every Phase 3 result would silently inherit any discrepancy in the campaign table, splits or group assignment, and a model built on wrong ground truth is worse than no model | user instruction, stage 3.0 |
 | 2026-10-07 | `pandas>=2.2` pinned in requirements.txt | `campaigns.build_campaign_table` passes `include_groups=` to `groupby.apply`, which pandas added in 2.2 and older versions reject with a `TypeError`. Unpinned, a Kaggle image with pandas 2.1 would fail deep in the pipeline with a confusing error | implementation, stage 3.0 |
 | 2026-10-08 | Every collection is sorted before any seeded random step. **Bug:** a campaign's accounts were held in a Python `set`, and per-process string-hash randomisation made set iteration order differ between runs, so the seeded search followed a different trajectory each process — same seed, different assignment. **Evidence:** two Kaggle runs of the same pipeline disagreed on the unfragmentable count (3 vs 2); reproduced locally by varying `PYTHONHASHSEED`. **Fix:** accounts are now sorted tuples, and `sorted()` is applied at every point where order reaches the RNG. The algorithm, targets, iteration count and seeds are unchanged — only enumeration order is pinned, so no frozen definition moved. **Why now:** Phase 3 is centralized-only and never touches these assignments, but Phase 4-5 *is* the visibility sweep and the `unfragmentable` label defines the control group; fixing it after results existed would have invalidated them | `tests/test_determinism.py`, stage 3.0 follow-up |
-| 2026-10-08 | "Unfragmentable campaigns" is a **pending** regression metric: reported on every run, never failed | The reference notebook's exploratory value (2) came from a simpler procedure without shared-account conflict resolution, so it is not a valid expectation, and the pre-fix Kaggle runs disagreed with each other. It will be pinned from the first post-fix run that two independent Kaggle sessions agree on | `regression.PENDING_KEYS` |
+| 2026-10-09 | "Unfragmentable campaigns" pinned at **2**, and the five visibility SHA-256 digests recorded as reference values | Determinism confirmed on Kaggle across 2 independent sessions and 3 separate pipeline processes at commit `55b645e` (Python 3.13.15, pandas 2.3.3): all produced byte-identical visibility files and the same count. That is what makes the number trustworthy — before the fix, runs disagreed (3 vs 2), so the value could not be pinned from a single run. The notebook's exploratory 2 is consistent but was computed without conflict resolution, so it was never sufficient evidence on its own | `docs/reference/visibility_hashes.json`, Verified numbers |
 | 2026-10-07 | torch, torch_geometric, xgboost and scikit-learn are **not** added to requirements.txt yet | They are only needed from stages 3.3-3.4. Installing ~2GB of unused ML dependencies now would slow every Kaggle session and risk disturbing the pre-installed CUDA stack during a run whose only job is verifying Phase 2. Each lands with the stage that uses it | implementation, stage 3.0 |
 
 ## Verified numbers
@@ -338,11 +338,34 @@ These are also used as the full-data regression test suite
 | `eval_ok` fragmentable campaigns | 152 (test: 37) | `b7e46dec` |
 | Fragmentable test campaigns with `shares_train_account` | 7 of 37 | `cb0caa40` |
 | `base_type` counts | CYCLE 54, GATHER-SCATTER 51, BIPARTITE 49, FAN-OUT 48, SCATTER-GATHER 44, STACK 43, RANDOM 41, FAN-IN 40 | `11875435` |
-| Unfragmentable campaigns | **pending** | to be pinned from the first post-determinism-fix Kaggle run (see Decision log) |
+| Unfragmentable campaigns | 2 | Kaggle, commit `55b645e`, 2 sessions × 3 processes, 2026-10-09 |
 
-All of the pinned numbers above were reproduced on the full dataset on
-2026-10-08 (`docs/reference/verify_report.md`). The pending row is reported
-by every run but never fails one, until it is pinned.
+The first 23 were reproduced on the full dataset on 2026-10-08
+(`docs/reference/verify_report.md`). The unfragmentable count was pinned
+separately on 2026-10-09, after the determinism fix, once two independent
+sessions agreed — before the fix it varied between runs.
+
+### Reference visibility digests
+
+The visibility search is seeded, so the same commit and environment must
+produce byte-identical files. These are the reference digests; any future run
+that disagrees means something has become order-dependent again, and the
+`test_determinism.py` suite should be the first place to look.
+
+| File | SHA-256 |
+|---|---|
+| `visibility/seed_0.parquet` | `8953a9d77bf694e72e18fada8bd3065dfc06b4b1589e327dee6901c8adb9b0ff` |
+| `visibility/seed_1.parquet` | `36a322ad1cfc9eadd2a4c554a9497a11ac4c9aa6936071b76acc1dc87ff56204` |
+| `visibility/seed_2.parquet` | `d5d519ecb24001f853de2eaee2928813dda308fb5a96894d2d98bd0ca3eaed16` |
+| `visibility/seed_3.parquet` | `f56ad7e33736a9824630f472a4fd090625e24194083bfde19a0ef27fcf3643bc` |
+| `visibility/seed_4.parquet` | `df3139abbc850b46ecf2d499b31d55f47bffdb05ab53fc8bbdac29cd9d5ac63a` |
+
+**Environment these were produced in** (digests are only comparable within
+it, since a different pyarrow could change the bytes without changing the
+data): Kaggle, commit `55b645e`, Python 3.13.15, pandas 2.3.3. Confirmed
+across 2 independent sessions and 3 separate pipeline processes.
+Machine-readable copy: `docs/reference/visibility_hashes.json`. Regenerate
+and re-compare with `backend/scripts/kaggle/run_on_kaggle.md` §5b.
 
 Note on "eval_ok fragmentable = 152": this is the **topology** count —
 `eval_ok` campaigns with a non-hub `base_type`, i.e. the `reassignable`
@@ -1106,22 +1129,13 @@ is the one piece that most warrants a look in a browser before the demo.
 - No model, training, federated-learning or experiment code exists yet. The
   four experimental conditions are defined and the result schema is fixed,
   but nothing has been run, so the project has no findings of any kind.
-- **The local visibility artifacts are stale.** The determinism fix
-  (2026-10-08, see Decision log) changes the search trajectory, so the
-  `visibility/seed_*.parquet` files currently in `backend/artifacts/` were
-  produced by the old, order-dependent code. Everything else in the
-  artifacts — campaigns, splits, groups, institutions, campaign
-  transactions — is unaffected, and so is every pinned regression number.
-  What is stale is the per-account institution assignments, the achieved
-  visibility values, and the `unfragmentable` group label. Regenerate them
-  with the procedure in `backend/scripts/kaggle/run_on_kaggle.md` §5b, which
-  also verifies reproducibility by comparing two independent sessions. Until
-  then the Visibility Lab and the campaign visibility view show values that
-  cannot be reproduced. Phase 3 is unaffected: it is centralized-only and
-  never reads these files.
-- **The unfragmentable count is not yet pinned.** It is a pending metric in
-  the regression table — reported on every run, never asserted — until two
-  post-fix Kaggle sessions agree on it.
+- Reproducibility is verified for the visibility search but **only within
+  one environment**. The reference digests hold for Python 3.13 / pandas
+  2.3.3 / the Kaggle image of 2026-10-09; a different pyarrow could change
+  the parquet bytes without changing the data, so a digest mismatch should
+  be read as "investigate", not automatically "the search broke". The
+  `unfragmentable` count and the achieved-visibility values are the
+  environment-independent things to compare.
 - The frontend has not been visually inspected in a browser from the
   development environment used so far (no browser tooling available); the
   Cytoscape campaign graph in particular is covered only by stubbed tests.
@@ -1155,10 +1169,26 @@ Tagged points in the repository, newest first. Check one out with
 
 | Tag | Date | What it contains |
 |---|---|---|
+| `v0.2-verified` | 2026-10-09 | Phase 2 verified end to end on the full dataset, and reproducible. All 24 regression numbers pinned and confirmed on Kaggle; the visibility search made deterministic across processes, with reference SHA-256 digests recorded and confirmed across 2 sessions × 3 processes. Still no models and no experiment results. |
 | `v0.1-data-pipeline` | 2026-10-08 | Phase 2 complete, plus the stage 3.0 Kaggle runner. The research pipeline (campaign ground truth, splits, topology groups, institutions, visibility), the artifact export, the read-only FastAPI server, and the full React frontend — 69 backend tests and 48 frontend tests passing. **No models and no experiment results**: the four conditions are defined and the result schema is fixed, but nothing has been trained or run, and the full-data regression numbers are still unverified (that is what stage 3.0's Kaggle run is for). |
 
 ## Changelog
 
+- **2026-10-09** — **Determinism confirmed; unfragmentable count pinned at
+  2.** Two independent Kaggle sessions and three separate pipeline processes
+  at commit `55b645e` (Python 3.13.15, pandas 2.3.3) produced byte-identical
+  `visibility/seed_*.parquet` files and the same unfragmentable count, so
+  the metric moved from pending to pinned — the regression table is now 24
+  of 24 checked, with nothing pending. Recorded the five reference SHA-256
+  digests in Verified numbers together with the environment they are valid
+  for, and committed `docs/reference/visibility_hashes.json` as the
+  machine-readable copy; the README digests were verified against that file
+  programmatically rather than by eye, which caught one transcription slip.
+  Removed the stale-artifacts warning from Known limitations (artifacts
+  regenerated and reinstalled), replacing it with the narrower caveat that
+  digests are only comparable within one environment, since a different
+  pyarrow could change parquet bytes without changing the data. Tagged
+  `v0.2-verified`.
 - **2026-10-08** — **Fixed a reproducibility defect in the visibility
   search.** A campaign's accounts were held in a Python `set`, and
   per-process string-hash randomisation made set iteration order vary, so

@@ -1,0 +1,10 @@
+{
+  "unfragmentable_campaigns": 2,
+  "visibility_sha256": {
+    "seed_0.parquet": "8953a9d77bf694e72e18fada8bd3065dfc06b4b1589e327dee6901c8adb9b0ff",
+    "seed_1.parquet": "36a322ad1cfc9eadd2a4c554a9497a11ac4c9aa6936071b76acc1dc87ff56204",
+    "seed_2.parquet": "d5d519ecb24001f853de2eaee2928813dda308fb5a96894d2d98bd0ca3eaed16",
+    "seed_3.parquet": "f56ad7e33736a9824630f472a4fd090625e24194083bfde19a0ef27fcf3643bc",
+    "seed_4.parquet": "df3139abbc850b46ecf2d499b31d55f47bffdb05ab53fc8bbdac29cd9d5ac63a"
+  }
+}

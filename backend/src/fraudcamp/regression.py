@@ -90,16 +90,17 @@ METRICS: tuple[Metric, ...] = (
     Metric("base_type_STACK", "base_type STACK", 43, "notebook cell 11875435"),
     Metric("base_type_RANDOM", "base_type RANDOM", 41, "notebook cell 11875435"),
     Metric("base_type_FAN-IN", "base_type FAN-IN", 40, "notebook cell 11875435"),
-    # PENDING. The reference notebook's exploratory run reported 2, but it
-    # used a simpler procedure without shared-account conflict resolution, so
-    # it is not a usable expectation. The two Kaggle runs before the
-    # determinism fix disagreed with each other (3 vs 2), which is what
-    # exposed that bug. To be pinned from the first run after the fix.
+    # Pinned 2026-10-09 from the post-determinism-fix runs: two independent
+    # Kaggle sessions and three separate pipeline processes all produced 2
+    # (and byte-identical visibility files). Before the fix, runs disagreed
+    # between 3 and 2, which is what exposed that bug; the notebook's
+    # exploratory 2 came from a procedure without conflict resolution and so
+    # was never a usable expectation on its own.
     Metric(
         "unfragmentable_campaigns",
         "Unfragmentable campaigns",
-        None,
-        "PENDING: pin from the first Kaggle run after the determinism fix",
+        2,
+        "Kaggle, commit 55b645e, 2 sessions x 3 processes, 2026-10-09",
     ),
 )
 
