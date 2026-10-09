@@ -196,6 +196,33 @@ def test_future_rows_cannot_change_features_even_when_extreme(full_df, spec):
     np.testing.assert_array_equal(baseline.node_features, after.node_features)
 
 
+def test_a_transaction_stamped_exactly_at_t_is_treated_as_future(full_df, spec):
+    """Anchored on a detection time that a real transaction sits exactly on.
+
+    Added after a deliberate off-by-one (`ts <= t` instead of `ts < t`) was
+    caught only by the window test: the feature-level test above happened to
+    use a `t` with no transaction on it, so the boundary was never exercised
+    where it matters. This closes that gap.
+    """
+    boundary = pd.Timestamp(full_df["ts"].iloc[0]).floor("6h") + pd.Timedelta(hours=6)
+    anchored = full_df.copy()
+    # guarantee a transaction exists at exactly the detection time
+    anchored.loc[anchored.index[0], "ts"] = boundary
+    assert (anchored["ts"] == boundary).any()
+
+    window = windows.build_window(anchored, boundary, lookback_h=24)
+    assert (window.transactions["ts"] < boundary).all(), "a row at exactly t leaked in"
+
+    with_boundary = features.build_window_features(window, spec)
+    past_only = anchored[anchored["ts"] < boundary]
+    without = features.build_window_features(
+        windows.build_window(past_only, boundary, lookback_h=24), spec
+    )
+    assert with_boundary.accounts == without.accounts
+    np.testing.assert_array_equal(with_boundary.edge_features, without.edge_features)
+    np.testing.assert_array_equal(with_boundary.node_features, without.node_features)
+
+
 def test_labels_do_not_leak_into_features(full_df, spec):
     """Flipping every label must leave the features identical."""
     t = pd.Timestamp("2022-09-02 00:00")

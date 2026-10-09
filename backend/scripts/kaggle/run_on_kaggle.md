@@ -225,9 +225,43 @@ Once both sessions agree, send me the unfragmentable count and I will pin it
 in the regression table (it is deliberately `PENDING` until then, so it is
 reported but never fails a run).
 
+## 5c. Measuring window sizes and GNN feasibility
+
+Stage 3.1 built the detection windows and features; this measures what they
+actually cost on the full data, which decides how stage 3.4 has to train.
+
+```python
+!python scripts/kaggle/kaggle_runner.py features-smoke
+```
+
+No GPU needed — this builds features on CPU and only *estimates* GPU
+memory. It covers L = 24, 48 and 72 hours at five detection times: a weekday
+and a weekend day from train and from test, plus validation's single weekday
+(validation spans only Mon Sept 5 → Tue Sept 6, so there is no weekend time
+to sample; the report says so).
+
+Per window it reports edges, accounts, laundering edges, laundering rate,
+class weight, slice and build time, process memory, the in-memory tensor
+footprint, and the analytic size of the XGBoost matrix. It then estimates
+full-batch GPU memory for a 3-layer GINEConv with hidden 64 on the largest
+window.
+
+Writes `features_smoke.csv`, `.json` and `.md` to `/kaggle/working/`. Send
+back the `.md` (or the `.csv`).
+
+**What to look for.** The estimate matters because Kaggle's GPUs have 16 GB.
+Predicted before the run: comfortable at L = 24 on a quiet day, around 10 GB
+on a busy 24h window, and 17–19 GB at L = 48/72 on the busiest days — i.e.
+beyond a single 16 GB GPU. If the real numbers confirm that, stage 3.4 uses
+neighbour sampling rather than full-batch for the longer lookbacks, which
+the Phase 3 design already allows. Report the numbers either way; do not
+start changing the design.
+
 ## 6. Later stages
 
 `kaggle_runner.py` also accepts `train` and `evaluate`. Both currently exit
 with a message saying they are not implemented: they arrive with stage 3.3
 (XGBoost baseline) and stage 3.4 (GNN), together with the GPU settings and
-expected runtimes they need. Nothing about them is runnable yet.
+expected runtimes they need. Nothing about them is runnable yet. Those are
+the first commands that will need **Accelerator: GPU**; everything above
+runs on CPU.

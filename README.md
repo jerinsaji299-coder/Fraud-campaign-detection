@@ -345,6 +345,17 @@ as the equality `From Bank != To Bank` and accounts only as `src == dst`;
 nothing identifies *which* bank or account is involved. Each of these is a
 property test, not a convention — see Testing.
 
+**Expected GPU constraint (estimated, pending the `features-smoke` run).**
+From tensor shapes, a 3-layer GINEConv with hidden 64 trained **full-batch**
+needs roughly: ~2.3 GB on a quiet 24h window (210k edges), ~10 GB on a busy
+24h window (1.1M edges), and ~17–19 GB at L = 48/72 on the busiest days
+(1.9–2.1M edges). Kaggle offers 16 GB GPUs (T4 ×2, or P100), so **full-batch
+training is feasible only at L = 24, and marginal even there**; L = 48 and 72
+will need the neighbour sampling the design already permits ("train with
+LinkNeighborLoader-style sampling if full windows do not fit in GPU
+memory"). These are estimates, not measurements — `features-smoke` on the
+full data replaces them with real figures.
+
 **Scaling.** Mean/std standardisation of the continuous columns only
 (one-hot, cyclical and binary features are left alone), fitted on training
 windows **only** and saved as JSON so validation, test and every later
@@ -623,8 +634,28 @@ project-root/
   and unpack it into `backend/artifacts/` to give the API and frontend real
   data.
 
-  Both commands print elapsed time and memory per step, take `--config` and
-  `--out`, and work locally too (pointed at a sample config, the regression
+- **Measure window sizes and GNN feasibility (on Kaggle):**
+  ```
+  cd backend
+  python scripts/kaggle/kaggle_runner.py features-smoke
+  ```
+  Builds windows at L = 24, 48 and 72 hours at five detection times — a
+  weekday and a weekend day from train and from test, plus the one weekday
+  validation has (validation spans only Mon Sept 5 → Tue Sept 6, so it has
+  no weekend time) — and reports per window: edges, accounts, laundering
+  edges, laundering rate, class weight, slice and build time, process
+  memory, the in-memory tensor footprint, and the analytic size of the
+  XGBoost matrix. Then it estimates full-batch GPU memory for a 3-layer
+  GINEConv with hidden 64 on the largest window. Writes
+  `features_smoke.{csv,json,md}` to `/kaggle/working/`.
+
+  The feature spec for this command is fitted on a **single** training
+  window, deliberately: the command measures sizes and timing, and fitting
+  across all training windows would concatenate overlapping windows into
+  tens of millions of rows for no benefit here.
+
+  All three commands print elapsed time and memory per step, take `--config`
+  and `--out`, and work locally too (pointed at a sample config, the regression
   table is skipped with an explanation rather than reporting 23 meaningless
   failures). The full notebook walkthrough is
   `backend/scripts/kaggle/run_on_kaggle.md`.
@@ -794,7 +825,10 @@ committed.
 - **`scripts/make_sample.py`** — run on Kaggle to build the 1% sample.
 - **`scripts/kaggle/kaggle_runner.py`** — the Kaggle entry point.
   `verify` runs the full-data tests and prints the expected-vs-actual table;
-  `pipeline` builds, exports and zips the artifacts; `train` and `evaluate`
+  `pipeline` builds, exports and zips the artifacts; `features-smoke` builds
+  detection windows at L = 24/48/72 on the full data and reports per-window
+  size, timing, memory and tensor footprint plus a full-batch GNN memory
+  estimate; `train` and `evaluate`
   exist but exit with a message until stages 3.3 and 3.4. Every step reports
   elapsed time and memory (a true peak via `resource` on Linux; on Windows it
   falls back to current RSS and says so rather than mislabelling it).
@@ -1122,6 +1156,22 @@ campaign_id)`:
     partitioning, that longer lookbacks are supersets of shorter ones, and
     that unseen categories land in the `__other__` column without shifting
     the known ones.
+
+  **Verified by deliberately introducing leaks** (2026-10-09), the same way
+  the determinism suite was checked, because a leakage test that cannot fail
+  is worthless:
+
+  | Injected leak | Caught by |
+  |---|---|
+  | `Is Laundering` added to the edge features | `test_labels_do_not_leak_into_features` |
+  | window upper bound `ts <= t` instead of `ts < t` | `test_window_excludes_its_own_detection_time`, and `test_a_transaction_stamped_exactly_at_t_is_treated_as_future` |
+  | `From Bank` added as a numeric feature | `test_no_identity_feature_names`, `test_bank_identity_does_not_leak_beyond_the_equality_flag` |
+
+  The off-by-one leak initially escaped the *feature-level* future test,
+  because the fixture had no transaction stamped exactly on the detection
+  time being used, so the boundary was never exercised where it matters.
+  `test_a_transaction_stamped_exactly_at_t_is_treated_as_future` was added
+  to close that, and confirmed to fail under the same injected leak.
 - **Backend determinism tests** (`test_determinism.py`): the visibility build
   must be reproducible from its seed alone. Because one process has one hash
   seed, in-process tests cannot detect hash-order dependence, so these run
@@ -1198,7 +1248,7 @@ campaign_id)`:
     stubbed in these tests.
 
 **Current pass status (2026-10-08):**
-- Backend: `python -m pytest tests/` from `backend/` → 128 passed, 25
+- Backend: `python -m pytest tests/` from `backend/` → 129 passed, 25
   skipped, 0 failed. The skips are the full-data suite, which needs the
   dataset that only exists on Kaggle; all 24 of its numbers passed there on
   2026-10-08/09.
@@ -1275,6 +1325,30 @@ Tagged points in the repository, newest first. Check one out with
 
 ## Changelog
 
+- **2026-10-09** — Stage 3.1 review follow-ups, plus a `features-smoke`
+  runner subcommand. Proved the leakage tests can actually fail by injecting
+  three leaks in turn — the label into the edge features, an `ts <= t`
+  off-by-one in the window bound, and `From Bank` as a numeric feature — and
+  confirming which tests break in each case (see Testing). The off-by-one
+  exposed a real gap: the feature-level future test used a detection time
+  with no transaction exactly on it, so only the window test caught it.
+  Added `test_a_transaction_stamped_exactly_at_t_is_treated_as_future`,
+  which anchors on a `t` a transaction really sits on, and verified it fails
+  under that same leak. Backend tests: 129 passed.
+  Added `kaggle_runner.py features-smoke`, which builds windows at
+  L = 24/48/72 at five detection times (weekday and weekend from train and
+  test, plus validation's single weekday — validation spans only Mon Sept 5
+  → Tue Sept 6, so it has no weekend time) and reports edges, accounts,
+  laundering edges and rate, class weight, timings, memory and tensor
+  footprints, then estimates full-batch GPU memory for a 3-layer GINEConv
+  with hidden 64. It writes `features_smoke.{csv,json,md}`, fits its spec on
+  a single training window on purpose, and hand-rolls its markdown table
+  because `pandas.to_markdown` needs `tabulate`, which this project does not
+  depend on.
+  **The estimate already matters:** full-batch at L = 48/72 on the busiest
+  days comes to ~17–19 GB against Kaggle's 16 GB GPUs, so stage 3.4 will
+  likely need neighbour sampling for the longer lookbacks — recorded under
+  Phase 3 definitions, to be replaced by real figures from the run.
 - **2026-10-09** — Installed the verified deterministic artifacts locally.
   The files previously in `backend/artifacts/` were from a pre-fix run —
   their visibility digests matched none of the references — so they were

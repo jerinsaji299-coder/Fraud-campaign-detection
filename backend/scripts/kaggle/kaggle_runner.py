@@ -6,6 +6,10 @@ Subcommands:
                of every number in README "Verified numbers"
     pipeline   run the full pipeline, export the artifacts, and zip them to
                <out>/artifacts.zip for download
+    features-smoke
+               build detection windows at L = 24/48/72 on the full data and
+               report edges, accounts, laundering edges, build time, memory
+               and tensor sizes, plus a full-batch GNN memory estimate
     train      (Stage 3.3+) not implemented yet
     evaluate   (Stage 3.3+) not implemented yet
 
@@ -354,6 +358,264 @@ def command_pipeline(args: argparse.Namespace) -> int:
 
 
 # --------------------------------------------------------------------------
+# features-smoke
+# --------------------------------------------------------------------------
+
+# September 2022: the 1st is a Thursday, so the 3rd/4th and 10th/11th are
+# weekends. One weekday and one weekend detection time per split, except
+# validation, which spans only Mon Sept 5 -> Tue Sept 6 and so has no
+# weekend time to sample. That gap is reported rather than papered over.
+SMOKE_PROBES: list[tuple[str, str, str]] = [
+    ("train", "weekday (Fri)", "2022-09-02 12:00"),
+    ("train", "weekend (Sun)", "2022-09-04 12:00"),
+    ("val", "weekday (Mon)", "2022-09-05 12:00"),
+    ("test", "weekday (Wed)", "2022-09-07 12:00"),
+    ("test", "weekend (Sat)", "2022-09-10 12:00"),
+]
+
+
+def estimate_gine_memory_mb(
+    n_nodes: int, n_edges: int, d_node: int, d_edge: int, hidden: int = 64, layers: int = 3
+) -> dict[str, float]:
+    """Rough full-batch GPU memory for a 3-layer GINEConv edge classifier.
+
+    An estimate from tensor shapes, not a measurement. Counts the forward
+    activations that autograd must retain, which dominate: per layer a node
+    hidden state, the GINE MLP's inner layer (2x hidden), and two
+    per-edge tensors (the projected edge features and the messages being
+    aggregated). Then the edge readout MLP over [h_src, h_dst, edge_feats].
+    PyTorch's allocator and the backward pass add overhead on top, so a
+    multiplier is applied and reported separately.
+    """
+    f = 4  # float32
+
+    inputs = (n_nodes * d_node + n_edges * d_edge) * f
+    per_layer = (
+        n_nodes * hidden  # node hidden state
+        + n_nodes * 2 * hidden  # GINE MLP inner layer
+        + n_edges * hidden  # edge features projected to hidden
+        + n_edges * hidden  # messages awaiting aggregation
+    ) * f
+    activations = per_layer * layers
+    readout = (n_edges * (2 * hidden + d_edge) + n_edges * hidden) * f
+
+    forward_mb = (inputs + activations + readout) / 1e6
+    # gradients roughly mirror the retained activations; the allocator
+    # fragments and cuBLAS needs workspace, hence the headroom factor.
+    with_backward_mb = forward_mb * 2.0
+    return {
+        "forward_activations_mb": round(forward_mb, 1),
+        "with_backward_mb": round(with_backward_mb, 1),
+        "recommended_headroom_mb": round(with_backward_mb * 1.3, 1),
+    }
+
+
+def _markdown_table(table) -> str:
+    """Markdown table without pandas.to_markdown, which needs tabulate."""
+    columns = list(table.columns)
+    lines = ["| " + " | ".join(columns) + " |",
+             "|" + "|".join("---" for _ in columns) + "|"]
+    for _, row in table.iterrows():
+        lines.append("| " + " | ".join(str(row[c]) for c in columns) + " |")
+    return "\n".join(lines)
+
+
+def command_features_smoke(args: argparse.Namespace) -> int:
+    import gc
+
+    import pandas as pd
+
+    from fraudcamp import constants, features, pipeline, windows
+
+    out = Path(args.out)
+    out.mkdir(parents=True, exist_ok=True)
+
+    with step("build pipeline"):
+        result = pipeline.build(Path(args.config))
+    full_df = result.full_df
+    print(f"  rows: {len(full_df):,}")
+
+    # The spec is fitted on ONE training window, not all of them: this
+    # command measures sizes and timing, and fitting across all 16 training
+    # windows would concatenate overlapping windows into tens of millions of
+    # rows for no benefit here. Categories missing from one window land in
+    # the __other__ column, which is exactly the designed behaviour.
+    fit_t = pd.Timestamp(SMOKE_PROBES[0][2])
+    with step(f"fit feature spec on the {fit_t} 24h training window"):
+        fit_window = windows.build_window(full_df, fit_t, lookback_h=24)
+        spec = features.fit_feature_spec([fit_window], lookback_h=24)
+    print(f"  edge dims: {len(spec.edge_feature_names)}")
+    print(f"  node dims: {len(spec.node_feature_names)}")
+    print(f"  payment currencies: {len(spec.payment_currencies)}, "
+          f"receiving: {len(spec.receiving_currencies)}, formats: {len(spec.payment_formats)}")
+    del fit_window
+    gc.collect()
+
+    d_edge = len(spec.edge_feature_names)
+    d_node = len(spec.node_feature_names)
+    rows: list[dict] = []
+
+    for split, day_kind, t_text in SMOKE_PROBES:
+        t = pd.Timestamp(t_text)
+        actual_split = windows.split_of_detection_time(t)
+        if actual_split != split:
+            print(
+                f"\nWARNING: {t} is in split {actual_split!r}, expected {split!r}. "
+                "Skipping so the table cannot mislabel a window.",
+                flush=True,
+            )
+            continue
+
+        for lookback in constants.LOOKBACKS_H:
+            started = time.perf_counter()
+            window = windows.build_window(full_df, t, lookback_h=lookback)
+            slice_s = time.perf_counter() - started
+
+            if window.n_transactions == 0:
+                rows.append(
+                    {
+                        "split": split, "day": day_kind, "t": t_text,
+                        "lookback_h": lookback, "n_edges": 0, "n_accounts": 0,
+                        "n_laundering": 0, "slice_s": round(slice_s, 2),
+                        "build_s": 0.0, "tensors_mb": 0.0, "xgb_matrix_mb": 0.0,
+                        "peak_rss_mb": memory_mb()[0],
+                    }
+                )
+                continue
+
+            started = time.perf_counter()
+            wf = features.build_window_features(window, spec)
+            build_s = time.perf_counter() - started
+
+            tensors = (
+                wf.node_features.nbytes
+                + wf.edge_features.nbytes
+                + wf.edge_index.nbytes
+                + wf.labels.nbytes
+            )
+            memory, _ = memory_mb()
+            rows.append(
+                {
+                    "split": split,
+                    "day": day_kind,
+                    "t": t_text,
+                    "lookback_h": lookback,
+                    "n_edges": wf.n_edges,
+                    "n_accounts": wf.n_nodes,
+                    "n_laundering": int(wf.labels.sum()),
+                    "laundering_rate": round(wf.positive_rate, 6),
+                    "class_weight": round(wf.class_weight(), 1),
+                    "slice_s": round(slice_s, 2),
+                    "build_s": round(build_s, 2),
+                    "tensors_mb": round(tensors / 1e6, 1),
+                    # analytic: building it would double peak memory for no
+                    # extra information
+                    "xgb_matrix_mb": round(
+                        wf.n_edges * (d_edge + 2 * d_node) * 4 / 1e6, 1
+                    ),
+                    "peak_rss_mb": round(memory, 0) if memory else None,
+                }
+            )
+            print(
+                f"  {split:<5} L={lookback:<2} {t_text}  "
+                f"edges={wf.n_edges:>9,}  accounts={wf.n_nodes:>8,}  "
+                f"laundering={int(wf.labels.sum()):>5,}  "
+                f"build={build_s:>5.1f}s  tensors={tensors / 1e6:>7.1f} MB",
+                flush=True,
+            )
+            del wf, window
+            gc.collect()
+
+    if not rows:
+        print("No windows were built; nothing to report.", file=sys.stderr)
+        return 1
+
+    table = pd.DataFrame(rows)
+    largest = table.loc[table["n_edges"].idxmax()]
+    gine = estimate_gine_memory_mb(
+        n_nodes=int(largest["n_accounts"]),
+        n_edges=int(largest["n_edges"]),
+        d_node=d_node,
+        d_edge=d_edge,
+    )
+
+    print("\n=== largest window ===")
+    print(
+        f"  {largest['t']} L={largest['lookback_h']}h ({largest['split']}): "
+        f"{int(largest['n_edges']):,} edges, {int(largest['n_accounts']):,} accounts"
+    )
+    print("\n=== estimated full-batch GPU memory, 3-layer GINEConv, hidden 64 ===")
+    for key, value in gine.items():
+        print(f"  {key.replace('_', ' ')}: {value:,.1f} MB")
+    print(
+        "  (an estimate from tensor shapes, not a measurement; if this "
+        "approaches the GPU's capacity, use neighbour sampling instead of "
+        "full-batch, which the Phase 3 design already permits)"
+    )
+
+    csv_path = out / "features_smoke.csv"
+    table.to_csv(csv_path, index=False)
+    json_path = out / "features_smoke.json"
+    json_path.write_text(
+        json.dumps(
+            {
+                "edge_dims": d_edge,
+                "node_dims": d_node,
+                "spec_fitted_on": spec.fitted_on,
+                "windows": rows,
+                "largest_window": {k: (int(v) if isinstance(v, (int, float)) and k in ("n_edges", "n_accounts") else v) for k, v in largest.to_dict().items()},
+                "gine_estimate_mb": gine,
+            },
+            indent=2,
+            default=str,
+        ),
+        encoding="utf-8",
+    )
+
+    report = out / "features_smoke.md"
+    report.write_text(
+        "\n".join(
+            [
+                "# Feature smoke test on the full dataset",
+                "",
+                f"- edge features: {d_edge} dims",
+                f"- node features: {d_node} dims",
+                f"- spec fitted on: `{spec.fitted_on}`",
+                "",
+                "Validation spans only Mon Sept 5 to Tue Sept 6, so it has no",
+                "weekend detection time to sample.",
+                "",
+                "## Windows",
+                "",
+                _markdown_table(table),
+                "",
+                "## Largest window",
+                "",
+                f"`{largest['t']}` at L={largest['lookback_h']}h "
+                f"({largest['split']}): {int(largest['n_edges']):,} edges, "
+                f"{int(largest['n_accounts']):,} accounts.",
+                "",
+                "## Estimated full-batch GPU memory (3-layer GINEConv, hidden 64)",
+                "",
+                *(f"- {k.replace('_', ' ')}: {v:,.1f} MB" for k, v in gine.items()),
+                "",
+                "Estimated from tensor shapes, not measured.",
+                "",
+                "## Timing",
+                "",
+                steps_markdown(),
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    print(f"\nWrote {csv_path}")
+    print(f"Wrote {json_path}")
+    print(f"Wrote {report}")
+    return 0
+
+
+# --------------------------------------------------------------------------
 # not yet implemented
 # --------------------------------------------------------------------------
 
@@ -372,7 +634,10 @@ def command_not_yet(args: argparse.Namespace) -> int:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("command", choices=["verify", "pipeline", "train", "evaluate"])
+    parser.add_argument(
+        "command",
+        choices=["verify", "pipeline", "features-smoke", "train", "evaluate"],
+    )
     parser.add_argument(
         "--config",
         default=str(BACKEND / "configs" / "kaggle.yaml"),
@@ -388,6 +653,7 @@ def main() -> int:
     handlers = {
         "verify": command_verify,
         "pipeline": command_pipeline,
+        "features-smoke": command_features_smoke,
         "train": command_not_yet,
         "evaluate": command_not_yet,
     }
