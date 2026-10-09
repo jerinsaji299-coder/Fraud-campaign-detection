@@ -5,6 +5,10 @@ backend/data/*
 backend/artifacts/*
 !backend/artifacts/.gitkeep
 
+# Downloaded artifact archives, which land in the project root on their way
+# to backend/artifacts/ and must never be committed.
+*.zip
+
 # --- secrets and credentials ---
 .env
 .env.local

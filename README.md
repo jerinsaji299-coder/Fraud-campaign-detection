@@ -372,7 +372,7 @@ transactions.
 | 2026-10-07 | Phase 3 gate: verify every Phase 2 regression number on the full data **before** any model work | The 24 full-data tests have never run — the dataset only exists on Kaggle. Every Phase 3 result would silently inherit any discrepancy in the campaign table, splits or group assignment, and a model built on wrong ground truth is worse than no model | user instruction, stage 3.0 |
 | 2026-10-07 | `pandas>=2.2` pinned in requirements.txt | `campaigns.build_campaign_table` passes `include_groups=` to `groupby.apply`, which pandas added in 2.2 and older versions reject with a `TypeError`. Unpinned, a Kaggle image with pandas 2.1 would fail deep in the pipeline with a confusing error | implementation, stage 3.0 |
 | 2026-10-08 | Every collection is sorted before any seeded random step. **Bug:** a campaign's accounts were held in a Python `set`, and per-process string-hash randomisation made set iteration order differ between runs, so the seeded search followed a different trajectory each process — same seed, different assignment. **Evidence:** two Kaggle runs of the same pipeline disagreed on the unfragmentable count (3 vs 2); reproduced locally by varying `PYTHONHASHSEED`. **Fix:** accounts are now sorted tuples, and `sorted()` is applied at every point where order reaches the RNG. The algorithm, targets, iteration count and seeds are unchanged — only enumeration order is pinned, so no frozen definition moved. **Why now:** Phase 3 is centralized-only and never touches these assignments, but Phase 4-5 *is* the visibility sweep and the `unfragmentable` label defines the control group; fixing it after results existed would have invalidated them | `tests/test_determinism.py`, stage 3.0 follow-up |
-| 2026-10-09 | "Unfragmentable campaigns" pinned at **2**, and the five visibility SHA-256 digests recorded as reference values | Determinism confirmed on Kaggle across 2 independent sessions and 3 separate pipeline processes at commit `55b645e` (Python 3.13.15, pandas 2.3.3): all produced byte-identical visibility files and the same count. That is what makes the number trustworthy — before the fix, runs disagreed (3 vs 2), so the value could not be pinned from a single run. The notebook's exploratory 2 is consistent but was computed without conflict resolution, so it was never sufficient evidence on its own | `docs/reference/visibility_hashes.json`, Verified numbers |
+| 2026-10-09 | "Unfragmentable campaigns" pinned at **2**, and the five visibility SHA-256 digests recorded as reference values | Determinism confirmed on Kaggle across 2 independent sessions and 3 separate pipeline processes at commit `55b645e` (Python 3.13.15, pandas 2.3.3): all produced byte-identical visibility files and the same count. That is what makes the number trustworthy — before the fix, runs disagreed (3 vs 2), so the value could not be pinned from a single run. The notebook's exploratory 2 is consistent but was computed without conflict resolution, so it was never sufficient evidence on its own | `docs/reference/visibility_hashes_session1.json`, Verified numbers |
 | 2026-10-07 | torch, torch_geometric, xgboost and scikit-learn are **not** added to requirements.txt yet | They are only needed from stages 3.3-3.4. Installing ~2GB of unused ML dependencies now would slow every Kaggle session and risk disturbing the pre-installed CUDA stack during a run whose only job is verifying Phase 2. Each lands with the stage that uses it | implementation, stage 3.0 |
 
 ## Verified numbers
@@ -417,8 +417,13 @@ that disagrees means something has become order-dependent again, and the
 **Environment these were produced in** (digests are only comparable within
 it, since a different pyarrow could change the bytes without changing the
 data): Kaggle, commit `55b645e`, Python 3.13.15, pandas 2.3.3. Confirmed
-across 2 independent sessions and 3 separate pipeline processes.
-Machine-readable copy: `docs/reference/visibility_hashes.json`. Regenerate
+across 2 independent sessions and 3 separate pipeline processes, all
+byte-identical.
+
+The copy installed in `backend/artifacts/` was verified against these
+digests on 2026-10-09, before installation and again afterwards, so the
+local artifacts are known to be the deterministic ones.
+Machine-readable copy: `docs/reference/visibility_hashes_session1.json`. Regenerate
 and re-compare with `backend/scripts/kaggle/run_on_kaggle.md` §5b.
 
 Note on "eval_ok fragmentable = 152": this is the **topology** count —
@@ -1270,6 +1275,22 @@ Tagged points in the repository, newest first. Check one out with
 
 ## Changelog
 
+- **2026-10-09** — Installed the verified deterministic artifacts locally.
+  The files previously in `backend/artifacts/` were from a pre-fix run —
+  their visibility digests matched none of the references — so they were
+  removed (`.gitkeep` kept) and replaced from the Kaggle archive. The
+  archive was extracted to a temporary folder and checked **before**
+  installation against both `hashes_session1.json` and the confirmed
+  reference digests, which also agree with each other; the installed copies
+  were re-hashed afterwards and are byte-identical. Validated through the
+  API's own `ArtifactStore`: 370 campaigns, 258 eval_ok, 152 reassignable,
+  3,209 campaign transactions, 5 visibility seeds × 14,384 rows, exactly 2
+  unfragmentable, splits 100/26/56/76, and no nested-folder false positive.
+  Renamed the committed evidence to
+  `docs/reference/visibility_hashes_session1.json` (updating the three
+  README references), deleted the downloaded archive, and added `*.zip` to
+  `.gitignore` so an archive sitting in the project root can never be
+  committed.
 - **2026-10-09** — **Stage 3.1: detection windows, features, leakage
   tests.** Added `windows.py` (the aligned 6-hourly detection grid over
   `(DATA_START, CUTOFF]` = 40 times, detection-time splits, and
@@ -1301,7 +1322,7 @@ Tagged points in the repository, newest first. Check one out with
   the metric moved from pending to pinned — the regression table is now 24
   of 24 checked, with nothing pending. Recorded the five reference SHA-256
   digests in Verified numbers together with the environment they are valid
-  for, and committed `docs/reference/visibility_hashes.json` as the
+  for, and committed `docs/reference/visibility_hashes_session1.json` as the
   machine-readable copy; the README digests were verified against that file
   programmatically rather than by eye, which caught one transcription slip.
   Removed the stale-artifacts warning from Known limitations (artifacts
