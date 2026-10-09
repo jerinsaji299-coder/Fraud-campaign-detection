@@ -122,3 +122,28 @@ DETECTION_TRAIN_END = _dt.datetime(2022, 9, 5, 0, 0)  # t <= this -> train
 DETECTION_VAL_END = _dt.datetime(2022, 9, 6, 0, 0)  # t <= this -> val
 DETECTION_TEST_END = CUTOFF  # t <= this -> test
 DETECTION_SPLIT_ORDER = ["train", "val", "test"]
+
+# --- Rule 2: evaluation horizons -------------------------------------------
+# Which detection times a split's campaigns are *evaluated* over. Separate
+# from the training-data splits above: validation campaigns start on Sept 5
+# but need until Sept 8 to run their course, so the validation horizon
+# deliberately overlaps the test horizon. Only validation-campaign labels
+# are used for tau selection, so the overlap leaks nothing.
+# Bounds are (exclusive start, inclusive end], matching the grid.
+EVALUATION_HORIZONS: dict[str, tuple[_dt.datetime, _dt.datetime]] = {
+    "val": (_dt.datetime(2022, 9, 5, 0, 0), _dt.datetime(2022, 9, 8, 0, 0)),
+    "test": (_dt.datetime(2022, 9, 6, 0, 0), CUTOFF),
+}
+# NOTE: the stress horizon is deliberately absent. Rule 1 says other-split
+# hits apply to stress evaluation too, but no stress horizon has been
+# specified yet, and inventing one would freeze a research definition by
+# accident. See README "Known limitations and open questions".
+
+# --- Rule 3: training windows must have their full lookback ----------------
+# A training detection time is usable only when t - L >= DATA_START, so no
+# training window is silently short. Evaluation horizons are unaffected:
+# they all start days after DATA_START.
+REQUIRE_FULL_LOOKBACK_FOR_TRAINING = True
+
+# --- Rule 1: what a detected cluster can turn out to be --------------------
+HIT_KINDS = ["hit", "other_split_hit", "ambiguous", "false_alarm"]

@@ -68,6 +68,90 @@ def detection_times_for_split(
     return [t for t in detection_times(start, end, step_h) if split_of_detection_time(t) == split]
 
 
+def has_full_lookback(
+    t: pd.Timestamp | _dt.datetime,
+    lookback_h: int,
+    data_start: _dt.datetime = constants.DATA_START,
+) -> bool:
+    """Whether `[t - L, t)` lies entirely within the data (rule 3).
+
+    A detection time close to the start of the data would otherwise give a
+    silently short window — a 24h feature computed over 6 hours — which
+    would train the model on a different distribution than it sees later.
+    """
+    return pd.Timestamp(t) - pd.Timedelta(hours=lookback_h) >= pd.Timestamp(data_start)
+
+
+def training_detection_times(
+    lookback_h: int = constants.DEFAULT_LOOKBACK_H,
+    start: _dt.datetime = constants.DATA_START,
+    end: _dt.datetime = constants.DETECTION_TEST_END,
+    step_h: int = constants.DETECTION_WINDOW_STEP_H,
+) -> list[pd.Timestamp]:
+    """Training detection times that have their full lookback (rule 3).
+
+    This is what training must iterate over; `detection_times_for_split`
+    ("train") is the unfiltered grid and would include short windows.
+    """
+    return [
+        t
+        for t in detection_times_for_split("train", start, end, step_h)
+        if has_full_lookback(t, lookback_h, start)
+    ]
+
+
+def usable_training_times_per_lookback(
+    lookbacks: tuple[int, ...] = constants.LOOKBACKS_H,
+) -> dict[int, int]:
+    """How many training detection times survive rule 3, per lookback.
+
+    Longer lookbacks cost training windows: the data starts on Sept 1 and
+    training ends on Sept 5, so a 72h lookback leaves only the last few.
+    """
+    return {lookback: len(training_detection_times(lookback)) for lookback in lookbacks}
+
+
+def evaluation_horizon(split: str) -> tuple[pd.Timestamp, pd.Timestamp]:
+    """The (exclusive start, inclusive end] detection window a split's
+    campaigns are evaluated over (rule 2)."""
+    if split not in constants.EVALUATION_HORIZONS:
+        known = sorted(constants.EVALUATION_HORIZONS)
+        raise ValueError(
+            f"no evaluation horizon defined for split {split!r}; defined: {known}. "
+            "The stress horizon is deliberately unspecified - see README "
+            "'Known limitations and open questions'."
+        )
+    start, end = constants.EVALUATION_HORIZONS[split]
+    return pd.Timestamp(start), pd.Timestamp(end)
+
+
+def evaluation_detection_times(
+    split: str, step_h: int = constants.DETECTION_WINDOW_STEP_H
+) -> list[pd.Timestamp]:
+    """Detection times a split's campaigns are evaluated at (rule 2).
+
+    Note the validation and test horizons overlap by design: validation
+    campaigns start on Sept 5 but need until Sept 8 to finish. Only
+    validation-campaign labels inform tau, so nothing leaks.
+    """
+    start, end = evaluation_horizon(split)
+    return [t for t in detection_times(constants.DATA_START, end, step_h) if t > start]
+
+
+def hit_kind(evaluated_split: str, hit_campaign_split: str | None) -> str:
+    """Classify a cluster that matched a campaign (rule 1).
+
+    A cluster can legitimately hit a real campaign that belongs to a
+    different split than the one being scored. That is neither a success for
+    this split nor a false alarm — it is a correct detection of something
+    we are not currently measuring — so it is counted separately and
+    excluded from both precision terms.
+    """
+    if hit_campaign_split == evaluated_split:
+        return "hit"
+    return "other_split_hit"
+
+
 def window_slice(
     df: pd.DataFrame,
     t: pd.Timestamp | _dt.datetime,

@@ -246,6 +246,12 @@ footprint, and the analytic size of the XGBoost matrix. It then estimates
 full-batch GPU memory for a 3-layer GINEConv with hidden 64 on the largest
 window.
 
+It also prints, per lookback, how many **training** detection times have
+their full lookback inside the data (evaluation rule 3). Expect 13 / 9 / 5
+for L = 24 / 48 / 72 out of the 16 on the grid — the counts are
+time-grid arithmetic, so the run should confirm them rather than discover
+them, and a disagreement means something about the grid has changed.
+
 Writes `features_smoke.csv`, `.json` and `.md` to `/kaggle/working/`. Send
 back the `.md` (or the `.csv`).
 

@@ -451,6 +451,27 @@ def command_features_smoke(args: argparse.Namespace) -> int:
     del fit_window
     gc.collect()
 
+    # Rule 3: a training detection time is usable only when its whole
+    # lookback lies inside the data. Longer lookbacks cost training windows,
+    # and that trade-off is part of choosing L on validation.
+    usable = windows.usable_training_times_per_lookback()
+    grid_total = len(windows.detection_times_for_split("train"))
+    print("\n=== usable training detection times (rule 3: full lookback) ===")
+    print(f"  unfiltered training grid: {grid_total}")
+    for lookback, count in usable.items():
+        times = windows.training_detection_times(lookback)
+        span = f"{times[0]} .. {times[-1]}" if times else "none"
+        print(
+            f"  L={lookback:>2}h: {count:>2} usable, {grid_total - count:>2} dropped   {span}"
+        )
+    if min(usable.values()) < 8:
+        worst = min(usable, key=lambda k: usable[k])
+        print(
+            f"  NOTE: L={worst}h leaves only {usable[worst]} training detection "
+            "times. That is a real constraint on using the longer lookbacks, "
+            "not a bug."
+        )
+
     d_edge = len(spec.edge_feature_names)
     d_node = len(spec.node_feature_names)
     rows: list[dict] = []
@@ -561,6 +582,8 @@ def command_features_smoke(args: argparse.Namespace) -> int:
             {
                 "edge_dims": d_edge,
                 "node_dims": d_node,
+                "usable_training_times_per_lookback": {str(k): v for k, v in usable.items()},
+                "training_grid_total": grid_total,
                 "spec_fitted_on": spec.fitted_on,
                 "windows": rows,
                 "largest_window": {k: (int(v) if isinstance(v, (int, float)) and k in ("n_edges", "n_accounts") else v) for k, v in largest.to_dict().items()},
@@ -581,6 +604,17 @@ def command_features_smoke(args: argparse.Namespace) -> int:
                 f"- edge features: {d_edge} dims",
                 f"- node features: {d_node} dims",
                 f"- spec fitted on: `{spec.fitted_on}`",
+                "",
+                "## Usable training detection times (rule 3: full lookback)",
+                "",
+                f"Unfiltered training grid: {grid_total}.",
+                "",
+                "| Lookback | Usable | Dropped |",
+                "|---|---:|---:|",
+                *(
+                    f"| {lookback}h | {count} | {grid_total - count} |"
+                    for lookback, count in usable.items()
+                ),
                 "",
                 "Validation spans only Mon Sept 5 to Tue Sept 6, so it has no",
                 "weekend detection time to sample.",
