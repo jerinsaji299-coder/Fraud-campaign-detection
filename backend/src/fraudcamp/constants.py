@@ -99,6 +99,12 @@ DETECTION_WINDOW_LOOKBACK_MIN_H = 24
 DETECTION_WINDOW_LOOKBACK_MAX_H = 72
 MATCH_MIN_ACCOUNT_FRACTION = 0.5
 MATCH_MIN_ACCOUNTS = 3
+
+#: A cluster that hits no campaign is "ambiguous" rather than a false alarm
+#: when at least this fraction of its accounts touch a laundering edge that
+#: belongs to no campaign. The design says "mostly"; 0.5 mirrors the
+#: matching rule's threshold. Interpretation - see README decision log.
+AMBIGUOUS_MIN_FRACTION = 0.5
 TEST_SUBSETS = ["all", "fully_observed", "no_shared_accounts"]
 CONDITIONS = ["isolated", "fedavg_only", "fedavg_embedding", "centralized"]
 

@@ -107,6 +107,46 @@ def test_iter_windows_skips_empty_ones(mini_dataset):
     assert len(built) < len(times)  # the sparse fixture leaves gaps
 
 
+def test_scan_agrees_with_the_real_window_slicer(mini_dataset):
+    """`features-smoke`'s cheap scan locates windows with binary search
+    instead of the real slicer, so it must agree with it exactly — otherwise
+    it would misreport the sizes the GPU estimate is built from."""
+    import sys
+    from pathlib import Path
+
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts" / "kaggle"))
+    from kaggle_runner import scan_window_sizes
+
+    df = pipeline.build(mini_dataset).full_df
+    rows = scan_window_sizes(df, constants.MEASURED_LOOKBACKS_H)
+    assert rows, "the scan produced nothing"
+
+    for row in rows:
+        window = windows.window_slice(df, row["t"], row["lookback_h"])
+        assert len(window) == row["n_edges"], f"edge count differs at {row['t']}"
+        assert int(window["Is Laundering"].sum()) == row["n_laundering"]
+        expected_accounts = len(set(window["src"]) | set(window["dst"]))
+        assert expected_accounts == row["n_accounts"], f"account count differs at {row['t']}"
+
+
+def test_scan_only_covers_rule_3_valid_training_times(mini_dataset):
+    """The scan must not include training times whose lookback runs off the
+    start of the data — the bug that made the first full-data run report a
+    clamped window as the largest."""
+    import sys
+    from pathlib import Path
+
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts" / "kaggle"))
+    from kaggle_runner import scan_window_sizes
+
+    df = pipeline.build(mini_dataset).full_df
+    for row in scan_window_sizes(df, constants.MEASURED_LOOKBACKS_H):
+        if row["split"] == "train":
+            assert windows.has_full_lookback(
+                pd.Timestamp(row["t"]), row["lookback_h"]
+            ), f"scan included an invalid training time {row['t']} at L={row['lookback_h']}"
+
+
 def test_window_summary_shape(mini_dataset):
     df = pipeline.build(mini_dataset).full_df
     built = list(windows.iter_windows(df, windows.detection_times(), lookback_h=24))

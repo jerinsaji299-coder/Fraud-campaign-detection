@@ -71,12 +71,13 @@ bank).
 
 ## Project status
 
-**Current stage:** Phase 3, stage 3.1 — **done**. Detection windows,
-features and the leakage property tests are in place; stage 3.0 before it is
-verified on the full data and reproducible.
-**Next step:** stage 3.2 — the evaluation module (campaign extraction,
-matching, lead time, bootstrap CIs) plus the oracle and random sanity
-scorers, run on the sample data.
+**Current stage:** Phase 3, stage 3.2 — **done**. The evaluation module
+(extraction, matching with other-split hits, horizons, lead time, metrics,
+bootstrap CIs) and the oracle/random sanity scorers are in place and
+validated.
+**Next step:** stage 3.3 — the XGBoost baseline, tau selection on
+validation, and test evaluation. The training regime for 3.4 is already
+frozen (neighbour sampling for both candidate lookbacks; see Decision log).
 
 **Phase 2 — pipeline, artifacts, API, frontend (complete)**
 
@@ -100,7 +101,7 @@ no visibility reassignment is used in this phase.
 |---|---|---|
 | 3.0 | Kaggle runner + Phase 2 full-data verification | done — all 24 numbers PASS, determinism confirmed |
 | 3.1 | Window builder + features + leakage tests | done |
-| 3.2 | Evaluation module (extraction, matching, lead time, bootstrap CIs) + oracle and random scorers | not started |
+| 3.2 | Evaluation module (extraction, matching, lead time, bootstrap CIs) + oracle and random scorers | done |
 | 3.3 | XGBoost baseline: train, select tau on validation, evaluate on test | not started |
 | 3.4 | GNN centralized (GINEConv edge classification) | not started |
 | 3.5 | Gate report + results files + frontend Results page wired to real baseline results | not started |
@@ -362,6 +363,47 @@ These are estimates, not measurements — `features-smoke` on the full data
 replaces them with real figures, reporting the largest **candidate** window
 separately from the excluded one.
 
+### Sanity scorer results (stage 3.2, synthetic data)
+
+The oracle and random scorers exist to validate the evaluation code before
+any model is built. Run on a **seeded synthetic dataset** (120 campaigns,
+300k transactions, 0.37% laundering) because the 1% research sample has not
+been downloaded locally — so these numbers check the code, and are **not
+results**. `scripts/run_sanity_scorers.py` reproduces them; the full-data
+version runs on Kaggle in stage 3.3.
+
+| Split | Scorer | Campaigns | Recall | Precision | False alarms/day | Other-split hits | Ambiguous | Median lead | Frac observed |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| val | oracle | 14 | 1.00 | 1.00 | 0 | 160 | 1 | 32.9h | 0.40 |
+| val | random | 14 | 0.00 | 0.00 | 971 | 0 | 9 | — | — |
+| test | oracle | 18 | 1.00 | 1.00 | 0 | 300 | 3 | 25.0h | 0.33 |
+| test | random | 18 | 0.00 | 0.00 | 947 | 0 | 18 | — | — |
+| stress | oracle | 46 | 0.87 | 1.00 | 0 | 86 | 3 | 27.1h | 0.33 |
+| stress | random | 46 | 0.00 | 0.00 | 988 | 0 | 13 | — | — |
+
+This is the behaviour the design predicts. The oracle finds everything it
+can, with no false alarms, at a median `frac_observed` of 0.33 — i.e. about
+when the campaign's third account appears, which is exactly what the
+matching rule requires. Random finds nothing and raises ~950 false alarms a
+day. Stress oracle recall is 0.87 rather than 1.00 because campaigns
+censored by the cutoff can complete after their deadline, and a detection
+after the deadline counts as missed.
+
+The large other-split-hit counts are rule 1 doing its job: a test window
+contains campaigns from every split, and the oracle finds those too. Without
+rule 1 they would have been charged as false alarms and test precision would
+have read ~0.06 instead of 1.00.
+
+> **A note on how these numbers were reached.** The first synthetic dataset
+> gave random a recall of 0.57–0.71, which the design says means the
+> matching rule is too generous. It was not: that generator gave campaign
+> accounts no background traffic at all, so randomly keeping half the edges
+> left a small *pure* fragment of each campaign, which the matching rule
+> correctly called a hit. The fix was to the test data — campaign accounts
+> now also transact in the background (770 of 770), and the laundering rate
+> dropped from 1.8% to 0.37% — not to the frozen rule. Random recall then
+> went to 0.00. The real check is still the full-data run.
+
 ### Evaluation rules (frozen 2026-10-10, implemented in stage 3.2)
 
 **Rule 1 — other-split hits.** A detected cluster that hits a real campaign
@@ -440,6 +482,9 @@ transactions.
 | 2026-10-07 | Phase 3 gate: verify every Phase 2 regression number on the full data **before** any model work | The 24 full-data tests have never run — the dataset only exists on Kaggle. Every Phase 3 result would silently inherit any discrepancy in the campaign table, splits or group assignment, and a model built on wrong ground truth is worse than no model | user instruction, stage 3.0 |
 | 2026-10-07 | `pandas>=2.2` pinned in requirements.txt | `campaigns.build_campaign_table` passes `include_groups=` to `groupby.apply`, which pandas added in 2.2 and older versions reject with a `TypeError`. Unpinned, a Kaggle image with pandas 2.1 would fail deep in the pipeline with a confusing error | implementation, stage 3.0 |
 | 2026-10-08 | Every collection is sorted before any seeded random step. **Bug:** a campaign's accounts were held in a Python `set`, and per-process string-hash randomisation made set iteration order differ between runs, so the seeded search followed a different trajectory each process — same seed, different assignment. **Evidence:** two Kaggle runs of the same pipeline disagreed on the unfragmentable count (3 vs 2); reproduced locally by varying `PYTHONHASHSEED`. **Fix:** accounts are now sorted tuples, and `sorted()` is applied at every point where order reaches the RNG. The algorithm, targets, iteration count and seeds are unchanged — only enumeration order is pinned, so no frozen definition moved. **Why now:** Phase 3 is centralized-only and never touches these assignments, but Phase 4-5 *is* the visibility sweep and the `unfragmentable` label defines the control group; fixing it after results existed would have invalidated them | `tests/test_determinism.py`, stage 3.0 follow-up |
+| 2026-10-10 | **Stage 3.4 training regime frozen: both candidate lookbacks train with neighbour sampling** (LinkNeighborLoader-style mini-batches of target edges with sampled multi-hop neighbourhoods). Inference scores full windows, chunked if needed. Fanouts, batch size and negative/positive handling are chosen in stage 3.4 and reported before training | If L = 24 trained full-batch and L = 48 trained with sampling, the L comparison would confound lookback length with training method, and the chosen L could not be attributed to the lookback. Using one regime for both keeps that comparison clean. It also sidesteps the capacity question: the busiest L = 48 window is estimated at ~16.6 GB full-batch against 16 GB GPUs | user decision, 2026-10-10 |
+| 2026-10-10 | `features-smoke` samples only rule-3-valid training detection times, and a cheap full scan of **every** usable detection time supplies the largest-window figures | The first full-data run reported Sept 2 12:00 at L = 48 as the largest candidate window (1.5M edges), but that time violates rule 3: its lookback starts before `DATA_START`, so the window was silently clamped — which is also why its L = 48 and L = 72 rows were identical. Sampling five detection times cannot find the true maximum anyway, so the scan replaces guesswork with a full enumeration (counts only, no features) | user-reported, 2026-10-10 |
+| 2026-10-10 | "Mostly involved in unassigned-laundering edges", for the ambiguous rule, is read as **at least 50% of the cluster's accounts** touching a laundering edge that belongs to no campaign | The design says "mostly" without a number; 0.5 mirrors the matching rule's own threshold, so the two use one consistent notion of majority. Exposed as `constants.AMBIGUOUS_MIN_FRACTION` rather than buried in the code | interpretation, stage 3.2 |
 | 2026-10-10 | Stress evaluation horizon frozen at `(2022-09-08 00:00, CUTOFF]`, capped per campaign by its deadline, with other-split hits applying as in rule 1 | Stress campaigns start Sept 8-10, so the horizon opens where the validation horizon closes: the two abut without overlapping, and stress sits strictly inside the test horizon. Previously left unspecified and raising rather than guessed | user decision, 2026-10-10 |
 | 2026-10-10 | Lookback candidates reduced to **L ∈ {24, 48}**; L = 72 dropped | Three independent reasons: (1) rule 3 leaves only 5 full-history training detection times at L = 72 versus 13 at L = 24, and those 5 windows overlap each other heavily, so they carry far less independent signal than the count suggests; (2) estimated full-batch GINE memory is ~18.6 GB against Kaggle's 16 GB GPUs, so it could not be trained the same way as the other candidates; (3) a 3-day lookback is large relative to a 10-day dataset, making the window a substantial fraction of the whole study period. L = 72 is still measured once by `features-smoke` and labelled `[EXCLUDED]`, so the evidence stays on the record instead of only in prose | user decision, 2026-10-10 |
 | 2026-10-10 | Three evaluation rules frozen: other-split hits counted separately, the validation detection horizon extended to Sept 8, and training restricted to detection times with a full lookback | (1) A cluster that finds a real campaign from another split is neither a success for the split being scored nor a false alarm; counting it either way would misstate precision. (2) Validation campaigns start on Sept 5 but need until Sept 8 to complete, so a horizon ending Sept 6 would score them before they had happened; only validation-campaign labels inform tau, so the overlap with the test horizon leaks nothing. (3) A silently short window would train the model on a distribution it never meets at evaluation time | user decision, 2026-10-10; `tests/test_evaluation_rules.py` |
@@ -535,9 +580,13 @@ project-root/
       regression.py               the full-data expected numbers + actual/expected comparison
       windows.py                  detection-time grid, causal window slicing, detection-time splits
       features.py                 edge + node features, training-only vocabularies and scaler
-      models/README.md            placeholder — Phase 3+ (not this session)
+      models/README.md            placeholder — stage 3.3+ (XGBoost, GNN)
       federation/README.md        placeholder — Phase 4+ (not this session)
-      evaluation/README.md        placeholder — Phase 3+ (not this session)
+      evaluation/
+        __init__.py               the public evaluation API
+        clusters.py               extraction, the matching rule, outcome classification
+        evaluate.py               the detection-time loop, lead time, metrics, bootstrap CIs
+        scorers.py                the oracle and random sanity scorers
     app/
       __init__.py                 puts src/ on sys.path so the app can import fraudcamp uninstalled
       main.py                     create_app(): FastAPI app, CORS, router registration, artifact load
@@ -552,6 +601,8 @@ project-root/
         methodology.py            frozen definitions as structured JSON, values read from constants
     scripts/
       make_sample.py              run ON KAGGLE: all pattern txns + random 1% of the rest, seed 42
+      make_demo_data.py           seeded SYNTHETIC dev dataset (not the research sample)
+      run_sanity_scorers.py       runs the oracle and random scorers through the real evaluation code
       run_pipeline.py             runs the pipeline end to end; prints every Verified-numbers value; --export writes artifacts
       kaggle/
         run_on_kaggle.md          the exact notebook cells for running this repo on Kaggle
@@ -569,6 +620,7 @@ project-root/
       test_determinism.py         cross-process reproducibility: subprocess runs under differing PYTHONHASHSEED
       test_windows.py             detection-time grid, splits, strict causal window bounds
       test_evaluation_rules.py    the three frozen evaluation rules + their violation checks
+      test_evaluation.py          extraction, matching, outcomes, lead time, metrics, bootstrap CIs
       test_features.py            feature shapes + the leakage properties (future, labels, identity)
       test_fulldata.py            @pytest.mark.fulldata, one test per regression number; skip if no data
     data/                         gitignored: raw/, sample/, processed/
@@ -722,6 +774,18 @@ project-root/
   table is skipped with an explanation rather than reporting 23 meaningless
   failures). The full notebook walkthrough is
   `backend/scripts/kaggle/run_on_kaggle.md`.
+- **Generate synthetic development data and run the sanity scorers:**
+  ```
+  cd backend
+  python scripts/make_demo_data.py --out data/demo --seed 7
+  python scripts/run_sanity_scorers.py --config data/demo/demo.yaml --lookback 24
+  ```
+  The generated data is **synthetic and not the research sample** — it
+  exists so the evaluation code can be exercised locally at a size where
+  recall and lead time mean something. It is gitignored. The scorer run
+  prints per-split metrics for all three test subsets, bootstrap CIs, a
+  breakdown by topology group, and a pass/fail verdict comparing oracle
+  against random.
 - **Start the backend server:**
   ```
   cd backend
@@ -879,6 +943,26 @@ committed.
   timestamps, with `xgboost_matrix()` flattening to edge + both endpoints'
   features for the non-graph baseline and `class_weight()` giving the
   imbalance weight.
+- **`evaluation/`** — the fixed, non-learned half of Phase 3, identical for
+  every model and condition so that differences in results come from the
+  scores alone.
+  - `clusters.py` — `extract_clusters` (connected components of the edges
+    scoring >= tau, components of >= 3 accounts, accounts enumerated sorted
+    so the output does not depend on hash order), `cluster_hits_campaign`
+    (the frozen >= 50% / >= 3 rule), `find_hit_campaigns` (indexed by
+    account, so a cluster is only compared against campaigns it touches),
+    `is_ambiguous`, and `classify_cluster` returning one of
+    `hit` / `other_split_hit` / `ambiguous` / `false_alarm`.
+  - `evaluate.py` — `evaluate_split` walks a split's horizon, scores each
+    window, classifies every cluster, and records each campaign's first
+    detection *if* it beats the deadline; `CampaignOutcome` carries the
+    three lead-time forms; `summarize` gives recall, precision, false
+    alarms per day and medians per test subset, with `bootstrap_ci`
+    (seeded percentile bootstrap over campaigns) and `summarize_by` for
+    group and base_type breakdowns.
+  - `scorers.py` — the oracle (score = true label) and random scorers.
+  The scorer is called as `scorer(window_transactions, t)` and only ever
+  receives the window, so a scorer cannot reach past `t` even if it tries.
 - **`regression.py`** — the single source for the full-data expectations:
   `METRICS` (each with its expected value and the notebook cell it came
   from), `compute_actuals(result)`, `compare`, `format_table` /
@@ -1240,6 +1324,21 @@ campaign_id)`:
   time being used, so the boundary was never exercised where it matters.
   `test_a_transaction_stamped_exactly_at_t_is_treated_as_future` was added
   to close that, and confirmed to fail under the same injected leak.
+- **Backend evaluation tests** (`test_evaluation.py`, 28 tests): cluster
+  extraction (tau threshold, transitive joining, the >= 3 account minimum,
+  direction-independence, determinism); the matching rule at and around both
+  of its thresholds; classification of all four outcome kinds, including
+  that a cluster hitting both an evaluated-split and another-split campaign
+  is credited only to the evaluated split; and metrics, with the bootstrap
+  CI shown to be seeded and to bracket its statistic. The end-to-end cases
+  are hand-built with timestamps chosen so the answer is checkable on
+  paper — one campaign is asserted to be detected at Sept 6 12:00 with
+  lead time exactly 32.0h, normalized 32/37, and `frac_observed` 0.75; the
+  same campaign with no later transactions has its deadline pass first and
+  is asserted **missed**; an unassigned-laundering cluster is asserted
+  `ambiguous` with false alarms still zero; and a train campaign inside a
+  test window is asserted to produce an other-split hit rather than a false
+  alarm.
 - **Backend evaluation-rule tests** (`test_evaluation_rules.py`, 44 tests)
   cover the three rules frozen on 2026-10-10: that a same-split hit is a
   hit and a different-split (or no-split) hit is an `other_split_hit`; that
@@ -1342,7 +1441,7 @@ campaign_id)`:
     stubbed in these tests.
 
 **Current pass status (2026-10-08):**
-- Backend: `python -m pytest tests/` from `backend/` → 173 passed, 25
+- Backend: `python -m pytest tests/` from `backend/` → 203 passed, 25
   skipped, 0 failed. The skips are the full-data suite, which needs the
   dataset that only exists on Kaggle; all 24 of its numbers passed there on
   2026-10-08/09.
@@ -1374,6 +1473,18 @@ is the one piece that most warrants a look in a browser before the demo.
 - No model, training, federated-learning or experiment code exists yet. The
   four experimental conditions are defined and the result schema is fixed,
   but nothing has been run, so the project has no findings of any kind.
+- **The 1% research sample is not available locally.** `backend/data/sample/`
+  is empty: `make_sample.py` has only ever been described, not run. Stage
+  3.2's sanity-scorer numbers therefore come from a seeded synthetic dataset
+  and validate the evaluation *code*, not the dataset. The oracle and random
+  scorers need a full-data run on Kaggle before anything is claimed about
+  real campaigns.
+- The first full-data `features-smoke` run (commit `caae35f`) reported a
+  "largest candidate window" that violated rule 3 and was silently clamped.
+  Its other figures — 54 edge dims, 13/9/5 usable training times, build
+  times — stand; its largest-window line is **superseded** by the corrected
+  scan. The original report is kept in `docs/reference/` as the first
+  measurement.
 - Reproducibility is verified for the visibility search but **only within
   one environment**. The reference digests hold for Python 3.13 / pandas
   2.3.3 / the Kaggle image of 2026-10-09; a different pyarrow could change
@@ -1419,6 +1530,51 @@ Tagged points in the repository, newest first. Check one out with
 
 ## Changelog
 
+- **2026-10-10** — **Stage 3.2: the evaluation module, plus a
+  `features-smoke` correctness fix.**
+
+  *The fix first.* The first full-data `features-smoke` run reported
+  Sept 2 12:00 at L = 48 as the largest candidate window, but that
+  detection time violates rule 3 — its lookback starts before `DATA_START`,
+  so the window was silently clamped, which is also why its L = 48 and
+  L = 72 rows came out identical. `features-smoke` now (a) skips rule-3-
+  invalid training probes and prints why, naming the first valid time at
+  that lookback, (b) performs a cheap full scan of **every** usable
+  detection time per (lookback, split) — counts only, located by binary
+  search over sorted timestamps, laundering via a prefix sum — reporting
+  min/median/max edges and accounts and the time of the maximum, and (c)
+  computes the GPU estimate from the true maximum valid window, split into
+  an inference figure (any split) and a training figure, and reports
+  candidates separately from the excluded lookback. The scan is tested to
+  agree exactly with the real `window_slice` and to include no invalid
+  training time.
+
+  *The module.* Added `fraudcamp/evaluation/` — `clusters.py` (extraction,
+  the frozen >= 50% / >= 3 matching rule, and classification into
+  hit / other-split hit / ambiguous / false alarm), `evaluate.py` (the
+  horizon loop, first-detection-before-deadline logic, the three lead-time
+  forms, per-subset metrics, a seeded percentile bootstrap, and group /
+  base_type breakdowns) and `scorers.py` (oracle and random). 28 tests,
+  with the end-to-end cases hand-built so the expected detection time and
+  lead time are checkable on paper. `AMBIGUOUS_MIN_FRACTION = 0.5` makes
+  the "mostly" in the ambiguous rule explicit.
+
+  *Validation.* The 1% research sample has never been downloaded locally,
+  so there was nothing to run the scorers on; added
+  `scripts/make_demo_data.py` (seeded, synthetic, gitignored, clearly not
+  the research sample) and `scripts/run_sanity_scorers.py`. The oracle
+  reaches recall 1.00 / precision 1.00 / zero false alarms at a median
+  `frac_observed` of 0.33, and random reaches 0.00 with ~950 false alarms a
+  day — the behaviour the design predicts. Getting there required fixing
+  the *generator*, not the rule: its first version gave campaign accounts no
+  background traffic, so random scored 0.57–0.71 recall by keeping pure
+  fragments of campaigns. Full numbers and that diagnosis are in
+  "Sanity scorer results".
+
+  Also froze the **stage 3.4 training regime**: both candidate lookbacks
+  train with neighbour sampling so the L comparison is not confounded by
+  different training methods; inference scores full windows, chunked if
+  needed. Backend: 203 passed, 25 skipped.
 - **2026-10-10** — Two further decisions frozen. **Stress evaluation
   horizon** set to `(2022-09-08 00:00, CUTOFF]`, capped per campaign by its
   deadline, with other-split hits applying as in rule 1; it abuts the

@@ -420,6 +420,98 @@ def _markdown_table(table) -> str:
     return "\n".join(lines)
 
 
+def scan_window_sizes(
+    full_df,
+    lookbacks: tuple[int, ...],
+) -> list[dict]:
+    """Edge and account counts for EVERY usable detection time, per (L, split).
+
+    Deliberately cheap: no features are built. Timestamps are sorted once and
+    each window is located with two binary searches, laundering counts come
+    from a prefix sum, and only the distinct-account count needs real work.
+
+    This exists because sampling a handful of detection times is not enough
+    to find the largest window. The first version of this command sampled
+    Sept 2 12:00, whose L=48 lookback reaches before the data starts, so it
+    reported a clamped 1.5M-edge window as the "largest" and missed the
+    genuinely biggest valid ones.
+    """
+    import numpy as np
+    import pandas as pd
+
+    from fraudcamp import constants, windows
+
+    ordered = full_df.sort_values("ts", kind="stable")
+    ts = ordered["ts"].to_numpy()
+    src = ordered["src"].to_numpy()
+    dst = ordered["dst"].to_numpy()
+    laundering_prefix = np.concatenate(
+        [[0], np.cumsum(ordered["Is Laundering"].to_numpy(dtype=np.int64))]
+    )
+
+    rows: list[dict] = []
+    for lookback in lookbacks:
+        # Training times are rule-3 filtered; evaluation horizons all start
+        # days after DATA_START and so are always valid.
+        per_split: dict[str, list] = {"train": windows.training_detection_times(lookback)}
+        for split in constants.EVALUATION_HORIZONS:
+            per_split[split] = windows.evaluation_detection_times(split)
+
+        for split, times in per_split.items():
+            for t in times:
+                lower = t - pd.Timedelta(hours=lookback)
+                lo = int(np.searchsorted(ts, np.datetime64(lower), side="left"))
+                hi = int(np.searchsorted(ts, np.datetime64(t), side="left"))
+                n_edges = hi - lo
+                n_accounts = (
+                    len(pd.unique(np.concatenate([src[lo:hi], dst[lo:hi]])))
+                    if n_edges
+                    else 0
+                )
+                rows.append(
+                    {
+                        "lookback_h": lookback,
+                        "excluded": lookback in constants.EXCLUDED_LOOKBACKS_H,
+                        "split": split,
+                        "t": str(t),
+                        "n_edges": n_edges,
+                        "n_accounts": n_accounts,
+                        "n_laundering": int(
+                            laundering_prefix[hi] - laundering_prefix[lo]
+                        ),
+                    }
+                )
+    return rows
+
+
+def summarise_scan(scan_rows: list[dict]):
+    """min / median / max per (lookback, split), with the time of the max."""
+    import pandas as pd
+
+    frame = pd.DataFrame(scan_rows)
+    summary = []
+    for (lookback, split), group in frame.groupby(["lookback_h", "split"], sort=True):
+        peak = group.loc[group["n_edges"].idxmax()]
+        summary.append(
+            {
+                "lookback_h": int(lookback),
+                "excluded": bool(group["excluded"].iloc[0]),
+                "split": split,
+                "n_times": int(len(group)),
+                "edges_min": int(group["n_edges"].min()),
+                "edges_median": int(group["n_edges"].median()),
+                "edges_max": int(group["n_edges"].max()),
+                "accounts_min": int(group["n_accounts"].min()),
+                "accounts_median": int(group["n_accounts"].median()),
+                "accounts_max": int(group["n_accounts"].max()),
+                "laundering_max": int(group["n_laundering"].max()),
+                "t_of_max_edges": str(peak["t"]),
+                "accounts_at_max": int(peak["n_accounts"]),
+            }
+        )
+    return pd.DataFrame(summary), frame
+
+
 def command_features_smoke(args: argparse.Namespace) -> int:
     import gc
 
@@ -435,25 +527,8 @@ def command_features_smoke(args: argparse.Namespace) -> int:
     full_df = result.full_df
     print(f"  rows: {len(full_df):,}")
 
-    # The spec is fitted on ONE training window, not all of them: this
-    # command measures sizes and timing, and fitting across all 16 training
-    # windows would concatenate overlapping windows into tens of millions of
-    # rows for no benefit here. Categories missing from one window land in
-    # the __other__ column, which is exactly the designed behaviour.
-    fit_t = pd.Timestamp(SMOKE_PROBES[0][2])
-    with step(f"fit feature spec on the {fit_t} 24h training window"):
-        fit_window = windows.build_window(full_df, fit_t, lookback_h=24)
-        spec = features.fit_feature_spec([fit_window], lookback_h=24)
-    print(f"  edge dims: {len(spec.edge_feature_names)}")
-    print(f"  node dims: {len(spec.node_feature_names)}")
-    print(f"  payment currencies: {len(spec.payment_currencies)}, "
-          f"receiving: {len(spec.receiving_currencies)}, formats: {len(spec.payment_formats)}")
-    del fit_window
-    gc.collect()
-
     # Rule 3: a training detection time is usable only when its whole
-    # lookback lies inside the data. Longer lookbacks cost training windows,
-    # and that trade-off is part of choosing L on validation.
+    # lookback lies inside the data.
     usable = windows.usable_training_times_per_lookback()
     grid_total = len(windows.detection_times_for_split("train"))
     print("\n=== usable training detection times (rule 3: full lookback) ===")
@@ -461,49 +536,83 @@ def command_features_smoke(args: argparse.Namespace) -> int:
     for lookback, count in usable.items():
         times = windows.training_detection_times(lookback)
         span = f"{times[0]} .. {times[-1]}" if times else "none"
+        tag = "  [EXCLUDED]" if lookback in constants.EXCLUDED_LOOKBACKS_H else ""
         print(
-            f"  L={lookback:>2}h: {count:>2} usable, {grid_total - count:>2} dropped   {span}"
+            f"  L={lookback:>2}h: {count:>2} usable, {grid_total - count:>2} dropped"
+            f"   {span}{tag}"
         )
-    if min(usable.values()) < 8:
-        worst = min(usable, key=lambda k: usable[k])
-        print(
-            f"  NOTE: L={worst}h leaves only {usable[worst]} training detection "
-            "times. That is a real constraint on using the longer lookbacks, "
-            "not a bug."
-        )
+
+    # The spec is fitted on ONE training window, which must itself be
+    # rule-3 valid. Fitting across all training windows would concatenate
+    # overlapping windows into tens of millions of rows for no benefit here.
+    fit_t = windows.training_detection_times(constants.DEFAULT_LOOKBACK_H)[0]
+    with step(f"fit feature spec on the {fit_t} {constants.DEFAULT_LOOKBACK_H}h training window"):
+        fit_window = windows.build_window(full_df, fit_t, lookback_h=constants.DEFAULT_LOOKBACK_H)
+        spec = features.fit_feature_spec([fit_window], lookback_h=constants.DEFAULT_LOOKBACK_H)
+    print(f"  edge dims: {len(spec.edge_feature_names)}")
+    print(f"  node dims: {len(spec.node_feature_names)}")
+    print(
+        f"  payment currencies: {len(spec.payment_currencies)}, "
+        f"receiving: {len(spec.receiving_currencies)}, formats: {len(spec.payment_formats)}"
+    )
+    del fit_window
+    gc.collect()
 
     d_edge = len(spec.edge_feature_names)
     d_node = len(spec.node_feature_names)
-    rows: list[dict] = []
 
+    # --- cheap full scan of every usable detection time -------------------
+    with step("scan every usable detection time (counts only, no features)"):
+        scan_rows = scan_window_sizes(full_df, constants.MEASURED_LOOKBACKS_H)
+        scan_summary, scan_frame = summarise_scan(scan_rows)
+
+    print("\n=== window sizes across ALL usable detection times ===")
+    print(
+        f"  {'L':>3} {'split':<7} {'times':>5} {'edges min':>10} {'median':>10} "
+        f"{'max':>10} {'accounts max':>13}  time of max"
+    )
+    for row in scan_summary.itertuples():
+        tag = " [EXCL]" if row.excluded else ""
+        print(
+            f"  {row.lookback_h:>3} {row.split:<7} {row.n_times:>5} "
+            f"{row.edges_min:>10,} {row.edges_median:>10,} {row.edges_max:>10,} "
+            f"{row.accounts_max:>13,}  {row.t_of_max_edges}{tag}"
+        )
+
+    # --- detailed featurisation at the sampled probes ---------------------
+    rows: list[dict] = []
+    print("\n=== featurised sample windows ===")
     for split, day_kind, t_text in SMOKE_PROBES:
         t = pd.Timestamp(t_text)
         actual_split = windows.split_of_detection_time(t)
         if actual_split != split:
             print(
-                f"\nWARNING: {t} is in split {actual_split!r}, expected {split!r}. "
-                "Skipping so the table cannot mislabel a window.",
+                f"  WARNING: {t} is in split {actual_split!r}, expected {split!r}; skipping.",
                 flush=True,
             )
             continue
 
         for lookback in constants.MEASURED_LOOKBACKS_H:
+            # Rule 3 applies to training windows only. Featurising an
+            # invalid one would silently measure a clamped, short window -
+            # which is exactly the bug this guard was added for.
+            if split == "train" and not windows.has_full_lookback(t, lookback):
+                lower = t - pd.Timedelta(hours=lookback)
+                print(
+                    f"  {split:<5} L={lookback:<2} {t_text}  SKIPPED: rule 3 - the "
+                    f"lookback would start {lower}, before the data begins "
+                    f"({constants.DATA_START}). First valid training time at this "
+                    f"L is {windows.training_detection_times(lookback)[0]}.",
+                    flush=True,
+                )
+                continue
+
             started = time.perf_counter()
             window = windows.build_window(full_df, t, lookback_h=lookback)
             slice_s = time.perf_counter() - started
 
             if window.n_transactions == 0:
-                rows.append(
-                    {
-                        "split": split, "day": day_kind, "t": t_text,
-                        "lookback_h": lookback,
-                        "excluded": lookback in constants.EXCLUDED_LOOKBACKS_H,
-                        "n_edges": 0, "n_accounts": 0,
-                        "n_laundering": 0, "slice_s": round(slice_s, 2),
-                        "build_s": 0.0, "tensors_mb": 0.0, "xgb_matrix_mb": 0.0,
-                        "peak_rss_mb": memory_mb()[0],
-                    }
-                )
+                print(f"  {split:<5} L={lookback:<2} {t_text}  empty window", flush=True)
                 continue
 
             started = time.perf_counter()
@@ -517,13 +626,14 @@ def command_features_smoke(args: argparse.Namespace) -> int:
                 + wf.labels.nbytes
             )
             memory, _ = memory_mb()
+            excluded = lookback in constants.EXCLUDED_LOOKBACKS_H
             rows.append(
                 {
                     "split": split,
                     "day": day_kind,
                     "t": t_text,
                     "lookback_h": lookback,
-                    "excluded": lookback in constants.EXCLUDED_LOOKBACKS_H,
+                    "excluded": excluded,
                     "n_edges": wf.n_edges,
                     "n_accounts": wf.n_nodes,
                     "n_laundering": int(wf.labels.sum()),
@@ -532,88 +642,110 @@ def command_features_smoke(args: argparse.Namespace) -> int:
                     "slice_s": round(slice_s, 2),
                     "build_s": round(build_s, 2),
                     "tensors_mb": round(tensors / 1e6, 1),
-                    # analytic: building it would double peak memory for no
-                    # extra information
-                    "xgb_matrix_mb": round(
-                        wf.n_edges * (d_edge + 2 * d_node) * 4 / 1e6, 1
-                    ),
+                    "xgb_matrix_mb": round(wf.n_edges * (d_edge + 2 * d_node) * 4 / 1e6, 1),
                     "peak_rss_mb": round(memory, 0) if memory else None,
                 }
             )
-            marker = "  [EXCLUDED]" if lookback in constants.EXCLUDED_LOOKBACKS_H else ""
             print(
                 f"  {split:<5} L={lookback:<2} {t_text}  "
                 f"edges={wf.n_edges:>9,}  accounts={wf.n_nodes:>8,}  "
                 f"laundering={int(wf.labels.sum()):>5,}  "
-                f"build={build_s:>5.1f}s  tensors={tensors / 1e6:>7.1f} MB{marker}",
+                f"build={build_s:>5.1f}s  tensors={tensors / 1e6:>7.1f} MB"
+                f"{'  [EXCLUDED]' if excluded else ''}",
                 flush=True,
             )
             del wf, window
             gc.collect()
 
-    if not rows:
-        print("No windows were built; nothing to report.", file=sys.stderr)
-        return 1
+    # --- GPU estimates from the TRUE maxima found by the scan -------------
+    print("\n=== estimated full-batch GPU memory from the TRUE largest valid window ===")
+    print("    (3-layer GINEConv, hidden 64; shapes, not measurements)")
+    estimates: list[dict] = []
+    for lookback in constants.MEASURED_LOOKBACKS_H:
+        per_lookback = scan_summary[scan_summary["lookback_h"] == lookback]
+        if per_lookback.empty:
+            continue
+        excluded = bool(per_lookback["excluded"].iloc[0])
 
-    table = pd.DataFrame(rows)
-
-    def _estimate_for(subset, label: str):
-        """Largest window in `subset`, and the GPU memory it would need."""
-        if subset.empty or subset["n_edges"].max() == 0:
-            return None, None
-        row = subset.loc[subset["n_edges"].idxmax()]
-        estimate = estimate_gine_memory_mb(
-            n_nodes=int(row["n_accounts"]),
-            n_edges=int(row["n_edges"]),
-            d_node=d_node,
-            d_edge=d_edge,
+        overall = per_lookback.loc[per_lookback["edges_max"].idxmax()]
+        training = per_lookback[per_lookback["split"] == "train"]
+        training_peak = (
+            training.loc[training["edges_max"].idxmax()] if not training.empty else None
         )
-        print(f"\n=== largest {label} window ===")
+
+        for label, row in (("inference (any split)", overall), ("training", training_peak)):
+            if row is None:
+                continue
+            estimate = estimate_gine_memory_mb(
+                n_nodes=int(row["accounts_at_max"]),
+                n_edges=int(row["edges_max"]),
+                d_node=d_node,
+                d_edge=d_edge,
+            )
+            estimates.append(
+                {
+                    "lookback_h": int(lookback),
+                    "excluded": excluded,
+                    "scope": label,
+                    "split_of_max": row["split"],
+                    "t_of_max": row["t_of_max_edges"],
+                    "n_edges": int(row["edges_max"]),
+                    "n_accounts": int(row["accounts_at_max"]),
+                    **estimate,
+                }
+            )
+            print(
+                f"  L={lookback:>2}h {label:<22} {int(row['edges_max']):>9,} edges "
+                f"@ {row['t_of_max_edges']} ({row['split']}) -> "
+                f"{estimate['recommended_headroom_mb']:>9,.0f} MB with headroom"
+                f"{'  [EXCLUDED]' if excluded else ''}"
+            )
+
+    estimates_frame = pd.DataFrame(estimates)
+    candidate_estimates = estimates_frame[~estimates_frame["excluded"]]
+    worst = (
+        candidate_estimates.loc[candidate_estimates["recommended_headroom_mb"].idxmax()]
+        if not candidate_estimates.empty
+        else None
+    )
+    if worst is not None:
         print(
-            f"  {row['t']} L={row['lookback_h']}h ({row['split']}): "
-            f"{int(row['n_edges']):,} edges, {int(row['n_accounts']):,} accounts"
+            f"\n  worst candidate case: L={int(worst['lookback_h'])}h "
+            f"{worst['scope']}, {int(worst['n_edges']):,} edges -> "
+            f"{worst['recommended_headroom_mb']:,.0f} MB. Kaggle GPUs have "
+            "16 GB (16,384 MB)."
         )
-        print(f"  estimated full-batch GPU memory, 3-layer GINEConv, hidden 64:")
-        for key, value in estimate.items():
-            print(f"    {key.replace('_', ' ')}: {value:,.1f} MB")
-        return row, estimate
+        if worst["recommended_headroom_mb"] > 16384:
+            print(
+                "  => full-batch does not fit; neighbour sampling is required, "
+                "which the Phase 3 design permits."
+            )
 
-    # The estimate that matters is for the lookbacks still in contention.
-    candidates = table[~table["excluded"]]
-    largest, gine = _estimate_for(candidates, "candidate (L in %s)" % (constants.LOOKBACKS_H,))
+    # --- reports -----------------------------------------------------------
+    sample_table = pd.DataFrame(rows)
+    scan_summary.to_csv(out / "features_smoke_scan.csv", index=False)
+    scan_frame.to_csv(out / "features_smoke_scan_full.csv", index=False)
+    if not sample_table.empty:
+        sample_table.to_csv(out / "features_smoke.csv", index=False)
 
-    excluded_rows = table[table["excluded"]]
-    largest_excluded, gine_excluded = _estimate_for(
-        excluded_rows, "EXCLUDED (L in %s, measured for the record only)" % (constants.EXCLUDED_LOOKBACKS_H,)
-    )
-
-    print(
-        "\n  (estimates from tensor shapes, not measurements; if a candidate "
-        "approaches the GPU's capacity, use neighbour sampling instead of "
-        "full-batch, which the Phase 3 design already permits)"
-    )
-
-    if largest is None:
-        print("No candidate windows had any edges; nothing to estimate.", file=sys.stderr)
-        return 1
-
-    csv_path = out / "features_smoke.csv"
-    table.to_csv(csv_path, index=False)
-    json_path = out / "features_smoke.json"
-    json_path.write_text(
+    (out / "features_smoke.json").write_text(
         json.dumps(
             {
                 "edge_dims": d_edge,
                 "node_dims": d_node,
-                "usable_training_times_per_lookback": {str(k): v for k, v in usable.items()},
-                "training_grid_total": grid_total,
+                "vocabularies": {
+                    "payment_currencies": len(spec.payment_currencies),
+                    "receiving_currencies": len(spec.receiving_currencies),
+                    "payment_formats": len(spec.payment_formats),
+                },
                 "spec_fitted_on": spec.fitted_on,
-                "windows": rows,
-                "largest_window": {k: (int(v) if isinstance(v, (int, float)) and k in ("n_edges", "n_accounts") else v) for k, v in largest.to_dict().items()},
                 "lookback_candidates": list(constants.LOOKBACKS_H),
                 "lookbacks_excluded": list(constants.EXCLUDED_LOOKBACKS_H),
-                "gine_estimate_mb": gine,
-                "gine_estimate_excluded_mb": gine_excluded,
+                "usable_training_times_per_lookback": {str(k): v for k, v in usable.items()},
+                "training_grid_total": grid_total,
+                "scan_summary": scan_summary.to_dict(orient="records"),
+                "sample_windows": rows,
+                "gpu_estimates": estimates,
             },
             indent=2,
             default=str,
@@ -621,14 +753,18 @@ def command_features_smoke(args: argparse.Namespace) -> int:
         encoding="utf-8",
     )
 
-    report = out / "features_smoke.md"
-    report.write_text(
+    (out / "features_smoke.md").write_text(
         "\n".join(
             [
                 "# Feature smoke test on the full dataset",
                 "",
-                f"- edge features: {d_edge} dims",
+                f"- edge features: {d_edge} dims "
+                f"({len(spec.payment_currencies)} payment currencies, "
+                f"{len(spec.receiving_currencies)} receiving, "
+                f"{len(spec.payment_formats)} formats)",
                 f"- node features: {d_node} dims",
+                f"- lookback candidates: {list(constants.LOOKBACKS_H)}; "
+                f"excluded but measured: {list(constants.EXCLUDED_LOOKBACKS_H)}",
                 f"- spec fitted on: `{spec.fitted_on}`",
                 "",
                 "## Usable training detection times (rule 3: full lookback)",
@@ -642,39 +778,27 @@ def command_features_smoke(args: argparse.Namespace) -> int:
                     for lookback, count in usable.items()
                 ),
                 "",
-                "Validation spans only Mon Sept 5 to Tue Sept 6, so it has no",
-                "weekend detection time to sample.",
+                "## Window sizes across ALL usable detection times",
                 "",
-                "## Windows",
+                "Counts only, no features. This is the authoritative source for",
+                "the largest window: sampling a few detection times is not",
+                "enough to find it.",
                 "",
-                _markdown_table(table),
+                _markdown_table(scan_summary),
                 "",
-                "## Largest candidate window",
+                "## Featurised sample windows",
                 "",
-                f"Lookback candidates: {list(constants.LOOKBACKS_H)}. "
-                f"Excluded, measured for the record only: "
-                f"{list(constants.EXCLUDED_LOOKBACKS_H)}.",
+                "Training probes that would violate rule 3 are skipped, not",
+                "silently clamped to a shorter window.",
                 "",
-                f"`{largest['t']}` at L={largest['lookback_h']}h "
-                f"({largest['split']}): {int(largest['n_edges']):,} edges, "
-                f"{int(largest['n_accounts']):,} accounts.",
+                _markdown_table(sample_table) if not sample_table.empty else "_none_",
                 "",
-                "## Estimated full-batch GPU memory (3-layer GINEConv, hidden 64)",
+                "## Estimated full-batch GPU memory",
                 "",
-                *(f"- {k.replace('_', ' ')}: {v:,.1f} MB" for k, v in gine.items()),
+                "3-layer GINEConv, hidden 64, from the true largest valid window",
+                "per lookback. Estimated from tensor shapes, not measured.",
                 "",
-                "Estimated from tensor shapes, not measured.",
-                "",
-                *(
-                    [
-                        "For the record, the largest EXCLUDED (L=72) window "
-                        f"`{largest_excluded['t']}` with "
-                        f"{int(largest_excluded['n_edges']):,} edges would need "
-                        f"{gine_excluded['recommended_headroom_mb']:,.0f} MB.",
-                    ]
-                    if largest_excluded is not None
-                    else []
-                ),
+                _markdown_table(estimates_frame) if not estimates_frame.empty else "_none_",
                 "",
                 "## Timing",
                 "",
@@ -684,9 +808,7 @@ def command_features_smoke(args: argparse.Namespace) -> int:
         ),
         encoding="utf-8",
     )
-    print(f"\nWrote {csv_path}")
-    print(f"Wrote {json_path}")
-    print(f"Wrote {report}")
+    print(f"\nWrote {out / 'features_smoke.md'} (+ .json, .csv, scan csvs)")
     return 0
 
 
