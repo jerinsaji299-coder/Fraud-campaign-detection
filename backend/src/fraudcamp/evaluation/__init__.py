@@ -13,11 +13,14 @@ from .clusters import (
     is_ambiguous,
 )
 from .evaluate import (
+    DEFAULT_TAU_GRID,
     SUBSET_FILTERS,
     CampaignOutcome,
     EvaluationResult,
     bootstrap_ci,
+    campaign_f1,
     evaluate_split,
+    select_tau,
     summarize,
     summarize_by,
 )
@@ -32,8 +35,11 @@ __all__ = [
     "is_ambiguous",
     "CampaignOutcome",
     "EvaluationResult",
+    "DEFAULT_TAU_GRID",
     "SUBSET_FILTERS",
     "bootstrap_ci",
+    "campaign_f1",
+    "select_tau",
     "evaluate_split",
     "summarize",
     "summarize_by",

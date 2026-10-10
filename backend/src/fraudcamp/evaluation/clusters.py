@@ -36,6 +36,40 @@ def _union_find(n: int):
     return find, union
 
 
+def _components_python(left: np.ndarray, right: np.ndarray, n: int) -> np.ndarray:
+    """Component label per node, via union-find. The portable fallback."""
+    find, union = _union_find(n)
+    for a, b in zip(left.tolist(), right.tolist()):
+        union(a, b)
+    return np.fromiter((find(i) for i in range(n)), dtype=np.int64, count=n)
+
+
+def _components_scipy(left: np.ndarray, right: np.ndarray, n: int) -> np.ndarray:
+    from scipy.sparse import coo_matrix
+    from scipy.sparse.csgraph import connected_components
+
+    graph = coo_matrix(
+        (np.ones(left.size, dtype=np.int8), (left, right)), shape=(n, n)
+    )
+    _, labels = connected_components(graph, directed=False)
+    return labels
+
+
+def connected_component_labels(left: np.ndarray, right: np.ndarray, n: int) -> np.ndarray:
+    """Component labels, using scipy when it is installed.
+
+    A busy window holds over a million edges and this runs once per
+    detection time per tau, so the pure-Python union-find is the difference
+    between minutes and hours over a tau sweep. The two implementations are
+    tested to produce identical clusterings; only the labels themselves may
+    differ, which does not matter because clusters are keyed by membership.
+    """
+    try:
+        return _components_scipy(left, right, n)
+    except ImportError:
+        return _components_python(left, right, n)
+
+
 def extract_clusters(
     src: Sequence[str],
     dst: Sequence[str],
@@ -45,31 +79,36 @@ def extract_clusters(
 ) -> list[frozenset[str]]:
     """Connected components of the edges scoring >= tau.
 
-    Accounts are enumerated in sorted order so the output does not depend on
-    hash ordering — the same reason the visibility search sorts.
+    Accounts are factorised with `sort=True`, so the enumeration order is
+    the sorted account order and does not depend on hash ordering — the same
+    reason the visibility search sorts.
     """
+    import pandas as pd
+
     scores = np.asarray(scores)
     keep = np.flatnonzero(scores >= tau)
     if keep.size == 0:
         return []
 
-    kept_src = [src[i] for i in keep]
-    kept_dst = [dst[i] for i in keep]
+    kept_src = np.asarray(src, dtype=object)[keep]
+    kept_dst = np.asarray(dst, dtype=object)[keep]
 
-    accounts = sorted(set(kept_src) | set(kept_dst))
-    index = {account: i for i, account in enumerate(accounts)}
-    find, union = _union_find(len(accounts))
-    for a, b in zip(kept_src, kept_dst):
-        union(index[a], index[b])
+    codes, accounts = pd.factorize(np.concatenate([kept_src, kept_dst]), sort=True)
+    half = keep.size
+    labels = connected_component_labels(codes[:half], codes[half:], len(accounts))
 
-    components: dict[int, set[str]] = {}
-    for account in accounts:
-        root = find(index[account])
-        components.setdefault(root, set()).add(account)
+    # group account indices by component label, vectorised
+    order = np.argsort(labels, kind="stable")
+    sorted_labels = labels[order]
+    boundaries = np.flatnonzero(np.diff(sorted_labels)) + 1
+    groups = np.split(order, boundaries)
 
-    clusters = [frozenset(members) for members in components.values() if len(members) >= min_accounts]
+    accounts = np.asarray(accounts, dtype=object)
+    clusters = [
+        frozenset(accounts[group].tolist()) for group in groups if group.size >= min_accounts
+    ]
     # sorted for a reproducible report order
-    return sorted(clusters, key=lambda c: (-len(c), sorted(c)[0]))
+    return sorted(clusters, key=lambda c: (-len(c), min(c)))
 
 
 def cluster_hits_campaign(

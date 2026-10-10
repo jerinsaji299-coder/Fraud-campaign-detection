@@ -31,6 +31,22 @@ each run, so a Kaggle session only ever sees what has been pushed.
 
 ---
 
+## Run order
+
+Each step assumes the ones above it have passed. All of them are CPU-only;
+`train` and `evaluate` (stages 3.3–3.4) are the first that need a GPU.
+
+| # | Command | Purpose | Section |
+|---|---|---|---|
+| 1 | `verify` | reproduce all 24 Phase 2 regression numbers | §2 |
+| 2 | `pipeline` | export the artifacts and zip them | §2 |
+| 3 | `features-smoke` | window sizes, build cost, GPU estimate | §5c |
+| 4 | `evaluate-scorers` | validate the evaluation module on full data | §5d |
+| 5 | `make-sample` | build the 1% sample for local development | §5e |
+
+Steps 1–2 are done (2026-10-08/09). Step 3 has been run once and is being
+re-run after a correctness fix. Steps 4–5 are new.
+
 ## 1. Notebook settings
 
 1. Kaggle → **Create** → **New Notebook**.
@@ -267,6 +283,84 @@ days — i.e. at the edge of a single 16 GB GPU. If the real numbers confirm
 that, stage 3.4 uses neighbour sampling rather than full-batch at L = 48,
 which the Phase 3 design already allows. Report the numbers either way; do
 not start changing the design.
+
+## 5d. Validating the evaluation module on the full data
+
+Before any model is trained, the evaluation code is checked with two
+scorers that have known expected behaviour. If these look wrong, the
+evaluation is at fault — not a detector, because there isn't one yet.
+
+```python
+!python scripts/kaggle/kaggle_runner.py evaluate-scorers
+```
+
+Runs the **oracle** (score = true label) and **random** scorers at both
+candidate lookbacks (L = 24, 48) over the val, test and stress horizons,
+reporting campaigns, recall, precision, false alarms per day, other-split
+hits, ambiguous clusters and all three lead-time forms with 95% bootstrap
+CIs, plus the oracle broken down by `base_type` and by topology group.
+
+Tau is chosen **on validation only**, maximising campaign-level F1, exactly
+as a real model's will be in stage 3.3 — the full precision/recall-vs-tau
+curve is saved alongside the choice. The oracle's scores are 0/1, so every
+tau in (0, 1] is equivalent for it; it goes through the same selection
+anyway so both scorers are treated identically.
+
+Writes `evaluate_scorers.{md,csv,json}` plus
+`evaluate_scorers_tau_curve.csv` and `evaluate_scorers_breakdown.csv`.
+
+Useful options: `--lookbacks 24` to do one lookback, `--splits test` for one
+horizon, `--tau-grid 0.5,0.9,0.99` to change the sweep, `--bootstrap 200`
+for faster CIs, `--seed` for the random scorer.
+
+**What to look for.**
+
+- Oracle recall should be high (near 1.0 on val and test) with precision
+  near 1.0 and essentially no false alarms. Stress will be lower, because
+  campaigns censored by the cutoff can finish after their deadline and a
+  detection after the deadline counts as missed.
+- Random recall should be near zero with many false alarms per day. **If
+  random scores well, say so and stop** — that would mean the matching rule
+  is too generous, and no model result built on it would be trustworthy.
+- Large other-split-hit counts are expected and correct: every window holds
+  campaigns from several splits, and the oracle finds those too. They are
+  excluded from both precision terms by rule 1.
+- The oracle's median lead time and median `frac_observed` are the
+  **ceiling** — the earliest any detector can possibly fire under a rule
+  that needs three of a campaign's accounts. Send these back; they go in the
+  README and every later result is read against them.
+
+Runtime is dominated by the tau sweep on validation, since a low tau keeps
+most of a one-to-two-million-edge window. Expect minutes rather than
+seconds; report the timing table.
+
+## 5e. Building the real 1% sample
+
+```python
+!python scripts/kaggle/kaggle_runner.py make-sample
+```
+
+Keeps every transaction named in the pattern file plus a seeded (42) random
+1% of the rest, and copies the pattern file unchanged, so the campaign
+ground truth stays complete and only the background is thinned. Writes
+`HI-Small_Trans.csv` and `HI-Small_Patterns.txt` to `/kaggle/working/`.
+
+Equivalent direct command, if you prefer:
+
+```python
+!python scripts/make_sample.py --config configs/kaggle.yaml --out /kaggle/working
+```
+
+Download **both** files into `backend/data/sample/` locally. After that,
+local development uses the real sample:
+
+```
+cd backend
+python scripts/run_pipeline.py --config configs/local.yaml
+python scripts/run_sanity_scorers.py --config configs/local.yaml
+```
+
+The synthetic generator (`make_demo_data.py`) stays for unit tests only.
 
 ## 6. Later stages
 

@@ -75,9 +75,12 @@ bank).
 (extraction, matching with other-split hits, horizons, lead time, metrics,
 bootstrap CIs) and the oracle/random sanity scorers are in place and
 validated.
-**Next step:** stage 3.3 — the XGBoost baseline, tau selection on
-validation, and test evaluation. The training regime for 3.4 is already
-frozen (neighbour sampling for both candidate lookbacks; see Decision log).
+**Next step:** run `features-smoke` (corrected), `evaluate-scorers` and
+`make-sample` on Kaggle — see the run order in
+`backend/scripts/kaggle/run_on_kaggle.md`. Stage 3.3 (the XGBoost baseline)
+begins once the evaluation is validated on full data. The training regime
+for 3.4 is already frozen (neighbour sampling for both candidate lookbacks;
+see Decision log).
 
 **Phase 2 — pipeline, artifacts, API, frontend (complete)**
 
@@ -362,6 +365,23 @@ memory"). The L = 72 figure is one of the reasons that lookback was dropped.
 These are estimates, not measurements — `features-smoke` on the full data
 replaces them with real figures, reporting the largest **candidate** window
 separately from the excluded one.
+
+### Oracle ceiling
+
+The oracle scorer (score = true label) is the **best any detector can do**
+under the frozen matching rule: a cluster cannot hit a campaign until three
+of its accounts are visible, so no model can fire earlier. Its median lead
+time and median `frac_observed` are therefore the ceiling every later result
+is read against — a model at 60% of the oracle's lead time is doing well,
+whereas 60% of the theoretical 100% would be meaningless.
+
+| | Status |
+|---|---|
+| Full data, L = 24 and 48, val/test/stress | **pending** — `kaggle_runner.py evaluate-scorers` |
+| Synthetic development data, L = 24 | median lead 32.9h (val) / 25.0h (test) / 27.1h (stress); median `frac_observed` 0.40 / 0.33 / 0.33 |
+
+The synthetic figures below are a code check. The full-data numbers replace
+them as the recorded ceiling as soon as that run lands.
 
 ### Sanity scorer results (stage 3.2, synthetic data)
 
@@ -774,6 +794,28 @@ project-root/
   table is skipped with an explanation rather than reporting 23 meaningless
   failures). The full notebook walkthrough is
   `backend/scripts/kaggle/run_on_kaggle.md`.
+- **Validate the evaluation on the full data (on Kaggle):**
+  ```
+  cd backend
+  python scripts/kaggle/kaggle_runner.py evaluate-scorers
+  ```
+  Oracle and random at L = 24 and 48 over the val, test and stress
+  horizons, with tau chosen on validation by campaign-level F1 (the full
+  precision/recall-vs-tau curve is saved), bootstrap CIs, and the oracle
+  broken down by `base_type` and group. Writes
+  `evaluate_scorers.{md,csv,json}` plus the tau-curve and breakdown CSVs.
+  `--lookbacks`, `--splits`, `--tau-grid`, `--bootstrap` and `--seed` narrow
+  the run.
+- **Build the real 1% sample (on Kaggle):**
+  ```
+  cd backend
+  python scripts/kaggle/kaggle_runner.py make-sample
+  ```
+  Or `python scripts/make_sample.py --config configs/kaggle.yaml --out /kaggle/working`
+  — both call the same `build_sample`. Download the two files into
+  `backend/data/sample/`; after that local development uses the real
+  sample via `--config configs/local.yaml`, and the synthetic generator is
+  for unit tests only.
 - **Generate synthetic development data and run the sanity scorers:**
   ```
   cd backend
@@ -959,7 +1001,10 @@ committed.
     three lead-time forms; `summarize` gives recall, precision, false
     alarms per day and medians per test subset, with `bootstrap_ci`
     (seeded percentile bootstrap over campaigns) and `summarize_by` for
-    group and base_type breakdowns.
+    group and base_type breakdowns; `select_tau` chooses the threshold on
+    **validation only** by campaign-level F1 and returns the full
+    precision/recall-vs-tau curve, with `campaign_f1` as the cheap
+    statistic the sweep uses instead of a bootstrap at every candidate.
   - `scorers.py` — the oracle (score = true label) and random scorers.
   The scorer is called as `scorer(window_transactions, t)` and only ever
   receives the window, so a scorer cannot reach past `t` even if it tries.
@@ -980,7 +1025,10 @@ committed.
   `pipeline` builds, exports and zips the artifacts; `features-smoke` builds
   detection windows at L = 24/48/72 on the full data and reports per-window
   size, timing, memory and tensor footprint plus a full-batch GNN memory
-  estimate; `train` and `evaluate`
+  estimate; `evaluate-scorers` runs the oracle and random scorers on the
+  full data at both candidate lookbacks over all three horizons, with tau
+  chosen on validation and bootstrap CIs; `make-sample` builds the 1%
+  development sample; `train` and `evaluate`
   exist but exit with a message until stages 3.3 and 3.4. Every step reports
   elapsed time and memory (a true peak via `resource` on Linux; on Windows it
   falls back to current RSS and says so rather than mislabelling it).
@@ -1324,7 +1372,7 @@ campaign_id)`:
   time being used, so the boundary was never exercised where it matters.
   `test_a_transaction_stamped_exactly_at_t_is_treated_as_future` was added
   to close that, and confirmed to fail under the same injected leak.
-- **Backend evaluation tests** (`test_evaluation.py`, 28 tests): cluster
+- **Backend evaluation tests** (`test_evaluation.py`, 33 tests): cluster
   extraction (tau threshold, transitive joining, the >= 3 account minimum,
   direction-independence, determinism); the matching rule at and around both
   of its thresholds; classification of all four outcome kinds, including
@@ -1441,7 +1489,7 @@ campaign_id)`:
     stubbed in these tests.
 
 **Current pass status (2026-10-08):**
-- Backend: `python -m pytest tests/` from `backend/` → 203 passed, 25
+- Backend: `python -m pytest tests/` from `backend/` → 208 passed, 25
   skipped, 0 failed. The skips are the full-data suite, which needs the
   dataset that only exists on Kaggle; all 24 of its numbers passed there on
   2026-10-08/09.
@@ -1476,9 +1524,17 @@ is the one piece that most warrants a look in a browser before the demo.
 - **The 1% research sample is not available locally.** `backend/data/sample/`
   is empty: `make_sample.py` has only ever been described, not run. Stage
   3.2's sanity-scorer numbers therefore come from a seeded synthetic dataset
-  and validate the evaluation *code*, not the dataset. The oracle and random
-  scorers need a full-data run on Kaggle before anything is claimed about
-  real campaigns.
+  and validate the evaluation *code*, not the dataset. Fix with
+  `kaggle_runner.py make-sample` (§5e of the Kaggle guide); after that local
+  development uses the real sample and the synthetic generator is for unit
+  tests only.
+- **The evaluation module has not been run on full data.** Its behaviour is
+  known only on hand-made cases and synthetic data.
+  `kaggle_runner.py evaluate-scorers` is the check, and it carries a real
+  risk worth naming: if random scores well on the full data, the frozen
+  matching rule is too generous and no model result built on it would be
+  trustworthy. That is a stop-and-report outcome, not something to tune
+  away.
 - The first full-data `features-smoke` run (commit `caae35f`) reported a
   "largest candidate window" that violated rule 3 and was silently clamped.
   Its other figures — 54 edge dims, 13/9/5 usable training times, build
@@ -1530,6 +1586,33 @@ Tagged points in the repository, newest first. Check one out with
 
 ## Changelog
 
+- **2026-10-11** — Full-data validation of the evaluation, ahead of stage
+  3.3. Added `kaggle_runner.py evaluate-scorers`: oracle and random at both
+  candidate lookbacks over the val, test and stress horizons, reporting
+  recall, precision, false alarms per day, other-split hits, ambiguous
+  clusters and all three lead-time forms with 95% bootstrap CIs, plus the
+  oracle broken down by `base_type` and by topology group, into
+  `evaluate_scorers.{md,csv,json}` with separate tau-curve and breakdown
+  CSVs. Tau is chosen **on validation only** by campaign-level F1 with the
+  curve saved beside it — the same procedure stage 3.3 will use for a real
+  model, so random is tuned exactly as a model would be rather than handed a
+  convenient threshold. Added `select_tau` and `campaign_f1` to the
+  evaluation module (the latter so the sweep does not pay for a 1000-sample
+  bootstrap at every candidate), and a `DEFAULT_TAU_GRID` weighted toward
+  high thresholds because a low tau keeps most of a million-edge window.
+  Added `kaggle_runner.py make-sample`, with `make_sample.py` refactored
+  around a reusable `build_sample` so the script and the subcommand share
+  one implementation. Two performance defects fixed before they reached full
+  data: `evaluate_split` was doing an O(campaigns) dataframe filter per hit
+  to look up a deadline and another per campaign when building outcomes, both
+  now dictionary and row lookups; and `extract_clusters` gained a scipy
+  `connected_components` fast path with the pure-Python union-find kept as a
+  fallback and a test proving the two partition identically. Recorded the
+  **oracle ceiling** as its own README section — the best lead time
+  achievable under the frozen matching rule, currently filled with the
+  synthetic figures and marked pending the full-data run. `run_on_kaggle.md`
+  gained an explicit run order table and sections §5d and §5e. Backend: 208
+  passed, 25 skipped.
 - **2026-10-10** — **Stage 3.2: the evaluation module, plus a
   `features-smoke` correctness fix.**
 

@@ -10,6 +10,12 @@ Subcommands:
                build detection windows at L = 24/48/72 on the full data and
                report edges, accounts, laundering edges, build time, memory
                and tensor sizes, plus a full-batch GNN memory estimate
+    evaluate-scorers
+               run the oracle and random sanity scorers on the full data and
+               report recall, precision, false alarms, lead times and CIs,
+               with tau chosen on validation
+    make-sample
+               build the 1% development sample for download
     train      (Stage 3.3+) not implemented yet
     evaluate   (Stage 3.3+) not implemented yet
 
@@ -812,6 +818,317 @@ def command_features_smoke(args: argparse.Namespace) -> int:
     return 0
 
 
+def command_evaluate_scorers(args: argparse.Namespace) -> int:
+    """Validate the evaluation module on the FULL data with the oracle and
+    random scorers, before any model exists to blame.
+
+    The oracle's numbers are also the *ceiling*: the best lead time
+    achievable under the frozen matching rule, since no detector can see a
+    campaign earlier than the moment the rule's three-account requirement is
+    satisfiable.
+    """
+    import numpy as np
+    import pandas as pd
+
+    from fraudcamp import constants, evaluation, pipeline
+    from fraudcamp.evaluation import scorers
+
+    out = Path(args.out)
+    out.mkdir(parents=True, exist_ok=True)
+    splits = [s.strip() for s in args.splits.split(",") if s.strip()]
+    lookbacks = [int(v) for v in args.lookbacks.split(",")] if args.lookbacks else list(
+        constants.LOOKBACKS_H
+    )
+    tau_grid = (
+        tuple(float(v) for v in args.tau_grid.split(","))
+        if args.tau_grid
+        else evaluation.DEFAULT_TAU_GRID
+    )
+
+    with step("build pipeline"):
+        result = pipeline.build(Path(args.config))
+    print(f"  rows: {len(result.full_df):,}, campaigns: {len(result.camp):,}")
+
+    def oracle(window, t):
+        return scorers.oracle_scores(window["Is Laundering"].to_numpy())
+
+    def make_random(seed: int):
+        def scorer(window, t):
+            # seeded per detection time so each window differs but the whole
+            # run reproduces exactly
+            return scorers.random_scores(len(window), seed + int(t.value % 100_000))
+
+        return scorer
+
+    summary_rows: list[dict] = []
+    curve_rows: list[dict] = []
+    breakdown_rows: list[dict] = []
+    tau_choices: list[dict] = []
+
+    for lookback in lookbacks:
+        print(f"\n{'=' * 78}\nL = {lookback}h\n{'=' * 78}")
+
+        # --- tau, chosen on validation only -----------------------------
+        # The oracle's scores are exactly 0 or 1, so every tau in (0, 1]
+        # keeps precisely the laundering edges and the choice is vacuous.
+        # It is still run through the same selection so the two scorers are
+        # treated identically and the curve is on record.
+        chosen: dict[str, float] = {}
+        for name, scorer in (("oracle", oracle), ("random", make_random(args.seed))):
+            with step(f"select tau on validation: {name}, L={lookback}h"):
+                tau, curve = evaluation.select_tau(
+                    result.full_df, result.camp, result.pattern_df,
+                    result.accounts_by_campaign, scorer,
+                    tau_grid=tau_grid, lookback_h=lookback, seed=args.seed,
+                    scorer_name=name,
+                )
+            chosen[name] = tau
+            for row in curve:
+                curve_rows.append({"scorer": name, **row})
+            tau_choices.append(
+                {
+                    "scorer": name,
+                    "lookback_h": lookback,
+                    "chosen_tau": tau,
+                    "selected_on": "val",
+                    "criterion": "max campaign-level F1, ties to the lower tau",
+                    "grid": list(tau_grid),
+                    "seed": args.seed,
+                }
+            )
+            print(f"  chosen tau = {tau} (campaign-F1 on validation)")
+            print(f"  {'tau':>6} {'precision':>10} {'recall':>8} {'F1':>8} {'hits':>7} {'FA':>8}")
+            for row in curve:
+                print(
+                    f"  {row['tau']:>6} {row['campaign_precision']:>10.3f} "
+                    f"{row['campaign_recall']:>8.3f} {row['campaign_f1']:>8.3f} "
+                    f"{row['hits']:>7,} {row['false_alarms']:>8,}"
+                )
+
+        # --- evaluate each horizon at the frozen tau ---------------------
+        for name, scorer in (("oracle", oracle), ("random", make_random(args.seed))):
+            tau = chosen[name]
+            for split in splits:
+                with step(f"evaluate {name} on {split}, L={lookback}h, tau={tau}"):
+                    evaluated = evaluation.evaluate_split(
+                        result.full_df, result.camp, result.pattern_df,
+                        result.accounts_by_campaign, split, scorer,
+                        tau=tau, lookback_h=lookback, seed=args.seed,
+                        scorer_name=name,
+                    )
+                for subset in constants.TEST_SUBSETS:
+                    summary_rows.append(
+                        {
+                            "lookback_h": lookback,
+                            **evaluation.summarize(
+                                evaluated, subset=subset,
+                                bootstrap_seed=args.seed, n_resamples=args.bootstrap,
+                            ),
+                        }
+                    )
+                if name == "oracle":
+                    for attribute in ("base_type", "group"):
+                        for row in evaluation.summarize_by(evaluated, attribute):
+                            breakdown_rows.append(
+                                {
+                                    "lookback_h": lookback, "split": split,
+                                    "attribute": attribute,
+                                    "value": row[attribute],
+                                    **{k: v for k, v in row.items() if k != attribute},
+                                }
+                            )
+
+    # --- report ---------------------------------------------------------
+    def fmt(value, spec=".2f"):
+        return format(value, spec) if value is not None else "-"
+
+    print("\n" + "=" * 126)
+    print(
+        f"{'L':>3} {'split':<7}{'scorer':<8}{'subset':<20}{'tau':>5}{'camp':>5}{'det':>5}"
+        f"{'recall':>8}{'prec':>7}{'FA/day':>8}{'other':>7}{'ambig':>7}"
+        f"{'lead_h':>9}{'norm':>7}{'frac':>7}"
+    )
+    print("-" * 126)
+    for row in summary_rows:
+        print(
+            f"{row['lookback_h']:>3} {row['split']:<7}{row['scorer']:<8}"
+            f"{row['test_subset']:<20}{row['tau']:>5}{row['n_campaigns']:>5}"
+            f"{row['n_detected']:>5}{fmt(row['campaign_recall']):>8}"
+            f"{fmt(row['campaign_precision']):>7}{row['false_alarms_per_day']:>8.1f}"
+            f"{row['other_split_hits']:>7}{row['ambiguous']:>7}"
+            f"{fmt(row['median_lead_time_h'], '.1f'):>9}"
+            f"{fmt(row['median_normalized_lead_time']):>7}"
+            f"{fmt(row['median_frac_observed_at_detection']):>7}"
+        )
+    print("=" * 126)
+
+    print("\nbootstrap 95% CIs (subset = all):")
+    for row in summary_rows:
+        if row["test_subset"] != "all":
+            continue
+        rl, rh = row["recall_ci"]
+        ll, lh = row["median_lead_time_h_ci"]
+        print(
+            f"  L={row['lookback_h']:>2} {row['split']:<7}{row['scorer']:<8}"
+            f" recall {fmt(row['campaign_recall'], '.3f')} "
+            f"[{fmt(rl, '.3f')}, {fmt(rh, '.3f')}]"
+            f"   median lead {fmt(row['median_lead_time_h'], '.1f')}h "
+            f"[{fmt(ll, '.1f')}, {fmt(lh, '.1f')}]"
+        )
+
+    # --- the oracle ceiling ---------------------------------------------
+    ceiling = [
+        r for r in summary_rows
+        if r["scorer"] == "oracle" and r["test_subset"] == "all"
+    ]
+    print("\n=== ORACLE CEILING (best achievable under the frozen matching rule) ===")
+    for row in ceiling:
+        print(
+            f"  L={row['lookback_h']:>2}h {row['split']:<7} "
+            f"recall {fmt(row['campaign_recall'], '.3f')}  "
+            f"median lead {fmt(row['median_lead_time_h'], '.1f')}h  "
+            f"median normalized {fmt(row['median_normalized_lead_time'], '.3f')}  "
+            f"median frac observed {fmt(row['median_frac_observed_at_detection'], '.3f')}"
+        )
+    print(
+        "  No detector can beat these: the matching rule needs 3 of a "
+        "campaign's accounts before a cluster can hit it."
+    )
+
+    print("\n=== sanity verdict ===")
+    ok = True
+    for lookback in lookbacks:
+        for split in splits:
+            o = next(
+                (r for r in summary_rows if r["scorer"] == "oracle"
+                 and r["split"] == split and r["lookback_h"] == lookback
+                 and r["test_subset"] == "all"), None,
+            )
+            r = next(
+                (x for x in summary_rows if x["scorer"] == "random"
+                 and x["split"] == split and x["lookback_h"] == lookback
+                 and x["test_subset"] == "all"), None,
+            )
+            if not o or not r:
+                continue
+            o_recall = o["campaign_recall"] or 0.0
+            r_recall = r["campaign_recall"] or 0.0
+            verdict = "OK" if o_recall > 0.5 and o_recall > r_recall + 0.2 else "SUSPICIOUS"
+            ok &= verdict == "OK"
+            print(
+                f"  L={lookback:>2} {split:<7} oracle {o_recall:.2f} vs "
+                f"random {r_recall:.2f}  -> {verdict}"
+            )
+    if not ok:
+        print(
+            "  SUSPICIOUS means the evaluation code needs a look before any "
+            "model is trained on top of it."
+        )
+
+    summary_frame = pd.DataFrame(summary_rows)
+    summary_frame.to_csv(out / "evaluate_scorers.csv", index=False)
+    pd.DataFrame(curve_rows).to_csv(out / "evaluate_scorers_tau_curve.csv", index=False)
+    pd.DataFrame(breakdown_rows).to_csv(out / "evaluate_scorers_breakdown.csv", index=False)
+
+    (out / "evaluate_scorers.json").write_text(
+        json.dumps(
+            {
+                "lookbacks": lookbacks,
+                "splits": splits,
+                "seed": args.seed,
+                "bootstrap_resamples": args.bootstrap,
+                "tau_selection": tau_choices,
+                "tau_curve": curve_rows,
+                "summary": summary_rows,
+                "oracle_breakdown": breakdown_rows,
+                "oracle_ceiling": ceiling,
+            },
+            indent=2,
+            default=str,
+        ),
+        encoding="utf-8",
+    )
+
+    (out / "evaluate_scorers.md").write_text(
+        "\n".join(
+            [
+                "# Sanity scorers on the full dataset",
+                "",
+                "The oracle scores each edge with its true label; random scores",
+                "uniformly. They validate the evaluation code before any model",
+                "exists to blame for a bad number.",
+                "",
+                f"- seed: {args.seed}",
+                f"- lookbacks: {lookbacks}",
+                f"- bootstrap resamples: {args.bootstrap}",
+                "",
+                "## How tau was chosen",
+                "",
+                "On **validation only**, maximising campaign-level F1, ties broken",
+                "toward the lower tau. The oracle's scores are 0/1, so any tau in",
+                "(0, 1] is equivalent for it; it is selected the same way anyway so",
+                "both scorers are treated identically.",
+                "",
+                _markdown_table(pd.DataFrame(tau_choices)),
+                "",
+                "## Precision / recall vs tau (validation)",
+                "",
+                _markdown_table(pd.DataFrame(curve_rows)),
+                "",
+                "## Results",
+                "",
+                _markdown_table(summary_frame),
+                "",
+                "## Oracle ceiling",
+                "",
+                "The best lead time achievable under the frozen matching rule:",
+                "no detector can hit a campaign before three of its accounts are",
+                "visible.",
+                "",
+                _markdown_table(pd.DataFrame(ceiling)),
+                "",
+                "## Oracle breakdown by base_type and group",
+                "",
+                _markdown_table(pd.DataFrame(breakdown_rows)),
+                "",
+                "## Timing",
+                "",
+                steps_markdown(),
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    print(f"\nWrote {out / 'evaluate_scorers.md'} (+ .json, .csv, tau curve, breakdown)")
+    return 0 if ok else 1
+
+
+def command_make_sample(args: argparse.Namespace) -> int:
+    """Build the 1% development sample from the full data (runs on Kaggle).
+
+    Keeps every transaction named in the pattern file plus a seeded random
+    1% of the rest, and copies the pattern file unchanged. Download the two
+    files into backend/data/sample/ afterwards.
+    """
+    sys.path.insert(0, str(BACKEND / "scripts"))
+    from make_sample import build_sample
+
+    from fraudcamp import load_data
+
+    out = Path(args.out)
+    out.mkdir(parents=True, exist_ok=True)
+    config = load_data.load_config(Path(args.config))
+    trans_csv = load_data.resolve_path(Path(args.config), config["data"]["trans_csv"])
+    patterns_txt = load_data.resolve_path(Path(args.config), config["data"]["patterns_txt"])
+
+    with step("build the 1% sample"):
+        written = build_sample(trans_csv, patterns_txt, out)
+    for path in written:
+        print(f"  {path}: {path.stat().st_size / (1024 * 1024):,.2f} MB")
+    print("\nDownload both files into backend/data/sample/.")
+    return 0
+
+
 # --------------------------------------------------------------------------
 # not yet implemented
 # --------------------------------------------------------------------------
@@ -833,7 +1150,10 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument(
         "command",
-        choices=["verify", "pipeline", "features-smoke", "train", "evaluate"],
+        choices=[
+            "verify", "pipeline", "features-smoke", "evaluate-scorers",
+            "make-sample", "train", "evaluate",
+        ],
     )
     parser.add_argument(
         "--config",
@@ -845,12 +1165,31 @@ def main() -> int:
         default=str(DEFAULT_OUT),
         help="directory for reports and archives (default: /kaggle/working)",
     )
+    parser.add_argument(
+        "--splits", default="val,test,stress",
+        help="evaluate-scorers: horizons to evaluate (default: val,test,stress)",
+    )
+    parser.add_argument(
+        "--lookbacks", default="",
+        help="evaluate-scorers: comma-separated lookbacks (default: the candidates)",
+    )
+    parser.add_argument(
+        "--tau-grid", default="",
+        help="evaluate-scorers: comma-separated taus to sweep on validation",
+    )
+    parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument(
+        "--bootstrap", type=int, default=1000,
+        help="bootstrap resamples for confidence intervals",
+    )
     args = parser.parse_args()
 
     handlers = {
         "verify": command_verify,
         "pipeline": command_pipeline,
         "features-smoke": command_features_smoke,
+        "evaluate-scorers": command_evaluate_scorers,
+        "make-sample": command_make_sample,
         "train": command_not_yet,
         "evaluate": command_not_yet,
     }

@@ -60,7 +60,7 @@ class EvaluationResult:
 
 
 def _lead_time(
-    campaign: pd.Series, t: pd.Timestamp, campaign_txn_times: np.ndarray
+    campaign, t: pd.Timestamp, campaign_txn_times: np.ndarray
 ) -> tuple[float, float | None, float]:
     """Lead time in the three frozen forms, measured against true completion."""
     end = pd.Timestamp(campaign["end"])
@@ -98,6 +98,13 @@ def evaluate_split(
 
     campaign_splits = dict(zip(camp["campaign_id"], camp["split"]))
     account_index = cluster_tools.build_account_index(accounts_by_campaign)
+    # Looked up once per hit inside the detection loop, so a dict rather
+    # than a dataframe filter: the filter is O(campaigns) per hit and the
+    # full data produces thousands of hits.
+    deadlines = {
+        int(cid): pd.Timestamp(deadline)
+        for cid, deadline in zip(camp["campaign_id"], camp["deadline"])
+    }
 
     # accounts touching laundering that belongs to no campaign - needed for
     # the ambiguous classification
@@ -150,8 +157,7 @@ def evaluate_split(
                     # first detection wins, and only if it beats the deadline
                     if cid in first_detection:
                         continue
-                    deadline = pd.Timestamp(camp.loc[camp["campaign_id"] == cid, "deadline"].iloc[0])
-                    if t <= deadline:
+                    if t <= deadlines[cid]:
                         first_detection[cid] = t
 
         result.n_clusters += len(found)
@@ -170,7 +176,6 @@ def evaluate_split(
 
     for row in eligible.itertuples():
         cid = int(row.campaign_id)
-        campaign = eligible[eligible["campaign_id"] == cid].iloc[0]
         t = first_detection.get(cid)
         if t is None:
             result.outcomes.append(
@@ -186,7 +191,11 @@ def evaluate_split(
             )
             continue
 
-        lead_h, normalized, frac = _lead_time(campaign, t, txn_times.get(cid, np.array([])))
+        lead_h, normalized, frac = _lead_time(
+            {"end": row.end, "duration_h": row.duration_h, "n_txn": row.n_txn},
+            t,
+            txn_times.get(cid, np.array([])),
+        )
         result.outcomes.append(
             CampaignOutcome(
                 campaign_id=cid, split=row.split, base_type=row.base_type,
@@ -287,6 +296,79 @@ def summarize(
         "median_normalized_lead_time": _median(normalized),
         "median_frac_observed_at_detection": _median(observed),
     }
+
+
+def campaign_f1(result: EvaluationResult, subset: str = "all") -> dict:
+    """Campaign-level precision, recall and F1, without the bootstrap.
+
+    Used for tau selection, where the statistic is recomputed for every
+    candidate threshold and a 1000-sample bootstrap each time would dominate
+    the runtime.
+    """
+    keep = SUBSET_FILTERS[subset]
+    outcomes = [o for o in result.outcomes if keep(o)]
+    detected = [o for o in outcomes if o.detected]
+
+    recall = len(detected) / len(outcomes) if outcomes else 0.0
+    denominator = result.n_hits_clusters + result.n_false_alarms
+    precision = result.n_hits_clusters / denominator if denominator else 0.0
+    f1 = (
+        2 * precision * recall / (precision + recall)
+        if (precision + recall) > 0
+        else 0.0
+    )
+    return {
+        "campaign_precision": precision,
+        "campaign_recall": recall,
+        "campaign_f1": f1,
+        "hits": result.n_hits_clusters,
+        "false_alarms": result.n_false_alarms,
+        "other_split_hits": result.n_other_split_hits,
+        "ambiguous": result.n_ambiguous,
+        "n_campaigns": len(outcomes),
+        "n_detected": len(detected),
+    }
+
+
+#: Default thresholds swept when choosing tau. Deliberately weighted toward
+#: the high end: a low tau keeps most of a one-to-two-million-edge window,
+#: and clustering cost scales with the edges kept, so a uniform grid spends
+#: almost all its time in the region no detector would choose.
+DEFAULT_TAU_GRID = (0.5, 0.75, 0.9, 0.95, 0.99)
+
+
+def select_tau(
+    full_df: pd.DataFrame,
+    camp: pd.DataFrame,
+    pattern_df: pd.DataFrame,
+    accounts_by_campaign: dict[int, tuple[str, ...]],
+    scorer,
+    tau_grid=DEFAULT_TAU_GRID,
+    lookback_h: int = constants.DEFAULT_LOOKBACK_H,
+    seed: int = 0,
+    scorer_name: str = "custom",
+) -> tuple[float, list[dict]]:
+    """Choose tau on **validation only**, maximising campaign-level F1.
+
+    Returns the chosen tau and the full precision/recall-vs-tau curve, which
+    the frozen design requires to be saved alongside it. Ties are broken
+    toward the lower tau, which is the more sensitive detector.
+
+    Validation is the only split touched here, so the threshold carries no
+    information from test or stress.
+    """
+    curve: list[dict] = []
+    for tau in tau_grid:
+        result = evaluate_split(
+            full_df, camp, pattern_df, accounts_by_campaign,
+            split="val", scorer=scorer, tau=float(tau),
+            lookback_h=lookback_h, seed=seed, scorer_name=scorer_name,
+        )
+        row = {"tau": float(tau), "lookback_h": lookback_h, **campaign_f1(result)}
+        curve.append(row)
+
+    best = max(curve, key=lambda row: (row["campaign_f1"], -row["tau"]))
+    return best["tau"], curve
 
 
 def summarize_by(result: EvaluationResult, attribute: str) -> list[dict]:

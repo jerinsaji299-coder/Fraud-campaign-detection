@@ -433,6 +433,112 @@ def test_summarize_by_group_and_base_type():
         assert rows[0]["campaign_recall"] == 1.0
 
 
+def test_scipy_and_python_component_labellings_agree():
+    """`extract_clusters` uses scipy when available. The two implementations
+    must partition the graph identically, or results would depend on which
+    machine ran them."""
+    import pandas as pd
+
+    rng = np.random.default_rng(3)
+    n = 4000
+    accounts = [f"acct{i}" for i in range(1200)]
+    src = [accounts[i] for i in rng.integers(0, len(accounts), n)]
+    dst = [accounts[i] for i in rng.integers(0, len(accounts), n)]
+    scores = rng.random(n)
+
+    keep = np.flatnonzero(scores >= 0.5)
+    kept_src = np.asarray(src, dtype=object)[keep]
+    kept_dst = np.asarray(dst, dtype=object)[keep]
+    codes, uniques = pd.factorize(np.concatenate([kept_src, kept_dst]), sort=True)
+    half = keep.size
+
+    def partition(labels):
+        groups: dict[int, set[str]] = {}
+        for index, label in enumerate(labels):
+            groups.setdefault(int(label), set()).add(uniques[index])
+        return {frozenset(members) for members in groups.values()}
+
+    try:
+        fast = ct._components_scipy(codes[:half], codes[half:], len(uniques))
+    except ImportError:
+        pytest.skip("scipy not installed")
+    slow = ct._components_python(codes[:half], codes[half:], len(uniques))
+    assert partition(fast) == partition(slow)
+
+
+# --- tau selection ---------------------------------------------------------
+
+
+def _val_world():
+    """A validation campaign plus background, for tau selection."""
+    return _world(
+        [
+            ("2022-09-05 07:00", "1_A", "1_B", 0),
+            ("2022-09-05 08:00", "1_B", "1_C", 0),
+            ("2022-09-05 09:00", "1_C", "1_D", 0),
+            ("2022-09-06 20:00", "1_D", "1_A", 0),
+        ],
+        background_rows=[
+            (f"2022-09-05 {7 + (i % 10):02d}:{i % 60:02d}", f"5_X{i}", f"5_X{i + 1}", None)
+            for i in range(40)
+        ],
+        split="val",
+    )
+
+
+def test_select_tau_uses_validation_only_and_returns_the_curve():
+    full_df, camp, pattern_df, accounts = _val_world()
+    tau, curve = evaluation.select_tau(
+        full_df, camp, pattern_df, accounts, _oracle,
+        tau_grid=(0.25, 0.5, 0.75), lookback_h=24, scorer_name="oracle",
+    )
+    assert [row["tau"] for row in curve] == [0.25, 0.5, 0.75]
+    assert all("campaign_f1" in row for row in curve)
+    # the oracle's scores are 0/1, so every tau in (0, 1] is equivalent and
+    # the tie-break picks the lowest
+    assert tau == 0.25
+
+
+def test_select_tau_prefers_the_higher_f1():
+    """A scorer that only separates above 0.6 must select a tau above it."""
+    full_df, camp, pattern_df, accounts = _val_world()
+
+    def stepped(window, t):
+        # laundering edges score 0.8; everything else 0.7, so tau <= 0.7
+        # drags in the whole background and destroys precision
+        labels = window["Is Laundering"].to_numpy()
+        return np.where(labels == 1, 0.8, 0.7)
+
+    tau, curve = evaluation.select_tau(
+        full_df, camp, pattern_df, accounts, stepped,
+        tau_grid=(0.5, 0.75), lookback_h=24, scorer_name="stepped",
+    )
+    by_tau = {row["tau"]: row for row in curve}
+    assert by_tau[0.75]["campaign_f1"] >= by_tau[0.5]["campaign_f1"]
+    assert tau == 0.75
+
+
+def test_campaign_f1_is_zero_when_nothing_is_found():
+    full_df, camp, pattern_df, accounts = _val_world()
+
+    def nothing(window, t):
+        return np.zeros(len(window))
+
+    result = evaluation.evaluate_split(
+        full_df, camp, pattern_df, accounts, "val", nothing,
+        tau=0.5, lookback_h=24, scorer_name="none",
+    )
+    metrics = evaluation.campaign_f1(result)
+    assert metrics["campaign_recall"] == 0.0
+    assert metrics["campaign_f1"] == 0.0
+
+
+def test_default_tau_grid_is_ordered_and_within_range():
+    grid = evaluation.DEFAULT_TAU_GRID
+    assert list(grid) == sorted(grid)
+    assert all(0 < tau <= 1 for tau in grid)
+
+
 def test_scorers_reject_unknown_names():
     with pytest.raises(ValueError, match="unknown sanity scorer"):
         scorers.score_window("magic", np.array([0, 1]))
