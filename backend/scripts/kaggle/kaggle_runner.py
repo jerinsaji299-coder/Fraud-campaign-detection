@@ -487,7 +487,7 @@ def command_features_smoke(args: argparse.Namespace) -> int:
             )
             continue
 
-        for lookback in constants.LOOKBACKS_H:
+        for lookback in constants.MEASURED_LOOKBACKS_H:
             started = time.perf_counter()
             window = windows.build_window(full_df, t, lookback_h=lookback)
             slice_s = time.perf_counter() - started
@@ -496,7 +496,9 @@ def command_features_smoke(args: argparse.Namespace) -> int:
                 rows.append(
                     {
                         "split": split, "day": day_kind, "t": t_text,
-                        "lookback_h": lookback, "n_edges": 0, "n_accounts": 0,
+                        "lookback_h": lookback,
+                        "excluded": lookback in constants.EXCLUDED_LOOKBACKS_H,
+                        "n_edges": 0, "n_accounts": 0,
                         "n_laundering": 0, "slice_s": round(slice_s, 2),
                         "build_s": 0.0, "tensors_mb": 0.0, "xgb_matrix_mb": 0.0,
                         "peak_rss_mb": memory_mb()[0],
@@ -521,6 +523,7 @@ def command_features_smoke(args: argparse.Namespace) -> int:
                     "day": day_kind,
                     "t": t_text,
                     "lookback_h": lookback,
+                    "excluded": lookback in constants.EXCLUDED_LOOKBACKS_H,
                     "n_edges": wf.n_edges,
                     "n_accounts": wf.n_nodes,
                     "n_laundering": int(wf.labels.sum()),
@@ -537,11 +540,12 @@ def command_features_smoke(args: argparse.Namespace) -> int:
                     "peak_rss_mb": round(memory, 0) if memory else None,
                 }
             )
+            marker = "  [EXCLUDED]" if lookback in constants.EXCLUDED_LOOKBACKS_H else ""
             print(
                 f"  {split:<5} L={lookback:<2} {t_text}  "
                 f"edges={wf.n_edges:>9,}  accounts={wf.n_nodes:>8,}  "
                 f"laundering={int(wf.labels.sum()):>5,}  "
-                f"build={build_s:>5.1f}s  tensors={tensors / 1e6:>7.1f} MB",
+                f"build={build_s:>5.1f}s  tensors={tensors / 1e6:>7.1f} MB{marker}",
                 flush=True,
             )
             del wf, window
@@ -552,27 +556,46 @@ def command_features_smoke(args: argparse.Namespace) -> int:
         return 1
 
     table = pd.DataFrame(rows)
-    largest = table.loc[table["n_edges"].idxmax()]
-    gine = estimate_gine_memory_mb(
-        n_nodes=int(largest["n_accounts"]),
-        n_edges=int(largest["n_edges"]),
-        d_node=d_node,
-        d_edge=d_edge,
+
+    def _estimate_for(subset, label: str):
+        """Largest window in `subset`, and the GPU memory it would need."""
+        if subset.empty or subset["n_edges"].max() == 0:
+            return None, None
+        row = subset.loc[subset["n_edges"].idxmax()]
+        estimate = estimate_gine_memory_mb(
+            n_nodes=int(row["n_accounts"]),
+            n_edges=int(row["n_edges"]),
+            d_node=d_node,
+            d_edge=d_edge,
+        )
+        print(f"\n=== largest {label} window ===")
+        print(
+            f"  {row['t']} L={row['lookback_h']}h ({row['split']}): "
+            f"{int(row['n_edges']):,} edges, {int(row['n_accounts']):,} accounts"
+        )
+        print(f"  estimated full-batch GPU memory, 3-layer GINEConv, hidden 64:")
+        for key, value in estimate.items():
+            print(f"    {key.replace('_', ' ')}: {value:,.1f} MB")
+        return row, estimate
+
+    # The estimate that matters is for the lookbacks still in contention.
+    candidates = table[~table["excluded"]]
+    largest, gine = _estimate_for(candidates, "candidate (L in %s)" % (constants.LOOKBACKS_H,))
+
+    excluded_rows = table[table["excluded"]]
+    largest_excluded, gine_excluded = _estimate_for(
+        excluded_rows, "EXCLUDED (L in %s, measured for the record only)" % (constants.EXCLUDED_LOOKBACKS_H,)
     )
 
-    print("\n=== largest window ===")
     print(
-        f"  {largest['t']} L={largest['lookback_h']}h ({largest['split']}): "
-        f"{int(largest['n_edges']):,} edges, {int(largest['n_accounts']):,} accounts"
-    )
-    print("\n=== estimated full-batch GPU memory, 3-layer GINEConv, hidden 64 ===")
-    for key, value in gine.items():
-        print(f"  {key.replace('_', ' ')}: {value:,.1f} MB")
-    print(
-        "  (an estimate from tensor shapes, not a measurement; if this "
+        "\n  (estimates from tensor shapes, not measurements; if a candidate "
         "approaches the GPU's capacity, use neighbour sampling instead of "
         "full-batch, which the Phase 3 design already permits)"
     )
+
+    if largest is None:
+        print("No candidate windows had any edges; nothing to estimate.", file=sys.stderr)
+        return 1
 
     csv_path = out / "features_smoke.csv"
     table.to_csv(csv_path, index=False)
@@ -587,7 +610,10 @@ def command_features_smoke(args: argparse.Namespace) -> int:
                 "spec_fitted_on": spec.fitted_on,
                 "windows": rows,
                 "largest_window": {k: (int(v) if isinstance(v, (int, float)) and k in ("n_edges", "n_accounts") else v) for k, v in largest.to_dict().items()},
+                "lookback_candidates": list(constants.LOOKBACKS_H),
+                "lookbacks_excluded": list(constants.EXCLUDED_LOOKBACKS_H),
                 "gine_estimate_mb": gine,
+                "gine_estimate_excluded_mb": gine_excluded,
             },
             indent=2,
             default=str,
@@ -623,7 +649,11 @@ def command_features_smoke(args: argparse.Namespace) -> int:
                 "",
                 _markdown_table(table),
                 "",
-                "## Largest window",
+                "## Largest candidate window",
+                "",
+                f"Lookback candidates: {list(constants.LOOKBACKS_H)}. "
+                f"Excluded, measured for the record only: "
+                f"{list(constants.EXCLUDED_LOOKBACKS_H)}.",
                 "",
                 f"`{largest['t']}` at L={largest['lookback_h']}h "
                 f"({largest['split']}): {int(largest['n_edges']):,} edges, "
@@ -634,6 +664,17 @@ def command_features_smoke(args: argparse.Namespace) -> int:
                 *(f"- {k.replace('_', ' ')}: {v:,.1f} MB" for k, v in gine.items()),
                 "",
                 "Estimated from tensor shapes, not measured.",
+                "",
+                *(
+                    [
+                        "For the record, the largest EXCLUDED (L=72) window "
+                        f"`{largest_excluded['t']}` with "
+                        f"{int(largest_excluded['n_edges']):,} edges would need "
+                        f"{gine_excluded['recommended_headroom_mb']:,.0f} MB.",
+                    ]
+                    if largest_excluded is not None
+                    else []
+                ),
                 "",
                 "## Timing",
                 "",

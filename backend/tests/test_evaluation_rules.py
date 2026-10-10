@@ -101,12 +101,52 @@ def test_no_evaluation_time_exceeds_the_cutoff():
         assert max(times) <= pd.Timestamp(constants.CUTOFF)
 
 
-def test_stress_horizon_is_not_silently_invented():
-    """Rule 1 mentions stress evaluation, but no stress horizon has been
-    specified. Guessing one would freeze a research definition by accident,
-    so asking for it raises with a pointer to the open question."""
-    with pytest.raises(ValueError, match="deliberately unspecified"):
-        windows.evaluation_horizon("stress")
+def test_stress_horizon_runs_from_sept_8_to_the_cutoff():
+    """Frozen 2026-10-10. Stress campaigns start Sept 8-10, so the horizon
+    opens at Sept 8 and runs to the cutoff, capped per campaign by its own
+    deadline."""
+    start, end = windows.evaluation_horizon("stress")
+    assert start == pd.Timestamp("2022-09-08 00:00")
+    assert end == pd.Timestamp(constants.CUTOFF)
+
+
+def test_stress_horizon_boundaries_are_exclusive_start_inclusive_end():
+    times = windows.evaluation_detection_times("stress")
+    assert pd.Timestamp("2022-09-08 00:00") not in times  # exclusive start
+    assert times[0] == pd.Timestamp("2022-09-08 06:00")
+    assert times[-1] == pd.Timestamp(constants.CUTOFF)  # inclusive end
+    assert len(times) == 12
+
+
+def test_stress_horizon_starts_where_the_validation_horizon_ends():
+    """The validation horizon closes at Sept 8 00:00 and the stress horizon
+    opens there, so the two abut without overlapping."""
+    _, val_end = windows.evaluation_horizon("val")
+    stress_start, _ = windows.evaluation_horizon("stress")
+    assert val_end == stress_start
+    val = set(windows.evaluation_detection_times("val"))
+    stress = set(windows.evaluation_detection_times("stress"))
+    assert not (val & stress)
+
+
+def test_stress_horizon_is_contained_in_the_test_horizon():
+    """Stress runs inside the test window in time, which is why rule 1
+    matters here: a cluster at a shared detection time can hit a test
+    campaign while stress is being scored, or vice versa."""
+    stress = set(windows.evaluation_detection_times("stress"))
+    test = set(windows.evaluation_detection_times("test"))
+    assert stress < test
+
+
+def test_every_split_with_campaigns_to_score_has_a_horizon():
+    assert set(constants.EVALUATION_HORIZONS) == {"val", "test", "stress"}
+
+
+def test_training_has_no_evaluation_horizon():
+    """Training is scored on validation, so asking for its horizon is a
+    mistake rather than a missing definition."""
+    with pytest.raises(ValueError, match="no evaluation horizon defined"):
+        windows.evaluation_horizon("train")
 
 
 # --- Rule 3: full-history training windows --------------------------------
@@ -131,12 +171,51 @@ def test_training_times_start_one_full_lookback_after_the_data(lookback, expecte
 
 def test_usable_training_time_counts():
     """Recorded explicitly: a longer lookback costs training windows, and at
-    L=72 only five remain out of the sixteen on the grid."""
+    L=72 only five remain out of the sixteen on the grid. That count is one
+    of the three reasons L=72 was dropped as a candidate."""
     assert windows.usable_training_times_per_lookback() == {24: 13, 48: 9, 72: 5}
     assert len(windows.detection_times_for_split("train")) == 16
 
 
-@pytest.mark.parametrize("lookback", constants.LOOKBACKS_H)
+# --- lookback candidates (frozen 2026-10-10) -------------------------------
+
+
+def test_lookback_candidates_are_24_and_48():
+    assert constants.LOOKBACKS_H == (24, 48)
+    assert constants.DEFAULT_LOOKBACK_H in constants.LOOKBACKS_H
+
+
+def test_72_is_excluded_but_still_measured():
+    """L=72 is dropped as a candidate yet stays in the measured set, so
+    `features-smoke` keeps reporting it and the reason for dropping it stays
+    on the record instead of living only in prose."""
+    assert constants.EXCLUDED_LOOKBACKS_H == (72,)
+    assert 72 not in constants.LOOKBACKS_H
+    assert 72 in constants.MEASURED_LOOKBACKS_H
+
+
+def test_measured_lookbacks_are_candidates_plus_excluded():
+    assert set(constants.MEASURED_LOOKBACKS_H) == set(constants.LOOKBACKS_H) | set(
+        constants.EXCLUDED_LOOKBACKS_H
+    )
+    # no lookback may be both a candidate and excluded
+    assert not set(constants.LOOKBACKS_H) & set(constants.EXCLUDED_LOOKBACKS_H)
+
+
+def test_every_candidate_lookback_has_a_workable_number_of_training_windows():
+    """The guard behind the decision: a candidate must leave enough
+    full-history training detection times to train on. L=72's five is what
+    disqualified it."""
+    usable = windows.usable_training_times_per_lookback()
+    for lookback in constants.LOOKBACKS_H:
+        assert usable[lookback] >= 9, (
+            f"L={lookback} leaves only {usable[lookback]} training detection times"
+        )
+    for lookback in constants.EXCLUDED_LOOKBACKS_H:
+        assert usable[lookback] < 9
+
+
+@pytest.mark.parametrize("lookback", constants.MEASURED_LOOKBACKS_H)
 def test_every_training_window_has_its_full_lookback(lookback):
     """The property rule 3 exists to guarantee."""
     for t in windows.training_detection_times(lookback):
@@ -145,7 +224,7 @@ def test_every_training_window_has_its_full_lookback(lookback):
         )
 
 
-@pytest.mark.parametrize("lookback", constants.LOOKBACKS_H)
+@pytest.mark.parametrize("lookback", constants.MEASURED_LOOKBACKS_H)
 def test_the_unfiltered_grid_would_violate_rule_3(lookback):
     """The complement: without the filter, early training times give short
     windows. This is what rule 3 removes, and it demonstrates the filter is
@@ -156,7 +235,7 @@ def test_the_unfiltered_grid_would_violate_rule_3(lookback):
     assert set(windows.training_detection_times(lookback)) == set(unfiltered) - set(short)
 
 
-@pytest.mark.parametrize("lookback", constants.LOOKBACKS_H)
+@pytest.mark.parametrize("lookback", constants.MEASURED_LOOKBACKS_H)
 def test_evaluation_times_are_unaffected_by_rule_3(lookback):
     """Rule 3 is a training-only filter; every evaluation time is days past
     the start of the data and so always has its full lookback."""

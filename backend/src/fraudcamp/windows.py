@@ -101,7 +101,7 @@ def training_detection_times(
 
 
 def usable_training_times_per_lookback(
-    lookbacks: tuple[int, ...] = constants.LOOKBACKS_H,
+    lookbacks: tuple[int, ...] = constants.MEASURED_LOOKBACKS_H,
 ) -> dict[int, int]:
     """How many training detection times survive rule 3, per lookback.
 
@@ -118,8 +118,7 @@ def evaluation_horizon(split: str) -> tuple[pd.Timestamp, pd.Timestamp]:
         known = sorted(constants.EVALUATION_HORIZONS)
         raise ValueError(
             f"no evaluation horizon defined for split {split!r}; defined: {known}. "
-            "The stress horizon is deliberately unspecified - see README "
-            "'Known limitations and open questions'."
+            "Training has no evaluation horizon: it is scored on validation."
         )
     start, end = constants.EVALUATION_HORIZONS[split]
     return pd.Timestamp(start), pd.Timestamp(end)

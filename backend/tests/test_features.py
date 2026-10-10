@@ -286,7 +286,7 @@ def test_training_windows_contain_no_transaction_from_sept_5_onward(train_window
         )
 
 
-@pytest.mark.parametrize("lookback", constants.LOOKBACKS_H)
+@pytest.mark.parametrize("lookback", constants.MEASURED_LOOKBACKS_H)
 def test_no_lookback_reaches_past_the_detection_time(full_df, spec, lookback):
     t = pd.Timestamp("2022-09-07 00:00")
     window = windows.build_window(full_df, t, lookback_h=lookback)

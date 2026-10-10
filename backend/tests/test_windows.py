@@ -75,7 +75,7 @@ def test_window_excludes_its_own_detection_time(mini_dataset):
 def test_window_respects_the_lookback(mini_dataset):
     df = pipeline.build(mini_dataset).full_df
     t = pd.Timestamp("2022-09-03 00:00")
-    for lookback in constants.LOOKBACKS_H:
+    for lookback in constants.MEASURED_LOOKBACKS_H:
         window = windows.window_slice(df, t, lookback_h=lookback)
         lower = t - pd.Timedelta(hours=lookback)
         assert (window["ts"] >= lower).all()

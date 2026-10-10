@@ -311,8 +311,11 @@ excluded because its window is empty by construction.
 
 **Causal windows.** At detection time `t` a model sees only transactions
 with `t - L <= timestamp < t`. The upper bound is strict: a transaction
-stamped exactly `t` is already the future. Lookback `L ∈ {24, 48, 72}`
-hours, chosen on validation; development uses 24.
+stamped exactly `t` is already the future. Lookback `L ∈ {24, 48}` hours,
+chosen on validation; development uses 24. **L = 72 was dropped** on
+2026-10-10 (see Decision log); `features-smoke` still measures it once and
+labels it `[EXCLUDED]`, so the evidence for dropping it stays on the
+record.
 
 **Detection-time splits** (distinct from the campaign splits, which are
 about when a campaign *starts*): train `t <= 2022-09-05 00:00`, val
@@ -348,13 +351,16 @@ property test, not a convention — see Testing.
 **Expected GPU constraint (estimated, pending the `features-smoke` run).**
 From tensor shapes, a 3-layer GINEConv with hidden 64 trained **full-batch**
 needs roughly: ~2.3 GB on a quiet 24h window (210k edges), ~10 GB on a busy
-24h window (1.1M edges), and ~17–19 GB at L = 48/72 on the busiest days
-(1.9–2.1M edges). Kaggle offers 16 GB GPUs (T4 ×2, or P100), so **full-batch
-training is feasible only at L = 24, and marginal even there**; L = 48 and 72
-will need the neighbour sampling the design already permits ("train with
+24h window (1.1M edges), ~16.6 GB at L = 48 on the busiest days (1.9M
+edges), and ~18.6 GB at L = 72 (2.1M edges). Kaggle offers 16 GB GPUs
+(T4 ×2, or P100), so **full-batch training is feasible at L = 24 and
+marginal at L = 48 on the busiest windows**; L = 48 will likely need the
+neighbour sampling the design already permits ("train with
 LinkNeighborLoader-style sampling if full windows do not fit in GPU
-memory"). These are estimates, not measurements — `features-smoke` on the
-full data replaces them with real figures.
+memory"). The L = 72 figure is one of the reasons that lookback was dropped.
+These are estimates, not measurements — `features-smoke` on the full data
+replaces them with real figures, reporting the largest **candidate** window
+separately from the excluded one.
 
 ### Evaluation rules (frozen 2026-10-10, implemented in stage 3.2)
 
@@ -368,15 +374,27 @@ hitting a campaign that falls outside every split (one starting on/after the
 cutoff) is also an other-split hit. The outcome vocabulary is therefore
 `hit`, `other_split_hit`, `ambiguous`, `false_alarm`.
 
-**Rule 2 — validation detection horizon.** Validation campaigns are
-evaluated over detection times in `(2022-09-05 00:00, 2022-09-08 00:00]`,
-still capped by each campaign's own deadline. Validation campaigns start on
-Sept 5 but need until Sept 8 to run their course, so the horizon is
-deliberately longer than the Sept 5–6 *training-data* split and overlaps the
-test horizon (8 shared detection times, Sept 6 06:00 → Sept 8 00:00). Only
-**validation-campaign labels** inform tau selection, so the overlap leaks
-nothing into test. Test evaluation is unchanged:
-`(2022-09-06 00:00, CUTOFF]`.
+**Rule 2 — evaluation horizons.** Which detection times a split's campaigns
+are scored over, each `(exclusive start, inclusive end]` and additionally
+capped per campaign by its own `deadline`:
+
+| Split | Horizon | Detection times |
+|---|---|---|
+| val | `(2022-09-05 00:00, 2022-09-08 00:00]` | 12 |
+| test | `(2022-09-06 00:00, CUTOFF]` | 20 |
+| stress | `(2022-09-08 00:00, CUTOFF]` | 12 |
+
+Validation campaigns start on Sept 5 but need until Sept 8 to run their
+course, so the validation horizon is deliberately longer than the Sept 5–6
+*training-data* split and overlaps the test horizon (8 shared times, Sept 6
+06:00 → Sept 8 00:00). Only **validation-campaign labels** inform tau
+selection, so the overlap leaks nothing into test. The stress horizon
+(frozen 2026-10-10) begins exactly where validation's ends, so those two
+abut without overlapping, and sits strictly inside the test horizon — which
+is precisely why rule 1 matters there: at a shared detection time a cluster
+can hit a test campaign while stress is being scored, and that must count as
+an other-split hit rather than a false alarm. Training has no evaluation
+horizon; it is scored on validation, and asking for one raises.
 
 **Rule 3 — full-history training windows.** A training detection time is
 used only when `t - L >= DATA_START`, so no training window is silently
@@ -388,11 +406,12 @@ all begin days after the data starts. The cost is training windows:
 |---|---:|---:|---|
 | 24h | 13 | 3 | 2022-09-02 00:00 |
 | 48h | 9 | 7 | 2022-09-03 00:00 |
-| 72h | **5** | 11 | 2022-09-04 00:00 |
+| 72h (excluded) | **5** | 11 | 2022-09-04 00:00 |
 
-L = 72 leaving only five training detection times is a real constraint on
-that option, and is part of what choosing L on validation has to weigh.
-`features-smoke` reports these counts on every run.
+L = 72 leaving only five training detection times was one of the three
+reasons it was dropped as a candidate (see Decision log).
+`features-smoke` reports these counts on every run, for the excluded
+lookback too.
 
 **Scaling.** Mean/std standardisation of the continuous columns only
 (one-hot, cyclical and binary features are left alone), fitted on training
@@ -421,6 +440,8 @@ transactions.
 | 2026-10-07 | Phase 3 gate: verify every Phase 2 regression number on the full data **before** any model work | The 24 full-data tests have never run — the dataset only exists on Kaggle. Every Phase 3 result would silently inherit any discrepancy in the campaign table, splits or group assignment, and a model built on wrong ground truth is worse than no model | user instruction, stage 3.0 |
 | 2026-10-07 | `pandas>=2.2` pinned in requirements.txt | `campaigns.build_campaign_table` passes `include_groups=` to `groupby.apply`, which pandas added in 2.2 and older versions reject with a `TypeError`. Unpinned, a Kaggle image with pandas 2.1 would fail deep in the pipeline with a confusing error | implementation, stage 3.0 |
 | 2026-10-08 | Every collection is sorted before any seeded random step. **Bug:** a campaign's accounts were held in a Python `set`, and per-process string-hash randomisation made set iteration order differ between runs, so the seeded search followed a different trajectory each process — same seed, different assignment. **Evidence:** two Kaggle runs of the same pipeline disagreed on the unfragmentable count (3 vs 2); reproduced locally by varying `PYTHONHASHSEED`. **Fix:** accounts are now sorted tuples, and `sorted()` is applied at every point where order reaches the RNG. The algorithm, targets, iteration count and seeds are unchanged — only enumeration order is pinned, so no frozen definition moved. **Why now:** Phase 3 is centralized-only and never touches these assignments, but Phase 4-5 *is* the visibility sweep and the `unfragmentable` label defines the control group; fixing it after results existed would have invalidated them | `tests/test_determinism.py`, stage 3.0 follow-up |
+| 2026-10-10 | Stress evaluation horizon frozen at `(2022-09-08 00:00, CUTOFF]`, capped per campaign by its deadline, with other-split hits applying as in rule 1 | Stress campaigns start Sept 8-10, so the horizon opens where the validation horizon closes: the two abut without overlapping, and stress sits strictly inside the test horizon. Previously left unspecified and raising rather than guessed | user decision, 2026-10-10 |
+| 2026-10-10 | Lookback candidates reduced to **L ∈ {24, 48}**; L = 72 dropped | Three independent reasons: (1) rule 3 leaves only 5 full-history training detection times at L = 72 versus 13 at L = 24, and those 5 windows overlap each other heavily, so they carry far less independent signal than the count suggests; (2) estimated full-batch GINE memory is ~18.6 GB against Kaggle's 16 GB GPUs, so it could not be trained the same way as the other candidates; (3) a 3-day lookback is large relative to a 10-day dataset, making the window a substantial fraction of the whole study period. L = 72 is still measured once by `features-smoke` and labelled `[EXCLUDED]`, so the evidence stays on the record instead of only in prose | user decision, 2026-10-10 |
 | 2026-10-10 | Three evaluation rules frozen: other-split hits counted separately, the validation detection horizon extended to Sept 8, and training restricted to detection times with a full lookback | (1) A cluster that finds a real campaign from another split is neither a success for the split being scored nor a false alarm; counting it either way would misstate precision. (2) Validation campaigns start on Sept 5 but need until Sept 8 to complete, so a horizon ending Sept 6 would score them before they had happened; only validation-campaign labels inform tau, so the overlap with the test horizon leaks nothing. (3) A silently short window would train the model on a distribution it never meets at evaluation time | user decision, 2026-10-10; `tests/test_evaluation_rules.py` |
 | 2026-10-10 | Stage 3.1 feature deviations and interpretations accepted as documented: `__other__` one-hot columns; `log1p` rather than `log`; in-amount from *Amount Received* and out-amount from *Amount Paid*; counterparties and currencies pooled across both directions; scaling applied to continuous columns only; float32 storage with float64 arithmetic; numpy instead of scikit-learn for the scaler | Each is either forced (log(0) is undefined; unseen categories must go somewhere) or an interpretation of wording the design left open, and each is cheaper to keep documented than to re-litigate. scikit-learn still arrives with stage 3.3, where it is actually needed | user approval of the Stage 3.1 review, 2026-10-10 |
 | 2026-10-09 | "Unfragmentable campaigns" pinned at **2**, and the five visibility SHA-256 digests recorded as reference values | Determinism confirmed on Kaggle across 2 independent sessions and 3 separate pipeline processes at commit `55b645e` (Python 3.13.15, pandas 2.3.3): all produced byte-identical visibility files and the same count. That is what makes the number trustworthy — before the fix, runs disagreed (3 vs 2), so the value could not be pinned from a single run. The notebook's exploratory 2 is consistent but was computed without conflict resolution, so it was never sufficient evidence on its own | `docs/reference/visibility_hashes_session1.json`, Verified numbers |
@@ -1219,13 +1240,16 @@ campaign_id)`:
   time being used, so the boundary was never exercised where it matters.
   `test_a_transaction_stamped_exactly_at_t_is_treated_as_future` was added
   to close that, and confirmed to fail under the same injected leak.
-- **Backend evaluation-rule tests** (`test_evaluation_rules.py`, 35 tests)
+- **Backend evaluation-rule tests** (`test_evaluation_rules.py`, 44 tests)
   cover the three rules frozen on 2026-10-10: that a same-split hit is a
   hit and a different-split (or no-split) hit is an `other_split_hit`; that
   the validation horizon runs to Sept 8 with an exclusive start and
   inclusive end, reaches past the Sept 5–6 data split, and overlaps the test
-  horizon by exactly 8 times; that the test horizon is unchanged; that
-  asking for a stress horizon raises rather than inventing one; and that
+  horizon by exactly 8 times; that the test horizon is unchanged; that the
+  stress horizon runs `(Sept 8, CUTOFF]` over 12 times, abuts validation
+  without overlapping it and sits strictly inside test; that training has no
+  horizon and asking raises; that the lookback candidates are exactly
+  {24, 48} with 72 excluded-but-measured and the two sets disjoint; and that
   every training detection time has its full lookback, with the counts
   13 / 9 / 5 pinned for L = 24 / 48 / 72, longer lookbacks giving strict
   subsets, evaluation times unaffected, and the *unfiltered* grid shown to
@@ -1239,6 +1263,8 @@ campaign_id)`:
   | `hit_kind` returns `"hit"` for every match | 7 (`test_a_hit_on_a_different_split_is_an_other_split_hit`, all cases) |
   | validation horizon capped at Sept 6 | 4, incl. the overlap and past-the-split tests |
   | full-lookback filter removed | 8, incl. the pinned 13/9/5 counts |
+  | stress horizon starting Sept 6 instead of Sept 8 | 4, incl. the abuts-validation and inside-test tests |
+  | L = 72 left in as a candidate | 3, incl. the minimum-training-windows guard |
 
 - **Backend determinism tests** (`test_determinism.py`): the visibility build
   must be reproducible from its seed alone. Because one process has one hash
@@ -1316,7 +1342,7 @@ campaign_id)`:
     stubbed in these tests.
 
 **Current pass status (2026-10-08):**
-- Backend: `python -m pytest tests/` from `backend/` → 164 passed, 25
+- Backend: `python -m pytest tests/` from `backend/` → 173 passed, 25
   skipped, 0 failed. The skips are the full-data suite, which needs the
   dataset that only exists on Kaggle; all 24 of its numbers passed there on
   2026-10-08/09.
@@ -1348,14 +1374,6 @@ is the one piece that most warrants a look in a browser before the demo.
 - No model, training, federated-learning or experiment code exists yet. The
   four experimental conditions are defined and the result schema is fixed,
   but nothing has been run, so the project has no findings of any kind.
-- **The stress evaluation horizon is undefined.** Rule 1 states that
-  other-split hits apply to stress evaluation, but no detection horizon has
-  been specified for the stress split (val and test both have one). Rather
-  than guess — which would freeze a research definition by accident —
-  `windows.evaluation_horizon("stress")` raises with a pointer to this note,
-  and a test pins that behaviour. The natural reading by analogy would be
-  `(2022-09-08 00:00, CUTOFF]`, but it needs an explicit decision before
-  stress results are reported. **Open.**
 - Reproducibility is verified for the visibility search but **only within
   one environment**. The reference digests hold for Python 3.13 / pandas
   2.3.3 / the Kaggle image of 2026-10-09; a different pyarrow could change
@@ -1401,6 +1419,26 @@ Tagged points in the repository, newest first. Check one out with
 
 ## Changelog
 
+- **2026-10-10** — Two further decisions frozen. **Stress evaluation
+  horizon** set to `(2022-09-08 00:00, CUTOFF]`, capped per campaign by its
+  deadline, with other-split hits applying as in rule 1; it abuts the
+  validation horizon without overlapping and sits strictly inside the test
+  horizon, both pinned by tests. The previous "raises rather than guess"
+  behaviour and its Known-limitations entry are gone, replaced by nine tests
+  covering the horizon, its boundaries, its relationship to the other two,
+  and that training still has no horizon. **Lookback candidates reduced to
+  L ∈ {24, 48}**, dropping L = 72 for three reasons recorded in the Decision
+  log: only 5 heavily-overlapping full-history training windows under rule 3,
+  ~18.6 GB estimated full-batch GINE memory against 16 GB GPUs, and a 3-day
+  window being large relative to a 10-day dataset. `constants` now separates
+  `LOOKBACKS_H` (candidates) from `EXCLUDED_LOOKBACKS_H` and
+  `MEASURED_LOOKBACKS_H`, so `features-smoke` still measures L = 72 once and
+  labels it `[EXCLUDED]`, and reports the largest **candidate** window's GPU
+  estimate separately from the excluded one. Tests that assert "no lookback
+  we ever build reaches past `t`" now cover the measured set, not just the
+  candidates. Both decisions verified by deliberate violation (a stress
+  horizon starting Sept 6 fails 4 tests; leaving L = 72 as a candidate fails
+  3). Backend: 173 passed, 25 skipped.
 - **2026-10-10** — Stage 3.1 **approved**. Recorded the accepted feature
   deviations and interpretations in the Decision log, and froze three new
   Phase 3 evaluation rules (documented now, mostly implemented in stage

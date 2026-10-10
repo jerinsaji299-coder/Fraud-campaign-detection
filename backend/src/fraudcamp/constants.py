@@ -111,8 +111,17 @@ CONDITIONS = ["isolated", "fedavg_only", "fedavg_embedding", "centralized"]
 
 DATA_START = _dt.datetime(2022, 9, 1, 0, 0)
 
-#: Lookback windows to choose between on validation. Development uses 24h.
-LOOKBACKS_H = (24, 48, 72)
+#: Lookback candidates to choose between on validation. Development uses 24h.
+#: 72h was dropped on 2026-10-10 — see README decision log.
+LOOKBACKS_H = (24, 48)
+
+#: Dropped as a candidate, but still measured once by `features-smoke` so the
+#: reason for dropping it is on the record rather than only in prose.
+EXCLUDED_LOOKBACKS_H = (72,)
+
+#: Everything that gets measured: the candidates plus the excluded ones.
+MEASURED_LOOKBACKS_H = LOOKBACKS_H + EXCLUDED_LOOKBACKS_H
+
 DEFAULT_LOOKBACK_H = 24
 
 # Detection-time splits. These are about *when detection runs*, and are
@@ -133,11 +142,11 @@ DETECTION_SPLIT_ORDER = ["train", "val", "test"]
 EVALUATION_HORIZONS: dict[str, tuple[_dt.datetime, _dt.datetime]] = {
     "val": (_dt.datetime(2022, 9, 5, 0, 0), _dt.datetime(2022, 9, 8, 0, 0)),
     "test": (_dt.datetime(2022, 9, 6, 0, 0), CUTOFF),
+    # Frozen 2026-10-10. Stress campaigns start Sept 8-10; the horizon runs
+    # to the cutoff, capped per campaign by its own deadline. Other-split
+    # hits apply here exactly as in rule 1.
+    "stress": (_dt.datetime(2022, 9, 8, 0, 0), CUTOFF),
 }
-# NOTE: the stress horizon is deliberately absent. Rule 1 says other-split
-# hits apply to stress evaluation too, but no stress horizon has been
-# specified yet, and inventing one would freeze a research definition by
-# accident. See README "Known limitations and open questions".
 
 # --- Rule 3: training windows must have their full lookback ----------------
 # A training detection time is usable only when t - L >= DATA_START, so no
