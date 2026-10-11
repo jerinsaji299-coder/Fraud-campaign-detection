@@ -579,6 +579,7 @@ project-root/
   CLAUDE.md                        short pointer + update rule + core rules
   .gitignore                       data/, artifacts/ contents, node_modules, .venv, __pycache__, .env
   docs/
+    PROJECT_OVERVIEW.md           readable summary of the whole project + improvement roadmap
     reference/
       01_data_verification.ipynb   read-only: verified Kaggle exploration behind every definition above
   backend/
@@ -1586,6 +1587,15 @@ Tagged points in the repository, newest first. Check one out with
 
 ## Changelog
 
+- **2026-10-11** — Added `docs/PROJECT_OVERVIEW.md`: a readable account of
+  the whole project for someone arriving fresh — the problem, the research
+  question and its positioning, the data, the frozen design in condensed
+  form, what has been built, what is verified versus assumed, the four bugs
+  worth writing up, and an improvement roadmap separating immediate
+  unblocking actions from research and engineering suggestions. It is a
+  summary that defers to this README on every point of fact, and it states
+  plainly in two places that the project has no results yet, since a reader
+  skimming a repository this size would otherwise assume it does.
 - **2026-10-11** — Full-data validation of the evaluation, ahead of stage
   3.3. Added `kaggle_runner.py evaluate-scorers`: oracle and random at both
   candidate lookbacks over the val, test and stress horizons, reporting
