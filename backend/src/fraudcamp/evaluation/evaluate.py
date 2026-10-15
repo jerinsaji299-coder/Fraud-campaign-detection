@@ -352,7 +352,7 @@ def select_tau(
 
     Returns the chosen tau and the full precision/recall-vs-tau curve, which
     the frozen design requires to be saved alongside it. Ties are broken
-    toward the lower tau, which is the more sensitive detector.
+    deterministically by `best_tau` below.
 
     Validation is the only split touched here, so the threshold carries no
     information from test or stress.
@@ -364,11 +364,89 @@ def select_tau(
             split="val", scorer=scorer, tau=float(tau),
             lookback_h=lookback_h, seed=seed, scorer_name=scorer_name,
         )
-        row = {"tau": float(tau), "lookback_h": lookback_h, **campaign_f1(result)}
+        row = {
+            "tau": float(tau),
+            "lookback_h": lookback_h,
+            "false_alarms_per_day": result.false_alarms_per_day,
+            "horizon_days": result.horizon_days,
+            **campaign_f1(result),
+        }
         curve.append(row)
 
-    best = max(curve, key=lambda row: (row["campaign_f1"], -row["tau"]))
-    return best["tau"], curve
+    return best_tau(curve), curve
+
+
+def best_tau(curve: list[dict]) -> float:
+    """The chosen tau, with a fully deterministic tie-break.
+
+    Ties are common and must not be settled by list order, because the grid
+    order is an implementation detail. In priority order:
+
+    1. highest campaign-level F1 (the primary rule);
+    2. then highest precision — of two equally-scoring thresholds, prefer the
+       one that cries wolf less;
+    3. then fewest false alarms — the same preference in absolute terms, for
+       when precision also ties;
+    4. then the **higher** tau — the more conservative detector, and the one
+       that costs less to run.
+
+    A scorer whose output is binary (the oracle) ties on everything and so
+    lands on the highest tau in the grid, which is the honest answer: for
+    0/1 scores every tau in (0, 1] is the same detector.
+    """
+    return max(
+        curve,
+        key=lambda row: (
+            row["campaign_f1"],
+            row["campaign_precision"],
+            -row["false_alarms"],
+            row["tau"],
+        ),
+    )["tau"]
+
+
+#: False-alarm budgets, in alarms per day, at which recall and lead time are
+#: additionally reported. Recall alone can be inflated by alerting more: the
+#: random scorer reached 0.27 recall at L=48 while raising ~47,000 alarms a
+#: day, which no analyst could use.
+FALSE_ALARM_BUDGETS = (10, 50, 100)
+
+
+def select_tau_for_budget(curve: list[dict], budget: float) -> float | None:
+    """The **lowest** tau whose validation false-alarm rate stays inside
+    `budget` alarms per day, or None when the grid has no such tau.
+
+    Lowest rather than highest: within a fixed alert budget the most
+    sensitive detector is the one worth having. Returning None rather than
+    silently falling back makes an unreachable budget visible — with a
+    coarse grid that is a property of the grid, not of the detector.
+    """
+    affordable = [row for row in curve if row["false_alarms_per_day"] <= budget]
+    if not affordable:
+        return None
+    return min(affordable, key=lambda row: row["tau"])["tau"]
+
+
+def recall_vs_false_alarms(curve: list[dict]) -> list[dict]:
+    """The validation recall-vs-false-alarms-per-day curve, for plotting.
+
+    Sorted by alarm rate so it can be drawn directly as an operating
+    characteristic.
+    """
+    points = [
+        {
+            "tau": row["tau"],
+            "lookback_h": row["lookback_h"],
+            "false_alarms_per_day": row["false_alarms_per_day"],
+            "campaign_recall": row["campaign_recall"],
+            "campaign_precision": row["campaign_precision"],
+            "campaign_f1": row["campaign_f1"],
+            "hits": row["hits"],
+            "false_alarms": row["false_alarms"],
+        }
+        for row in curve
+    ]
+    return sorted(points, key=lambda row: (row["false_alarms_per_day"], row["tau"]))
 
 
 def summarize_by(result: EvaluationResult, attribute: str) -> list[dict]:

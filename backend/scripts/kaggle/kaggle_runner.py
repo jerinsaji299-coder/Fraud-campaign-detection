@@ -13,7 +13,11 @@ Subcommands:
     evaluate-scorers
                run the oracle and random sanity scorers on the full data and
                report recall, precision, false alarms, lead times and CIs,
-               with tau chosen on validation
+               with tau chosen on validation, plus recall and lead time at
+               fixed false-alarm budgets
+    oracle-diagnose
+               explain every campaign the oracle misses, and what its
+               false-alarm clusters actually are
     make-sample
                build the 1% development sample for download
     train      (Stage 3.3+) not implemented yet
@@ -864,6 +868,8 @@ def command_evaluate_scorers(args: argparse.Namespace) -> int:
     curve_rows: list[dict] = []
     breakdown_rows: list[dict] = []
     tau_choices: list[dict] = []
+    budget_rows: list[dict] = []
+    operating_rows: list[dict] = []
 
     for lookback in lookbacks:
         print(f"\n{'=' * 78}\nL = {lookback}h\n{'=' * 78}")
@@ -891,19 +897,89 @@ def command_evaluate_scorers(args: argparse.Namespace) -> int:
                     "lookback_h": lookback,
                     "chosen_tau": tau,
                     "selected_on": "val",
-                    "criterion": "max campaign-level F1, ties to the lower tau",
+                    "criterion": (
+                        "max campaign-level F1; ties by higher precision, then "
+                        "fewer false alarms, then higher tau"
+                    ),
                     "grid": list(tau_grid),
                     "seed": args.seed,
                 }
             )
             print(f"  chosen tau = {tau} (campaign-F1 on validation)")
-            print(f"  {'tau':>6} {'precision':>10} {'recall':>8} {'F1':>8} {'hits':>7} {'FA':>8}")
+            print(
+                f"  {'tau':>6} {'precision':>10} {'recall':>8} {'F1':>8} "
+                f"{'hits':>7} {'FA':>10} {'FA/day':>10}"
+            )
             for row in curve:
                 print(
                     f"  {row['tau']:>6} {row['campaign_precision']:>10.3f} "
                     f"{row['campaign_recall']:>8.3f} {row['campaign_f1']:>8.3f} "
-                    f"{row['hits']:>7,} {row['false_alarms']:>8,}"
+                    f"{row['hits']:>7,} {row['false_alarms']:>10,} "
+                    f"{row['false_alarms_per_day']:>10,.1f}"
                 )
+
+            # the operating curve, saved for plotting
+            for point in evaluation.recall_vs_false_alarms(curve):
+                operating_rows.append({"scorer": name, **point})
+
+            # --- alert budgets ------------------------------------------
+            # Recall alone can be bought by alerting more, so recall and
+            # lead time are also reported at thresholds an analyst could
+            # actually live with.
+            for budget in evaluation.FALSE_ALARM_BUDGETS:
+                budget_tau = evaluation.select_tau_for_budget(curve, budget)
+                if budget_tau is None:
+                    cheapest = min(row["false_alarms_per_day"] for row in curve)
+                    print(
+                        f"  budget {budget}/day: UNREACHABLE on this grid "
+                        f"(cheapest tau gives {cheapest:,.1f}/day)"
+                    )
+                    budget_rows.append(
+                        {
+                            "scorer": name, "lookback_h": lookback,
+                            "budget_per_day": budget, "tau": None,
+                            "reachable": False, "split": None,
+                            "campaign_recall": None, "median_lead_time_h": None,
+                            "false_alarms_per_day": None,
+                            "note": f"cheapest tau on the grid gives {cheapest:,.1f}/day",
+                        }
+                    )
+                    continue
+
+                print(f"  budget {budget}/day: tau = {budget_tau}")
+                for split in splits:
+                    with step(
+                        f"{name} at budget {budget}/day on {split}, L={lookback}h"
+                    ):
+                        at_budget = evaluation.evaluate_split(
+                            result.full_df, result.camp, result.pattern_df,
+                            result.accounts_by_campaign, split, scorer,
+                            tau=budget_tau, lookback_h=lookback, seed=args.seed,
+                            scorer_name=name,
+                        )
+                    summary = evaluation.summarize(
+                        at_budget, subset="all", bootstrap_seed=args.seed,
+                        n_resamples=args.bootstrap,
+                    )
+                    budget_rows.append(
+                        {
+                            "scorer": name, "lookback_h": lookback,
+                            "budget_per_day": budget, "tau": budget_tau,
+                            "reachable": True, "split": split,
+                            "campaign_recall": summary["campaign_recall"],
+                            "median_lead_time_h": summary["median_lead_time_h"],
+                            "median_normalized_lead_time": summary[
+                                "median_normalized_lead_time"
+                            ],
+                            "median_frac_observed_at_detection": summary[
+                                "median_frac_observed_at_detection"
+                            ],
+                            "false_alarms_per_day": summary["false_alarms_per_day"],
+                            "n_campaigns": summary["n_campaigns"],
+                            "n_detected": summary["n_detected"],
+                            "note": "",
+                        }
+                    )
 
         # --- evaluate each horizon at the frozen tau ---------------------
         for name, scorer in (("oracle", oracle), ("random", make_random(args.seed))):
@@ -1025,8 +1101,42 @@ def command_evaluate_scorers(args: argparse.Namespace) -> int:
             "model is trained on top of it."
         )
 
+    if budget_rows:
+        print("\n" + "=" * 110)
+        print("AT FIXED FALSE-ALARM BUDGETS (tau chosen on validation)")
+        print("=" * 110)
+        print(
+            f"  {'L':>3} {'scorer':<8}{'budget/day':>11}{'tau':>7}  {'split':<8}"
+            f"{'recall':>8}{'lead_h':>9}{'FA/day':>10}"
+        )
+        for row in budget_rows:
+            if not row["reachable"]:
+                print(
+                    f"  {row['lookback_h']:>3} {row['scorer']:<8}"
+                    f"{row['budget_per_day']:>11}  unreachable - {row['note']}"
+                )
+                continue
+            print(
+                f"  {row['lookback_h']:>3} {row['scorer']:<8}"
+                f"{row['budget_per_day']:>11}{row['tau']:>7}  {row['split']:<8}"
+                f"{fmt(row['campaign_recall']):>8}"
+                f"{fmt(row['median_lead_time_h'], '.1f'):>9}"
+                f"{row['false_alarms_per_day']:>10,.1f}"
+            )
+        print("=" * 110)
+        print(
+            "  Recall alone can be bought by alerting more; these rows are what "
+            "an analyst could actually work with."
+        )
+
     summary_frame = pd.DataFrame(summary_rows)
     summary_frame.to_csv(out / "evaluate_scorers.csv", index=False)
+    if budget_rows:
+        pd.DataFrame(budget_rows).to_csv(out / "evaluate_scorers_budgets.csv", index=False)
+    if operating_rows:
+        pd.DataFrame(operating_rows).to_csv(
+            out / "evaluate_scorers_recall_vs_fa.csv", index=False
+        )
     pd.DataFrame(curve_rows).to_csv(out / "evaluate_scorers_tau_curve.csv", index=False)
     pd.DataFrame(breakdown_rows).to_csv(out / "evaluate_scorers_breakdown.csv", index=False)
 
@@ -1039,6 +1149,9 @@ def command_evaluate_scorers(args: argparse.Namespace) -> int:
                 "bootstrap_resamples": args.bootstrap,
                 "tau_selection": tau_choices,
                 "tau_curve": curve_rows,
+                "false_alarm_budgets": list(evaluation.FALSE_ALARM_BUDGETS),
+                "budget_results": budget_rows,
+                "recall_vs_false_alarms": operating_rows,
                 "summary": summary_rows,
                 "oracle_breakdown": breakdown_rows,
                 "oracle_ceiling": ceiling,
@@ -1064,8 +1177,9 @@ def command_evaluate_scorers(args: argparse.Namespace) -> int:
                 "",
                 "## How tau was chosen",
                 "",
-                "On **validation only**, maximising campaign-level F1, ties broken",
-                "toward the lower tau. The oracle's scores are 0/1, so any tau in",
+                "On **validation only**, maximising campaign-level F1. Ties are",
+                "broken by higher precision, then fewer false alarms, then the",
+                "higher tau. The oracle's scores are 0/1, so any tau in",
                 "(0, 1] is equivalent for it; it is selected the same way anyway so",
                 "both scorers are treated identically.",
                 "",
@@ -1075,9 +1189,30 @@ def command_evaluate_scorers(args: argparse.Namespace) -> int:
                 "",
                 _markdown_table(pd.DataFrame(curve_rows)),
                 "",
-                "## Results",
+                "## Results at the primary tau",
                 "",
                 _markdown_table(summary_frame),
+                "",
+                "## At fixed false-alarm budgets",
+                "",
+                "Recall alone can be inflated by alerting more, so recall and",
+                "lead time are also reported at thresholds an analyst could live",
+                "with. Tau per budget is the lowest on the grid whose validation",
+                "alarm rate stays inside it.",
+                "",
+                (
+                    _markdown_table(pd.DataFrame(budget_rows))
+                    if budget_rows else "_none_"
+                ),
+                "",
+                "## Recall vs false alarms per day (validation)",
+                "",
+                "The operating curve, for plotting.",
+                "",
+                (
+                    _markdown_table(pd.DataFrame(operating_rows))
+                    if operating_rows else "_none_"
+                ),
                 "",
                 "## Oracle ceiling",
                 "",
@@ -1101,6 +1236,281 @@ def command_evaluate_scorers(args: argparse.Namespace) -> int:
     )
     print(f"\nWrote {out / 'evaluate_scorers.md'} (+ .json, .csv, tau curve, breakdown)")
     return 0 if ok else 1
+
+
+def command_oracle_diagnose(args: argparse.Namespace) -> int:
+    """Explain every campaign the oracle misses, and what its false alarms are.
+
+    The oracle has perfect information, so a miss is never a scoring
+    failure — it is a property of the campaign's shape in time, or of the
+    matching rule meeting a graph that does not cooperate. This says which,
+    per campaign, and changes nothing.
+    """
+    import pandas as pd
+
+    from fraudcamp import constants, evaluation, pipeline
+    from fraudcamp.evaluation import scorers
+
+    out = Path(args.out)
+    out.mkdir(parents=True, exist_ok=True)
+    splits = [s.strip() for s in args.splits.split(",") if s.strip()]
+    lookbacks = (
+        [int(v) for v in args.lookbacks.split(",")] if args.lookbacks
+        else list(constants.LOOKBACKS_H)
+    )
+
+    with step("build pipeline"):
+        result = pipeline.build(Path(args.config))
+    print(f"  rows: {len(result.full_df):,}, campaigns: {len(result.camp):,}")
+
+    def oracle(window, t):
+        return scorers.oracle_scores(window["Is Laundering"].to_numpy())
+
+    unassigned = result.full_df[
+        (result.full_df["Is Laundering"] == 1) & (result.full_df["campaign_id"] == -1)
+    ]
+    unassigned_accounts = set(unassigned["src"]) | set(unassigned["dst"])
+
+    diagnoses: list[dict] = []
+    false_alarms: list[dict] = []
+    coverage: list[dict] = []
+
+    for lookback in lookbacks:
+        for split in splits:
+            with step(f"oracle on {split}, L={lookback}h"):
+                evaluated = evaluation.evaluate_split(
+                    result.full_df, result.camp, result.pattern_df,
+                    result.accounts_by_campaign, split, oracle,
+                    tau=scorers.SANITY_TAU["oracle"], lookback_h=lookback,
+                    seed=args.seed, scorer_name="oracle",
+                )
+            missed = [o.campaign_id for o in evaluated.outcomes if not o.detected]
+            total = len(evaluated.outcomes)
+            coverage.append(
+                {
+                    "lookback_h": lookback, "split": split,
+                    "n_campaigns": total,
+                    "n_detected": total - len(missed),
+                    "n_missed": len(missed),
+                    "miss_rate": round(len(missed) / total, 4) if total else None,
+                }
+            )
+            print(
+                f"  {split}: {total - len(missed)}/{total} detected, "
+                f"{len(missed)} missed ({len(missed) / total:.1%})"
+                if total else f"  {split}: no campaigns"
+            )
+
+            if missed:
+                with step(f"diagnose {len(missed)} misses on {split}, L={lookback}h"):
+                    diagnoses.extend(
+                        evaluation.diagnose_misses(
+                            result.full_df, result.camp,
+                            result.accounts_by_campaign, missed, split, lookback,
+                        )
+                    )
+
+            with step(f"characterise false alarms on {split}, L={lookback}h"):
+                false_alarms.extend(
+                    evaluation.diagnose_false_alarms(
+                        result.full_df, result.accounts_by_campaign,
+                        unassigned_accounts, split, lookback,
+                        limit=args.false_alarm_limit,
+                    )
+                )
+
+    if not diagnoses:
+        print("\nThe oracle missed nothing; there is nothing to diagnose.")
+        return 0
+
+    frame = pd.DataFrame(diagnoses)
+
+    print("\n" + "=" * 96)
+    print("MISSES BY REASON")
+    print("=" * 96)
+    by_reason = (
+        frame.groupby(["lookback_h", "split", "reason"]).size().reset_index(name="n")
+    )
+    for row in by_reason.itertuples():
+        print(f"  L={row.lookback_h:>2} {row.split:<7} {row.reason:<20} {row.n:>4}")
+
+    print("\n--- by reason, pooled over splits ---")
+    for row in frame.groupby(["lookback_h", "reason"]).size().reset_index(name="n").itertuples():
+        print(f"  L={row.lookback_h:>2} {row.reason:<20} {row.n:>4}")
+
+    print("\n--- by base_type ---")
+    for row in (
+        frame.groupby(["lookback_h", "base_type", "reason"]).size()
+        .reset_index(name="n").itertuples()
+    ):
+        print(f"  L={row.lookback_h:>2} {row.base_type:<16} {row.reason:<20} {row.n:>4}")
+
+    print("\n--- by group ---")
+    for row in (
+        frame.groupby(["lookback_h", "group", "reason"]).size()
+        .reset_index(name="n").itertuples()
+    ):
+        print(f"  L={row.lookback_h:>2} {row.group:<16} {row.reason:<20} {row.n:>4}")
+
+    sparse = frame[frame["reason"] == "temporal_sparsity"]
+    if not sparse.empty:
+        print("\n--- temporal sparsity: how far from matchable? ---")
+        print(
+            f"  max connected accounts reached: median "
+            f"{sparse['max_connected_own_accounts'].median():.1f}, "
+            f"max {sparse['max_connected_own_accounts'].max()}"
+        )
+        print(
+            f"  n_txn: median {sparse['n_txn'].median():.1f}; "
+            f"duration_h: median {sparse['duration_h'].median():.1f}"
+        )
+        print(
+            f"  largest transaction gap: median {sparse['max_txn_gap_h'].median():.1f}h; "
+            f"gap exceeds the lookback in "
+            f"{int(sparse['gap_exceeds_lookback'].sum())}/{len(sparse)} cases"
+        )
+
+    impure = frame[frame["reason"] == "purity_failure"]
+    if not impure.empty:
+        print("\n--- purity failures: what did they merge with? ---")
+        print(
+            f"  best cluster purity: median "
+            f"{impure['best_cluster_purity'].median():.3f}"
+        )
+        print(
+            f"  merged with another campaign: "
+            f"{int((impure['merged_with_campaigns'] > 0).sum())}/{len(impure)}"
+        )
+        print(
+            f"  merged with unassigned laundering: "
+            f"{int((impure['merged_with_unassigned'] > 0).sum())}/{len(impure)}"
+        )
+        both = impure[
+            (impure["merged_with_campaigns"] > 0) & (impure["merged_with_unassigned"] > 0)
+        ]
+        print(f"  merged with both: {len(both)}/{len(impure)}")
+
+    if false_alarms:
+        fa_frame = pd.DataFrame(false_alarms)
+        print("\n" + "=" * 96)
+        print("WHAT THE ORACLE'S FALSE ALARMS ARE")
+        print("=" * 96)
+        print(
+            "  Every cluster the oracle forms is made of real laundering edges, so a"
+        )
+        print(
+            "  false alarm is laundering the matching rule could not attribute to a"
+        )
+        print("  campaign of the split being scored, and that was not majority")
+        print("  unassigned either.")
+        print(f"\n  sampled clusters: {len(fa_frame):,}")
+        print(f"  cluster size: median {fa_frame['cluster_size'].median():.1f}, "
+              f"max {fa_frame['cluster_size'].max()}")
+        print(
+            f"  accounts belonging to some campaign: median "
+            f"{fa_frame['accounts_in_some_campaign'].median():.1f}"
+        )
+        print(
+            f"  campaigns touched per cluster: median "
+            f"{fa_frame['campaigns_touched'].median():.1f}, "
+            f"max {fa_frame['campaigns_touched'].max()}"
+        )
+        print(
+            f"  best overlap with any campaign: median "
+            f"{fa_frame['best_overlap_fraction'].median():.3f} "
+            f"(below the 0.5 the rule requires, by construction)"
+        )
+        print(
+            f"  unassigned-laundering accounts per cluster: median "
+            f"{fa_frame['accounts_unassigned_laundering'].median():.1f}"
+        )
+    else:
+        fa_frame = pd.DataFrame()
+        print("\nNo oracle false alarms were found to characterise.")
+
+    frame.to_csv(out / "oracle_diagnose.csv", index=False)
+    if not fa_frame.empty:
+        fa_frame.to_csv(out / "oracle_diagnose_false_alarms.csv", index=False)
+    pd.DataFrame(coverage).to_csv(out / "oracle_diagnose_coverage.csv", index=False)
+
+    (out / "oracle_diagnose.json").write_text(
+        json.dumps(
+            {
+                "lookbacks": lookbacks,
+                "splits": splits,
+                "coverage": coverage,
+                "reason_counts": by_reason.to_dict(orient="records"),
+                "diagnoses": diagnoses,
+                "false_alarm_sample": false_alarms,
+            },
+            indent=2,
+            default=str,
+        ),
+        encoding="utf-8",
+    )
+
+    (out / "oracle_diagnose.md").write_text(
+        "\n".join(
+            [
+                "# Why the oracle misses campaigns",
+                "",
+                "The oracle scores every edge with its true label, so a miss is",
+                "never a scoring failure. It is a property of the campaign's shape",
+                "in time, or of the matching rule meeting a graph that does not",
+                "cooperate. **Diagnosis only — the matching rule is unchanged.**",
+                "",
+                "## Coverage",
+                "",
+                _markdown_table(pd.DataFrame(coverage)),
+                "",
+                "## Misses by reason",
+                "",
+                "| reason | meaning |",
+                "|---|---|",
+                "| `temporal_sparsity` | at no window before the deadline did 3+ of "
+                "its accounts connect through its own laundering edges, and none "
+                "formed afterwards either |",
+                "| `purity_failure` | a 3+ fragment did form, but the cluster it sat "
+                "in was under half the campaign's own accounts |",
+                "| `late_only` | a matching cluster existed, but only after the "
+                "deadline — censoring, not sparsity |",
+                "| `unexplained` | none of the above; would mean the diagnosis and "
+                "the evaluation disagree |",
+                "",
+                _markdown_table(by_reason),
+                "",
+                "## By base_type",
+                "",
+                _markdown_table(
+                    frame.groupby(["lookback_h", "base_type", "reason"]).size()
+                    .reset_index(name="n")
+                ),
+                "",
+                "## By group",
+                "",
+                _markdown_table(
+                    frame.groupby(["lookback_h", "group", "reason"]).size()
+                    .reset_index(name="n")
+                ),
+                "",
+                "## Every missed campaign",
+                "",
+                _markdown_table(frame),
+                "",
+                "## What the false alarms are",
+                "",
+                _markdown_table(fa_frame) if not fa_frame.empty else "_none found_",
+                "",
+                "## Timing",
+                "",
+                steps_markdown(),
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    print(f"\nWrote {out / 'oracle_diagnose.md'} (+ .json and 3 CSVs)")
+    return 0
 
 
 def command_make_sample(args: argparse.Namespace) -> int:
@@ -1152,7 +1562,7 @@ def main() -> int:
         "command",
         choices=[
             "verify", "pipeline", "features-smoke", "evaluate-scorers",
-            "make-sample", "train", "evaluate",
+            "oracle-diagnose", "make-sample", "train", "evaluate",
         ],
     )
     parser.add_argument(
@@ -1182,6 +1592,10 @@ def main() -> int:
         "--bootstrap", type=int, default=1000,
         help="bootstrap resamples for confidence intervals",
     )
+    parser.add_argument(
+        "--false-alarm-limit", type=int, default=200,
+        help="oracle-diagnose: how many false-alarm clusters to characterise",
+    )
     args = parser.parse_args()
 
     handlers = {
@@ -1189,6 +1603,7 @@ def main() -> int:
         "pipeline": command_pipeline,
         "features-smoke": command_features_smoke,
         "evaluate-scorers": command_evaluate_scorers,
+        "oracle-diagnose": command_oracle_diagnose,
         "make-sample": command_make_sample,
         "train": command_not_yet,
         "evaluate": command_not_yet,

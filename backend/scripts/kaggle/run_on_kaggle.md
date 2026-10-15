@@ -42,10 +42,12 @@ Each step assumes the ones above it have passed. All of them are CPU-only;
 | 2 | `pipeline` | export the artifacts and zip them | §2 |
 | 3 | `features-smoke` | window sizes, build cost, GPU estimate | §5c |
 | 4 | `evaluate-scorers` | validate the evaluation module on full data | §5d |
-| 5 | `make-sample` | build the 1% sample for local development | §5e |
+| 5 | `oracle-diagnose` | explain why the oracle misses what it misses | §5f |
+| 6 | `make-sample` | build the 1% sample for local development | §5e |
 
-Steps 1–2 are done (2026-10-08/09). Step 3 has been run once and is being
-re-run after a correctness fix. Steps 4–5 are new.
+Steps 1–2 are done (2026-10-08/09), step 3 run and corrected, step 4 run
+(2026-10-15) — the evaluation is validated. Step 5 is new; step 6 is still
+outstanding and is what unblocks local development on real data.
 
 ## 1. Notebook settings
 
@@ -309,6 +311,13 @@ anyway so both scorers are treated identically.
 Writes `evaluate_scorers.{md,csv,json}` plus
 `evaluate_scorers_tau_curve.csv` and `evaluate_scorers_breakdown.csv`.
 
+It also reports **recall and median lead time at false-alarm budgets of 10,
+50 and 100 per day**, taking the lowest tau whose validation alarm rate
+stays inside each budget, plus the recall-vs-alarm-rate curve for plotting.
+A budget the tau grid cannot reach is reported as unreachable with the
+cheapest rate available, rather than quietly using a threshold that breaks
+it — if that happens often, pass a denser `--tau-grid`.
+
 Useful options: `--lookbacks 24` to do one lookback, `--splits test` for one
 horizon, `--tau-grid 0.5,0.9,0.99` to change the sweep, `--bootstrap 200`
 for faster CIs, `--seed` for the random scorer.
@@ -361,6 +370,41 @@ python scripts/run_sanity_scorers.py --config configs/local.yaml
 ```
 
 The synthetic generator (`make_demo_data.py`) stays for unit tests only.
+
+## 5f. Diagnosing the oracle's misses
+
+The oracle has perfect information and still misses 18% of test campaigns at
+L = 24 and 11% at L = 48. Those campaigns are unreachable under the frozen
+matching rule whatever the model, so it matters *why*.
+
+```python
+!python scripts/kaggle/kaggle_runner.py oracle-diagnose
+```
+
+Classifies every missed `eval_ok` campaign (val, test, stress; both
+lookbacks) as:
+
+- `temporal_sparsity` — no window before the deadline ever held 3+ of its
+  accounts connected through its own laundering edges, and none formed
+  afterwards either. Reported with the largest fragment reached, `n_txn`,
+  duration, and the biggest transaction gap against the lookback.
+- `purity_failure` — a 3+ fragment did form, but the cluster was under half
+  the campaign's own accounts. Reported with what it merged into: other
+  campaigns, unassigned laundering, or both.
+- `late_only` — a matching cluster existed, but only after the deadline.
+  Censoring rather than sparsity.
+- `unexplained` — none of the above, which would mean the diagnosis and the
+  evaluation disagree. Should never appear; report it if it does.
+
+Summarised by reason, `base_type` and group, and it also characterises the
+oracle's false-alarm clusters (1–6 per day): since the oracle keeps only
+laundering edges, each one is real laundering the rule could not attribute.
+
+Writes `oracle_diagnose.{md,json}` plus three CSVs.
+`--false-alarm-limit` caps how many clusters are characterised.
+
+**This changes no rule.** It is diagnosis, so that the ceiling can be
+explained rather than merely reported.
 
 ## 6. Later stages
 

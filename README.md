@@ -75,12 +75,11 @@ bank).
 (extraction, matching with other-split hits, horizons, lead time, metrics,
 bootstrap CIs) and the oracle/random sanity scorers are in place and
 validated.
-**Next step:** run `features-smoke` (corrected), `evaluate-scorers` and
-`make-sample` on Kaggle — see the run order in
-`backend/scripts/kaggle/run_on_kaggle.md`. Stage 3.3 (the XGBoost baseline)
-begins once the evaluation is validated on full data. The training regime
-for 3.4 is already frozen (neighbour sampling for both candidate lookbacks;
-see Decision log).
+**Next step:** run `oracle-diagnose` and `make-sample` on Kaggle (run order
+in `backend/scripts/kaggle/run_on_kaggle.md`), then stage 3.3 — the XGBoost
+baseline. The evaluation is validated on full data and the oracle ceiling is
+recorded; the training regime for 3.4 is already frozen (neighbour sampling
+for both candidate lookbacks; see Decision log).
 
 **Phase 2 — pipeline, artifacts, API, frontend (complete)**
 
@@ -104,7 +103,7 @@ no visibility reassignment is used in this phase.
 |---|---|---|
 | 3.0 | Kaggle runner + Phase 2 full-data verification | done — all 24 numbers PASS, determinism confirmed |
 | 3.1 | Window builder + features + leakage tests | done |
-| 3.2 | Evaluation module (extraction, matching, lead time, bootstrap CIs) + oracle and random scorers | done |
+| 3.2 | Evaluation module (extraction, matching, lead time, bootstrap CIs) + oracle and random scorers | done, **validated on full data** |
 | 3.3 | XGBoost baseline: train, select tau on validation, evaluate on test | not started |
 | 3.4 | GNN centralized (GINEConv edge classification) | not started |
 | 3.5 | Gate report + results files + frontend Results page wired to real baseline results | not started |
@@ -375,13 +374,84 @@ time and median `frac_observed` are therefore the ceiling every later result
 is read against — a model at 60% of the oracle's lead time is doing well,
 whereas 60% of the theoretical 100% would be meaningless.
 
-| | Status |
-|---|---|
-| Full data, L = 24 and 48, val/test/stress | **pending** — `kaggle_runner.py evaluate-scorers` |
-| Synthetic development data, L = 24 | median lead 32.9h (val) / 25.0h (test) / 27.1h (stress); median `frac_observed` 0.40 / 0.33 / 0.33 |
+**Measured on the full data, 2026-10-15** (subset `all`):
 
-The synthetic figures below are a code check. The full-data numbers replace
-them as the recorded ceiling as soon as that run lands.
+| L | Split | Oracle recall | Median lead time | Median `frac_observed` |
+|---|---|---:|---:|---:|
+| 24 | val | 0.731 | 68.5h | — |
+| 24 | test | 0.821 | **74.7h** | **0.25** |
+| 24 | stress | 0.724 | 81.7h | — |
+| 48 | val | 0.769 | 67.3h | — |
+| 48 | test | **0.893** | **72.1h** | **0.25** |
+| 48 | stress | 0.737 | 81.5h | — |
+
+Read these as the budget every later result is spent against. Two things
+stand out:
+
+- **A detector cannot aim for 100% recall.** The oracle itself reaches only
+  0.82 (L = 24) / 0.89 (L = 48) on test, so roughly 11–18% of evaluable test
+  campaigns are *unreachable* under the frozen matching rule, whatever the
+  model. Reporting a model's recall as a fraction of 1.0 would understate it;
+  the honest denominator is the oracle. §[Why the oracle misses](#why-the-oracle-misses-campaigns)
+  explains where that gap comes from.
+- **L = 48 buys recall, not earliness.** It lifts test recall from 0.821 to
+  0.893 while median lead time *falls* slightly, 74.7h → 72.1h. The longer
+  window finds more campaigns, a little later. That is a genuine trade-off
+  for stage 3.3 to weigh, not a free improvement.
+
+Median `frac_observed` of 0.25 on test means the oracle fires when about a
+quarter of a campaign's transactions have happened — earlier than the
+matching rule's three-account floor might suggest, because campaigns tend to
+front-load their account activity.
+
+Synthetic development figures, kept only as a code check: median lead 32.9h
+(val) / 25.0h (test) / 27.1h (stress), `frac_observed` 0.40 / 0.33 / 0.33.
+
+### Why the oracle misses campaigns
+
+The oracle has perfect information, so a miss is never a scoring failure.
+`kaggle_runner.py oracle-diagnose` classifies every missed `eval_ok`
+campaign into one of four reasons, and changes nothing about the matching
+rule:
+
+| Reason | Meaning | What it implies |
+|---|---|---|
+| `temporal_sparsity` | at no window before the deadline did 3+ of its accounts connect **through its own laundering edges**, and none formed afterwards either | unreachable at this lookback; a longer L may help, and the reported largest transaction gap says whether it could |
+| `purity_failure` | a 3+ fragment did form, but the cluster it sat in was under half the campaign's own accounts | the campaign was merged into something bigger — the report names whether that was other campaigns, unassigned laundering, or both |
+| `late_only` | a matching cluster existed, but only after the deadline | censoring, not sparsity. A campaign whose transactions are an hour apart can still land here if its deadline precedes the first window that can see it |
+| `unexplained` | none of the above | would mean the diagnosis and the evaluation disagree, and is reported loudly rather than bucketed away |
+
+Precedence is deliberate: `purity_failure` is tested before `late_only`,
+and `late_only` before `temporal_sparsity`, so that the most specific
+explanation wins and a censored campaign is never mislabelled as sparse —
+which would send a reader hunting for a longer lookback when the problem is
+the deadline.
+
+The command also characterises the oracle's **false alarms** (1–6 per day on
+the full data). Since the oracle keeps only laundering edges, every cluster
+it forms is real laundering; a false alarm is therefore laundering that the
+matching rule could not attribute to a campaign of the split being scored
+and that was not majority-unassigned either. The report gives cluster sizes,
+how many campaigns each touched, and the best overlap achieved.
+
+### Alert-budget metrics (frozen 2026-10-15)
+
+Recall alone can be bought by alerting more. On the full data the random
+scorer reached **0.27 recall at L = 48 while raising about 47,000 false
+alarms per day** — a detector no analyst could use, scoring a recall a
+reader might mistake for signal. So alongside the primary metrics, every
+scorer and model also reports:
+
+- **campaign recall and median lead time at false-alarm budgets of 10, 50
+  and 100 per day**, taking the *lowest* tau whose validation alarm rate
+  stays inside the budget — within a fixed budget the most sensitive
+  detector is the one worth having;
+- the **full recall vs false-alarms-per-day curve**, saved for plotting.
+
+A budget unreachable on the tau grid is reported as unreachable, with the
+cheapest rate the grid achieves, rather than silently falling back to a
+threshold that breaks it. Campaign-F1 on validation remains the **primary**
+tau rule; the budget figures are reported alongside it, not instead of it.
 
 ### Sanity scorer results (stage 3.2, synthetic data)
 
@@ -502,6 +572,9 @@ transactions.
 | 2026-10-07 | Phase 3 gate: verify every Phase 2 regression number on the full data **before** any model work | The 24 full-data tests have never run — the dataset only exists on Kaggle. Every Phase 3 result would silently inherit any discrepancy in the campaign table, splits or group assignment, and a model built on wrong ground truth is worse than no model | user instruction, stage 3.0 |
 | 2026-10-07 | `pandas>=2.2` pinned in requirements.txt | `campaigns.build_campaign_table` passes `include_groups=` to `groupby.apply`, which pandas added in 2.2 and older versions reject with a `TypeError`. Unpinned, a Kaggle image with pandas 2.1 would fail deep in the pipeline with a confusing error | implementation, stage 3.0 |
 | 2026-10-08 | Every collection is sorted before any seeded random step. **Bug:** a campaign's accounts were held in a Python `set`, and per-process string-hash randomisation made set iteration order differ between runs, so the seeded search followed a different trajectory each process — same seed, different assignment. **Evidence:** two Kaggle runs of the same pipeline disagreed on the unfragmentable count (3 vs 2); reproduced locally by varying `PYTHONHASHSEED`. **Fix:** accounts are now sorted tuples, and `sorted()` is applied at every point where order reaches the RNG. The algorithm, targets, iteration count and seeds are unchanged — only enumeration order is pinned, so no frozen definition moved. **Why now:** Phase 3 is centralized-only and never touches these assignments, but Phase 4-5 *is* the visibility sweep and the `unfragmentable` label defines the control group; fixing it after results existed would have invalidated them | `tests/test_determinism.py`, stage 3.0 follow-up |
+| 2026-10-15 | **Alert-budget metrics added to the evaluation**: campaign recall and median lead time at false-alarm budgets of 10, 50 and 100 per day, taking the lowest tau whose validation alarm rate stays inside the budget, plus the full recall-vs-false-alarms curve saved for plotting. Campaign-F1 on validation stays the primary tau rule | On the full data the random scorer reached 0.27 recall at L = 48 while raising ~47,000 false alarms per day. Recall alone cannot distinguish a detector from one that simply alerts more, and a reader could mistake that 0.27 for signal. A budget makes the comparison operational: what recall can you get for an alarm rate an analyst could actually work through | user decision, 2026-10-15; `tests/test_tau_and_budgets.py` |
+| 2026-10-15 | **Tau tie-break made fully deterministic**: among thresholds with equal campaign-F1, prefer higher precision, then fewer false alarms, then the higher tau | Ties are common — a binary-scoring detector ties everywhere — and the previous rule (lowest tau) still left the outcome sensitive to what else tied. The new order expresses a preference rather than an accident: of two equally-scoring thresholds, take the one that cries wolf less, and failing that the cheaper, more conservative one. Tested to be independent of grid order | user decision, 2026-10-15 |
+| 2026-10-15 | `features-smoke` training probes are rule-3 filtered and the largest window comes from a full scan; the oracle's misses are diagnosed rather than accepted | The oracle misses 18% (L = 24) and 11% (L = 48) of test campaigns despite perfect information, so the ceiling is well below 1.0 and the reason matters: a campaign unreachable because of temporal sparsity says something different about the method than one lost to a purity failure. `oracle-diagnose` classifies each, and deliberately changes no rule | user decision, 2026-10-15; `tests/test_oracle_diagnose.py` |
 | 2026-10-10 | **Stage 3.4 training regime frozen: both candidate lookbacks train with neighbour sampling** (LinkNeighborLoader-style mini-batches of target edges with sampled multi-hop neighbourhoods). Inference scores full windows, chunked if needed. Fanouts, batch size and negative/positive handling are chosen in stage 3.4 and reported before training | If L = 24 trained full-batch and L = 48 trained with sampling, the L comparison would confound lookback length with training method, and the chosen L could not be attributed to the lookback. Using one regime for both keeps that comparison clean. It also sidesteps the capacity question: the busiest L = 48 window is estimated at ~16.6 GB full-batch against 16 GB GPUs | user decision, 2026-10-10 |
 | 2026-10-10 | `features-smoke` samples only rule-3-valid training detection times, and a cheap full scan of **every** usable detection time supplies the largest-window figures | The first full-data run reported Sept 2 12:00 at L = 48 as the largest candidate window (1.5M edges), but that time violates rule 3: its lookback starts before `DATA_START`, so the window was silently clamped — which is also why its L = 48 and L = 72 rows were identical. Sampling five detection times cannot find the true maximum anyway, so the scan replaces guesswork with a full enumeration (counts only, no features) | user-reported, 2026-10-10 |
 | 2026-10-10 | "Mostly involved in unassigned-laundering edges", for the ambiguous rule, is read as **at least 50% of the cluster's accounts** touching a laundering edge that belongs to no campaign | The design says "mostly" without a number; 0.5 mirrors the matching rule's own threshold, so the two use one consistent notion of majority. Exposed as `constants.AMBIGUOUS_MIN_FRACTION` rather than buried in the code | interpretation, stage 3.2 |
@@ -608,6 +681,7 @@ project-root/
         clusters.py               extraction, the matching rule, outcome classification
         evaluate.py               the detection-time loop, lead time, metrics, bootstrap CIs
         scorers.py                the oracle and random sanity scorers
+        diagnose.py               why the oracle misses a campaign; what its false alarms are
     app/
       __init__.py                 puts src/ on sys.path so the app can import fraudcamp uninstalled
       main.py                     create_app(): FastAPI app, CORS, router registration, artifact load
@@ -642,6 +716,8 @@ project-root/
       test_windows.py             detection-time grid, splits, strict causal window bounds
       test_evaluation_rules.py    the three frozen evaluation rules + their violation checks
       test_evaluation.py          extraction, matching, outcomes, lead time, metrics, bootstrap CIs
+      test_tau_and_budgets.py     the deterministic tau tie-break and the alert budgets
+      test_oracle_diagnose.py     the four oracle-miss reasons, each on a hand-built case
       test_features.py            feature shapes + the leakage properties (future, labels, identity)
       test_fulldata.py            @pytest.mark.fulldata, one test per regression number; skip if no data
     data/                         gitignored: raw/, sample/, processed/
@@ -1005,7 +1081,15 @@ committed.
     group and base_type breakdowns; `select_tau` chooses the threshold on
     **validation only** by campaign-level F1 and returns the full
     precision/recall-vs-tau curve, with `campaign_f1` as the cheap
-    statistic the sweep uses instead of a bootstrap at every candidate.
+    statistic the sweep uses instead of a bootstrap at every candidate;
+    `best_tau` applies the deterministic tie-break, and
+    `select_tau_for_budget` / `recall_vs_false_alarms` provide the
+    alert-budget view.
+  - `diagnose.py` — `diagnose_misses` classifies every missed campaign into
+    `temporal_sparsity` / `purity_failure` / `late_only` / `unexplained`
+    with the evidence behind the verdict, and `diagnose_false_alarms`
+    characterises what the oracle's false-alarm clusters actually are.
+    Diagnosis only: nothing here scores, and nothing changes a rule.
   - `scorers.py` — the oracle (score = true label) and random scorers.
   The scorer is called as `scorer(window_transactions, t)` and only ever
   receives the window, so a scorer cannot reach past `t` even if it tries.
@@ -1028,7 +1112,9 @@ committed.
   size, timing, memory and tensor footprint plus a full-batch GNN memory
   estimate; `evaluate-scorers` runs the oracle and random scorers on the
   full data at both candidate lookbacks over all three horizons, with tau
-  chosen on validation and bootstrap CIs; `make-sample` builds the 1%
+  chosen on validation, bootstrap CIs and recall at fixed false-alarm
+  budgets; `oracle-diagnose` explains every campaign the oracle misses and
+  characterises its false alarms; `make-sample` builds the 1%
   development sample; `train` and `evaluate`
   exist but exit with a message until stages 3.3 and 3.4. Every step reports
   elapsed time and memory (a true peak via `resource` on Linux; on Windows it
@@ -1373,6 +1459,23 @@ campaign_id)`:
   time being used, so the boundary was never exercised where it matters.
   `test_a_transaction_stamped_exactly_at_t_is_treated_as_future` was added
   to close that, and confirmed to fail under the same injected leak.
+- **Backend tau and budget tests** (`test_tau_and_budgets.py`, 15 tests):
+  each level of the tie-break in isolation, that precision outranks the
+  tau preference rather than being overridden by it, and that the result is
+  **independent of grid order** under four different orderings — the whole
+  reason the tie-break was fixed. Then the budget selection at each frozen
+  budget, the inclusive boundary, an unreachable budget returning `None`
+  rather than approximating, the curve sorted for plotting, and the
+  motivating case written as a test: of two detectors the profligate one has
+  the higher recall and is the one the budget rejects.
+- **Backend oracle-diagnosis tests** (`test_oracle_diagnose.py`, 11 tests):
+  each of the four reasons on a hand-built case where the answer follows
+  from the construction — 40-hour gaps for `temporal_sparsity`, a campaign
+  swallowed by an unassigned-laundering chain for `purity_failure`, a
+  deadline before the first usable window for `late_only` — plus that a
+  longer lookback rescues a sparse campaign, that a *detected* campaign is
+  never diagnosed as sparse, that a genuine miss is never `unexplained`, and
+  that running a diagnosis leaves the evaluation's verdict untouched.
 - **Backend evaluation tests** (`test_evaluation.py`, 33 tests): cluster
   extraction (tau threshold, transitive joining, the >= 3 account minimum,
   direction-independence, determinism); the matching rule at and around both
@@ -1490,7 +1593,7 @@ campaign_id)`:
     stubbed in these tests.
 
 **Current pass status (2026-10-08):**
-- Backend: `python -m pytest tests/` from `backend/` → 208 passed, 25
+- Backend: `python -m pytest tests/` from `backend/` → 234 passed, 25
   skipped, 0 failed. The skips are the full-data suite, which needs the
   dataset that only exists on Kaggle; all 24 of its numbers passed there on
   2026-10-08/09.
@@ -1587,6 +1690,46 @@ Tagged points in the repository, newest first. Check one out with
 
 ## Changelog
 
+- **2026-10-15** — **The evaluation is validated on the full data** (oracle
+  far above random on every split), and three follow-ups landed before stage
+  3.3 begins.
+
+  *The oracle ceiling is now a measured number, and it is not 1.0.* Recorded
+  in its own section: test recall 0.821 at L = 24 and 0.893 at L = 48, with
+  median lead times of 74.7h and 72.1h and median `frac_observed` 0.25. Two
+  readings worth keeping: 11–18% of evaluable test campaigns are
+  **unreachable** under the frozen matching rule whatever the model, so the
+  honest denominator for a model's recall is the oracle rather than 1.0; and
+  L = 48 buys recall while *losing* a little earliness (0.821 → 0.893 recall,
+  74.7h → 72.1h lead), which is a trade-off for 3.3 to weigh rather than a
+  free win.
+
+  *`oracle-diagnose`* explains every missed campaign as
+  `temporal_sparsity`, `purity_failure`, `late_only` or `unexplained`, with
+  the evidence — largest connected fragment reached, transaction gaps against
+  the lookback, best cluster purity, and what the campaign merged with —
+  summarised by reason, `base_type` and group, and also characterises the
+  oracle's false-alarm clusters. Writing the tests surfaced a precedence
+  error in my first version: a campaign with transactions an hour apart whose
+  deadline falls before the first usable window was being reported as
+  *temporal sparsity*, which would send a reader looking for a longer
+  lookback when the real cause is censoring. Precedence is now
+  purity → late → sparsity, so the most specific explanation wins.
+
+  *Alert-budget metrics*, frozen: recall and median lead time at 10, 50 and
+  100 false alarms per day, taking the lowest tau that stays inside each
+  budget on validation, plus the recall-vs-alarm-rate curve for plotting.
+  Prompted by random reaching 0.27 recall at L = 48 on ~47,000 alarms a day.
+  An unreachable budget is reported as unreachable with the cheapest rate the
+  grid achieves — verified on the demo data, where random cannot get below
+  48.4/day and the 10/day budget correctly declines to pretend otherwise.
+
+  *The tau tie-break is now deterministic*: equal F1 → higher precision →
+  fewer false alarms → higher tau, tested to be independent of grid order.
+  This reverses the previous "prefer the lower tau", so the oracle now
+  selects the top of the grid; one existing test was updated accordingly.
+
+  Backend: 234 passed, 25 skipped.
 - **2026-10-11** — Added `docs/PROJECT_OVERVIEW.md`: a readable account of
   the whole project for someone arriving fresh — the problem, the research
   question and its positioning, the data, the frozen design in condensed

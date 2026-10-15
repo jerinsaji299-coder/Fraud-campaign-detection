@@ -494,9 +494,10 @@ def test_select_tau_uses_validation_only_and_returns_the_curve():
     )
     assert [row["tau"] for row in curve] == [0.25, 0.5, 0.75]
     assert all("campaign_f1" in row for row in curve)
-    # the oracle's scores are 0/1, so every tau in (0, 1] is equivalent and
-    # the tie-break picks the lowest
-    assert tau == 0.25
+    assert all("false_alarms_per_day" in row for row in curve)
+    # the oracle's scores are 0/1, so every tau in (0, 1] is the same
+    # detector; the tie-break then prefers the highest tau
+    assert tau == 0.75
 
 
 def test_select_tau_prefers_the_higher_f1():
