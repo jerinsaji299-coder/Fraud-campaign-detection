@@ -37,6 +37,7 @@ git clone https://github.com/jerinsaji299-coder/Fraud-campaign-detection.git
 18. [Phase 3 definitions](#phase-3-definitions-centralized-baselines)
     - [Oracle ceiling](#oracle-ceiling)
     - [Comparing two configurations: the paired method](#comparing-two-configurations-the-paired-method)
+    - [Recall against the ceiling](#recall-against-the-ceiling)
 19. [Version history](#version-history)
 20. [Changelog](#changelog)
 
@@ -105,7 +106,7 @@ no visibility reassignment is used in this phase.
 |---|---|---|
 | 3.0 | Kaggle runner + Phase 2 full-data verification | done — all 24 numbers PASS, determinism confirmed |
 | 3.1 | Window builder + features + leakage tests | done |
-| 3.2 | Evaluation module (extraction, matching, lead time, bootstrap CIs) + oracle and random scorers | done, **validated on full data** |
+| 3.2 | Evaluation module (extraction, matching, lead time, bootstrap CIs) + oracle and random scorers | done, **validated on full data**; ceiling, miss diagnosis and the paired lookback comparison all measured and recorded |
 | 3.3 | XGBoost baseline: train, select tau on validation, evaluate on test | not started |
 | 3.4 | GNN centralized (GINEConv edge classification) | not started |
 | 3.5 | Gate report + results files + frontend Results page wired to real baseline results | not started |
@@ -298,9 +299,13 @@ not this session):
   normalized by campaign duration, and fraction of campaign transactions
   observed at detection time. A campaign not detected by its `deadline` is
   "missed".
-- Test results reported on three subsets: `all`, `fully_observed`
+- Test results reported on four subsets: `all`, `fully_observed`
   (`crosses_cutoff == False`), `no_shared_accounts`
-  (`shares_train_account == False`).
+  (`shares_train_account == False`), and `oracle_reachable` (the campaigns
+  the oracle detects at that lookback and split — see
+  §[recall against the ceiling](#recall-against-the-ceiling)). The first
+  three are predicates on a campaign; the fourth depends on an oracle run,
+  so `constants.STATIC_TEST_SUBSETS` names the three that do not.
 
 ## Phase 3 definitions (centralized baselines)
 
@@ -401,15 +406,28 @@ stand out:
   model. Reporting a model's recall as a fraction of 1.0 would understate it;
   the honest denominator is the oracle. §[Why the oracle misses](#why-the-oracle-misses-campaigns)
   explains where that gap comes from.
-- **L = 48 raises recall. Whether it costs earliness is untested.** Test
-  recall rises from 0.821 to 0.893. The earliness side cannot be read off
-  this table: 74.7h and 72.1h are medians over *different sets of
-  campaigns*, and the extra campaigns L = 48 reaches are the harder, slower
-  ones that are detected late, which pulls its median down even if no
-  campaign got detected later. The two bootstrap CIs also overlap almost
-  entirely. The paired comparison below is what will decide this; until
-  `oracle-diagnose` has run with it on the full data, **the earliness
-  trade-off is untested and no direction should be claimed.**
+- **L = 48 buys recall and costs no earliness. Tested, 2026-10-17.** The
+  paired comparison settles what the two medians could not: on the
+  campaigns both lookbacks detect, the per-campaign lead-time difference is
+  **0.0h with a 95% CI of [0.0, 0.0] on every split**, and the same for
+  normalized lead time and `frac_observed`. There was no earliness
+  trade-off; the apparent 74.7h → 72.1h drop was entirely the changed
+  composition of the detected set. Coverage moves one way only on test:
+  L = 48 detects **4 campaigns L = 24 misses** (187, 194, 238, 245) and
+  misses none that L = 24 finds. On stress it gains 2 (261, 282) and loses
+  1 (295); on val it gains 1 (173) and loses none.
+
+| Split | Campaigns both detect | Paired difference (L48 − L24) | 95% CI | Only L = 48 | Only L = 24 |
+|---|---:|---:|---|---|---|
+| val | 19 | 0.0h | [0.0, 0.0] | 1 (173) | 0 |
+| test | 46 | 0.0h | [0.0, 0.0] | 4 (187, 194, 238, 245) | 0 |
+| stress | 54 | 0.0h | [0.0, 0.0] | 2 (261, 282) | 1 (295) |
+
+  Evidence: `docs/reference/oracle_diagnose.{md,json}`, Kaggle, commit
+  `eacb6d3`. Of the 46 paired test campaigns 40 tied exactly, 5 were
+  earlier under L = 48 and 1 under L = 24 — so even the sign counts carry
+  no useful direction, and the median difference of 0.0h is not an artefact
+  of a tie-heavy distribution being summarised away.
 
 Median `frac_observed` of 0.25 on test means the oracle fires when about a
 quarter of a campaign's transactions have happened — earlier than the
@@ -450,6 +468,37 @@ the sentence, and refuses to state a direction when the CI includes zero.
 unpaired medians say the better detector got worse by 45 hours while the
 paired difference is zero with one extra campaign detected.
 
+### Recall against the ceiling
+
+**Frozen 2026-10-17.** The oracle reaches 0.821 (L = 24) / 0.893 (L = 48)
+on test, so a model's recall measured against 1.0 is measured against a
+denominator that includes campaigns no detector could ever find. Every
+scorer and model is therefore reported two extra ways:
+
+- **`oracle_reachable`**, a fourth test subset: the campaigns the oracle
+  detects at that lookback and split. Reported alongside `all`,
+  `fully_observed` and `no_shared_accounts`, never instead of them.
+- **`recall_relative_to_ceiling`**, the recall as a fraction of the
+  oracle's recall on the same subset. A model at 0.60 against an 0.80
+  ceiling is at 0.75 of what was achievable, and saying 0.60 understates it.
+
+Both are reported; neither replaces absolute recall, because the absolute
+number is what says how much of the problem remains unsolved. The subset is
+not a property of a campaign, so `evaluation.summarize` requires the
+oracle's detected ids to compute it and **raises rather than silently
+falling back to every campaign** — a quiet fallback would divide by the
+wrong denominator and overstate a model.
+
+**Phase 5 will report both.** The visibility sweep's headline numbers are
+given on `all` *and* on `oracle_reachable`. The reason is specific to that
+experiment: the structurally undetectable campaigns below are concentrated
+in the fragmentable group, and they are undetectable in every condition and
+at every visibility level. Left in the denominator they add the same dead
+weight to all four conditions, compressing the differences the experiment
+exists to measure; removed, the dose-response curve is read over campaigns
+that could actually respond. Both are reported because the `all` number is
+the one an institution would experience.
+
 ### Why the oracle misses campaigns
 
 The oracle has perfect information, so a miss is never a scoring failure.
@@ -459,23 +508,90 @@ rule:
 
 | Reason | Meaning | What it implies |
 |---|---|---|
-| `temporal_sparsity` | at no window before the deadline did 3+ of its accounts connect **through its own laundering edges**, and none formed afterwards either | unreachable at this lookback; a longer L may help, and the reported largest transaction gap says whether it could |
+| `structurally_disconnected` | pool **every** one of its own edges before the deadline, with no window at all, and its largest connected set of accounts is still under 3 | **no lookback can ever detect it.** The evidence does not exist in the graph; this is a property of the campaign, and the hard floor under the ceiling |
+| `slow` | pooled, its own edges do connect 3+ accounts, but never inside a single window before the deadline | reachable in principle: a longer L may find it, and the reported largest transaction gap says whether it could |
 | `purity_failure` | a 3+ fragment did form, but the cluster it sat in was under half the campaign's own accounts | the campaign was merged into something bigger — the report names whether that was other campaigns, unassigned laundering, or both |
 | `late_only` | a matching cluster existed, but only after the deadline | censoring, not sparsity. A campaign whose transactions are an hour apart can still land here if its deadline precedes the first window that can see it |
 | `unexplained` | none of the above | would mean the diagnosis and the evaluation disagree, and is reported loudly rather than bucketed away |
 
-Precedence is deliberate: `purity_failure` is tested before `late_only`,
-and `late_only` before `temporal_sparsity`, so that the most specific
-explanation wins and a censored campaign is never mislabelled as sparse —
-which would send a reader hunting for a longer lookback when the problem is
-the deadline.
+Precedence is deliberate and frozen: **`purity_failure` → `late_only` →
+`structurally_disconnected` → `slow`**, so the most specific explanation
+wins. A censored campaign is never mislabelled as sparse, which would send a
+reader hunting for a longer lookback when the problem is the deadline; and a
+campaign whose evidence never connects at all is never mislabelled as slow,
+which would suggest a longer lookback could rescue it when nothing can.
+
+`structurally_disconnected` and `slow` were a single reason,
+`temporal_sparsity`, until 2026-10-17. They were separated because they
+imply opposite actions, and pooling them hid which of the two the ceiling
+was actually made of.
+
+**Measured on the full data, Kaggle, commit `eacb6d3`** (before the split
+was implemented, so these are the pooled counts):
+
+| L | `structurally_disconnected` + `slow` | `late_only` | `purity_failure` | Total misses |
+|---|---:|---:|---:|---:|
+| 24 | 36 | 2 | 0 | 38 |
+| 48 | 30 | 1 | 1 | 32 |
+
+Per split at L = 24: val 7, test 8, stress 21 pooled-sparsity misses; at
+L = 48: val 6, test 5, stress 19. **Purity failures are negligible** — one
+case in 70 misses across both lookbacks — which is why the matching rule
+stays frozen; there is no evidence that the 50% condition is costing
+anything.
+
+**The split itself, measured on the real 1% sample** (test split; the
+full-data split awaits the next Kaggle run):
+
+| L | `structurally_disconnected` | `slow` | `late_only` | Total |
+|---|---:|---:|---:|---:|
+| 24 | 5 | 3 | 2 | 10 |
+| 48 | 5 | 0 | 1 | 6 |
+
+All 10 structurally disconnected cases across both lookbacks are
+**BIPARTITE** and all are in the `fragmentable` group. Two things follow.
+First, the count does not move with L — 5 at both lookbacks — exactly as the
+definition requires, since no lookback can help. Second, the 4 campaigns
+L = 48 rescues are precisely the 3 `slow` ones plus 1 `late_only`, which is
+the mechanism behind its higher recall, now named rather than inferred.
+
+The sample is trustworthy for this one comparison because `make_sample`
+keeps **every** campaign transaction and thins only the background, and the
+sample reproduces the full-data test outcomes exactly: 56 campaigns, 46
+detected at L = 24 and 50 at L = 48, the same 4 rescued ids, and the same
+pooled sparsity totals (5 + 3 = 8, 5 + 0 = 5). It is **not** trustworthy for
+false-alarm rates or anything involving the background, which is 1% of it.
 
 The command also characterises the oracle's **false alarms** (1–6 per day on
 the full data). Since the oracle keeps only laundering edges, every cluster
 it forms is real laundering; a false alarm is therefore laundering that the
 matching rule could not attribute to a campaign of the split being scored
-and that was not majority-unassigned either. The report gives cluster sizes,
-how many campaigns each touched, and the best overlap achieved.
+and that was not majority-unassigned either.
+
+**Which of the rule's two conditions failed is now reported separately**,
+with counts. The rule requires *purity* (≥ 50% of the **cluster's** accounts
+belong to one campaign) **and** *coverage* (≥ 3 of that **campaign's**
+accounts are in the cluster), and a single "best overlap" number cannot say
+which bound was binding. The earlier summary line read "best overlap 0.667
+(below the 0.5 the rule requires)", which contradicts itself: 0.667 is above
+0.5. Those clusters had passed purity and failed coverage. Each condition is
+now checked against its own threshold and the binding one named:
+
+| `fails` | Meaning |
+|---|---|
+| `coverage` | pure enough, but holds under 3 of the campaign's accounts |
+| `purity` | holds 3+ of the campaign's accounts, but is too diluted by others |
+| `both` | neither condition met by any campaign it touches |
+| `no_campaign_accounts` | touches no campaign account at all: unattributable laundering |
+
+**On the real 1% sample** (test, L = 24; the background is thinned, so the
+*rate* is not full-data, but the mix is informative): of 22 sampled
+clusters, **21 fail coverage and 1 fails purity**, median best purity 0.667
+against a 0.50 threshold and median best coverage 2 accounts against a
+threshold of 3. The oracle's false alarms are therefore almost entirely
+*fragments of real campaigns that are too small to claim*, not clusters
+polluted by unrelated traffic — a different problem from the one the old
+wording implied, and one the three-account floor creates by design.
 
 ### Alert-budget metrics (frozen 2026-10-15)
 
@@ -619,6 +735,10 @@ transactions.
 | 2026-10-15 | **Tau tie-break made fully deterministic**: among thresholds with equal campaign-F1, prefer higher precision, then fewer false alarms, then the higher tau | Ties are common — a binary-scoring detector ties everywhere — and the previous rule (lowest tau) still left the outcome sensitive to what else tied. The new order expresses a preference rather than an accident: of two equally-scoring thresholds, take the one that cries wolf less, and failing that the cheaper, more conservative one. Tested to be independent of grid order | user decision, 2026-10-15 |
 | 2026-10-15 | `features-smoke` training probes are rule-3 filtered and the largest window comes from a full scan; the oracle's misses are diagnosed rather than accepted | The oracle misses 18% (L = 24) and 11% (L = 48) of test campaigns despite perfect information, so the ceiling is well below 1.0 and the reason matters: a campaign unreachable because of temporal sparsity says something different about the method than one lost to a purity failure. `oracle-diagnose` classifies each, and deliberately changes no rule | user decision, 2026-10-15; `tests/test_oracle_diagnose.py` |
 | 2026-10-17 | **Two configurations are compared by the paired method, and never by subtracting two median lead times.** Earliness is the per-campaign lead-time difference over the campaigns **both** detect — median, seeded bootstrap CI, and per-side earlier/tied counts, sign convention `b − a` so positive means `b` was earlier — applied equally to `normalized_lead_time` and `frac_observed`. Coverage is reported separately as the campaigns each side detects that the other misses, by id. Applies to the lookback comparison now and to the four conditions in Phase 4-5. The earlier claim that L = 48 loses earliness (74.7h → 72.1h) is **withdrawn as untested** | Those two medians are over different sets of campaigns. L = 48 additionally detects the harder, slower campaigns, which are detected late, so its median falls even if nothing was detected later than under L = 24 — a genuine improvement reads as a regression, and the bootstrap CIs overlapped almost entirely anyway. What changed is the composition of the set, not the earliness | user-reported, 2026-10-17; `tests/test_paired_comparison.py` |
+| 2026-10-17 | **The matching rule stays frozen.** The oracle's misses on the full data are 36 sparsity + 2 `late_only` + 0 `purity_failure` at L = 24, and 30 + 1 + 1 at L = 48 | One purity failure in 70 misses. The 50% purity condition is not what the ceiling is made of, so relaxing it would buy almost nothing and would cost the frozen definition every earlier result depends on | user decision, 2026-10-17; `docs/reference/oracle_diagnose.md` |
+| 2026-10-17 | **`temporal_sparsity` split into `structurally_disconnected` and `slow`**, precedence `purity_failure` → `late_only` → `structurally_disconnected` → `slow`. The first pools **every** own edge before the deadline with no window at all and still cannot connect 3 accounts; the second can, but never inside one window | The two imply opposite actions — nothing can be done about a disconnected campaign, while a slow one is a lookback question — and pooling them hid which of the two the ceiling was made of. On the sample all 10 disconnected cases are BIPARTITE and fragmentable, and the count does not move with L, which is the definition working | user decision, 2026-10-17; `tests/test_oracle_diagnose.py` |
+| 2026-10-17 | **Fourth test subset `oracle_reachable`** (the campaigns the oracle detects at that lookback and split) and **`recall_relative_to_ceiling`** reported for every scorer and model. Phase 5 reports the visibility analysis on both `all` and `oracle_reachable` | The oracle reaches 0.821/0.893 on test, so recall against 1.0 counts campaigns no detector could find. For Phase 5 specifically: the structurally undetectable campaigns are concentrated in the fragmentable group and are undetectable in every condition at every visibility level, so leaving them in the denominator adds the same dead weight to all four conditions and compresses the very differences the experiment measures. `all` is still reported, because that is what an institution would experience | user decision, 2026-10-17; `tests/test_evaluation.py` |
+| 2026-10-17 | **False alarms report which of the rule's two conditions failed** — purity < 0.5 vs coverage < 3 campaign accounts — with counts, replacing a single "best overlap" number | The old summary line said "best overlap 0.667 (below the 0.5 the rule requires)", which contradicts itself. Those clusters passed purity and failed coverage. On the sample 21 of 22 fail coverage, so the oracle's false alarms are mostly fragments of real campaigns too small to claim — a different problem from pollution by unrelated traffic, and one the three-account floor creates by design | user-reported, 2026-10-17 |
 | 2026-10-10 | **Stage 3.4 training regime frozen: both candidate lookbacks train with neighbour sampling** (LinkNeighborLoader-style mini-batches of target edges with sampled multi-hop neighbourhoods). Inference scores full windows, chunked if needed. Fanouts, batch size and negative/positive handling are chosen in stage 3.4 and reported before training | If L = 24 trained full-batch and L = 48 trained with sampling, the L comparison would confound lookback length with training method, and the chosen L could not be attributed to the lookback. Using one regime for both keeps that comparison clean. It also sidesteps the capacity question: the busiest L = 48 window is estimated at ~16.6 GB full-batch against 16 GB GPUs | user decision, 2026-10-10 |
 | 2026-10-10 | `features-smoke` samples only rule-3-valid training detection times, and a cheap full scan of **every** usable detection time supplies the largest-window figures | The first full-data run reported Sept 2 12:00 at L = 48 as the largest candidate window (1.5M edges), but that time violates rule 3: its lookback starts before `DATA_START`, so the window was silently clamped — which is also why its L = 48 and L = 72 rows were identical. Sampling five detection times cannot find the true maximum anyway, so the scan replaces guesswork with a full enumeration (counts only, no features) | user-reported, 2026-10-10 |
 | 2026-10-10 | "Mostly involved in unassigned-laundering edges", for the ambiguous rule, is read as **at least 50% of the cluster's accounts** touching a laundering edge that belongs to no campaign | The design says "mostly" without a number; 0.5 mirrors the matching rule's own threshold, so the two use one consistent notion of majority. Exposed as `constants.AMBIGUOUS_MIN_FRACTION` rather than buried in the code | interpretation, stage 3.2 |
@@ -699,6 +819,16 @@ project-root/
     PROJECT_OVERVIEW.md           readable summary of the whole project + improvement roadmap
     reference/
       01_data_verification.ipynb   read-only: verified Kaggle exploration behind every definition above
+      verify_report.md             stage 3.0 Kaggle run: all 24 regression numbers
+      regression_actuals.json      the same, machine-readable
+      visibility_hashes_session1.json  reference digests, session 1
+      visibility_hashes.json       the same digests, third independent session (identical)
+      pipeline_report.md           full-data pipeline run, commit eacb6d3
+      features_smoke.{md,csv,json} window sizes, feature dims, GPU estimates
+      features_smoke_scan_full.csv every usable detection time, scanned
+      evaluate_scorers.{md,csv,json}  oracle vs random on the full data
+      evaluate_scorers_tau_curve.csv  precision/recall/FA per tau
+      oracle_diagnose.{md,csv,json}   every oracle miss, diagnosed, + the paired comparison
   backend/
     requirements.txt               Python dependencies: pandas, numpy, pyarrow, pyyaml, pytest, fastapi, uvicorn, pydantic
     pyproject.toml                 setuptools packaging for `fraudcamp` (src/ layout) + pytest `fulldata` marker
@@ -1123,7 +1253,10 @@ committed.
     three lead-time forms; `summarize` gives recall, precision, false
     alarms per day and medians per test subset, with `bootstrap_ci`
     (seeded percentile bootstrap over campaigns) and `summarize_by` for
-    group and base_type breakdowns; `select_tau` chooses the threshold on
+    group and base_type breakdowns; `subset_filter` resolves a subset name,
+    including `oracle_reachable`, which it refuses to guess the denominator
+    for; `recall_relative_to_ceiling` divides a recall by the oracle's on the
+    same subset; `select_tau` chooses the threshold on
     **validation only** by campaign-level F1 and returns the full
     precision/recall-vs-tau curve, with `campaign_f1` as the cheap
     statistic the sweep uses instead of a bootstrap at every candidate;
@@ -1136,9 +1269,14 @@ committed.
     declining to state a direction when the CI includes zero. See
     §[the paired method](#comparing-two-configurations-the-paired-method).
   - `diagnose.py` — `diagnose_misses` classifies every missed campaign into
-    `temporal_sparsity` / `purity_failure` / `late_only` / `unexplained`
-    with the evidence behind the verdict, and `diagnose_false_alarms`
-    characterises what the oracle's false-alarm clusters actually are.
+    `purity_failure` / `late_only` / `structurally_disconnected` / `slow` /
+    `unexplained`, in that precedence, with the evidence behind the verdict:
+    the largest fragment reached inside a window, the largest reached with
+    every own edge pooled and no window at all (which is what separates the
+    last two), transaction gaps against the lookback, best cluster purity
+    and what the campaign merged with. `diagnose_false_alarms` characterises
+    the oracle's false-alarm clusters and names which half of the matching
+    rule each one fails, purity or coverage, against its own threshold.
     Diagnosis only: nothing here scores, and nothing changes a rule.
   - `scorers.py` — the oracle (score = true label) and random scorers.
   The scorer is called as `scorer(window_transactions, t)` and only ever
@@ -1440,13 +1578,15 @@ group, test_subset)`:
 | `seed` | experiment seed, one of `0,1,2,3,4` |
 | `visibility_bin` | one of `"100", "75", "50", "low"` |
 | `group` | `hub` or `fragmentable` (control group = `hub` + `unfragmentable`) |
-| `test_subset` | `"all"`, `"fully_observed"`, or `"no_shared_accounts"` |
+| `test_subset` | `"all"`, `"fully_observed"`, `"no_shared_accounts"`, or `"oracle_reachable"` |
 | `campaign_recall` | fraction of eligible campaigns detected by deadline |
 | `campaign_precision` | fraction of detections that are true positives |
 | `false_alarms` | count of false-positive detections |
 | `median_lead_time_h` | median lead time in hours, among detected campaigns |
 | `median_normalized_lead_time` | median lead time normalized by campaign duration |
 | `median_frac_observed_at_detection` | median fraction of campaign transactions observed at detection |
+| `oracle_recall` | the oracle's recall on the same split, lookback and subset: the ceiling |
+| `recall_relative_to_ceiling` | `campaign_recall / oracle_recall`, the honest fraction achieved |
 
 **`results/detections.parquet`** — one row per `(condition, seed, target,
 campaign_id)`:
@@ -1536,15 +1676,24 @@ campaign_id)`:
   campaign's 30-hour gaps put it beyond any 24h window, checking it surfaces
   as coverage rather than as a lead-time change. **Proven able to fail:**
   making the comparison unpaired fails 4 of the 14.
-- **Backend oracle-diagnosis tests** (`test_oracle_diagnose.py`, 11 tests):
+- **Backend oracle-diagnosis tests** (`test_oracle_diagnose.py`, 14 tests):
   each of the four reasons on a hand-built case where the answer follows
   from the construction — 40-hour gaps for `temporal_sparsity`, a campaign
   swallowed by an unassigned-laundering chain for `purity_failure`, a
   deadline before the first usable window for `late_only` — plus that a
   longer lookback rescues a sparse campaign, that a *detected* campaign is
   never diagnosed as sparse, that a genuine miss is never `unexplained`, and
-  that running a diagnosis leaves the evaluation's verdict untouched.
-- **Backend evaluation tests** (`test_evaluation.py`, 33 tests): cluster
+  that running a diagnosis leaves the evaluation's verdict untouched. Then
+  the two sparsity reasons: three disjoint pairs that no lookback can ever
+  connect are `structurally_disconnected`, a 40-hour-gap chain is `slow`,
+  and one test isolates the single thing that separates them by holding the
+  miss fixed and varying only the pooled connectivity. For false alarms,
+  that a cluster can fail coverage while *passing* purity — the case the old
+  summary line contradicted itself over — each failing condition named for
+  the binding bound, and that the classification agrees with
+  `cluster_hits_campaign` on five hand-built clusters rather than
+  re-implementing the thresholds.
+- **Backend evaluation tests** (`test_evaluation.py`, 36 tests): cluster
   extraction (tau threshold, transitive joining, the >= 3 account minimum,
   direction-independence, determinism); the matching rule at and around both
   of its thresholds; classification of all four outcome kinds, including
@@ -1661,7 +1810,7 @@ campaign_id)`:
     stubbed in these tests.
 
 **Current pass status (2026-10-17):**
-- Backend: `python -m pytest tests/` from `backend/` → 248 passed, 25
+- Backend: `python -m pytest tests/` from `backend/` → 256 passed, 25
   skipped, 0 failed. The skips are the full-data suite, which needs the
   dataset that only exists on Kaggle; all 24 of its numbers passed there on
   2026-10-08/09.
@@ -1680,14 +1829,24 @@ is the one piece that most warrants a look in a browser before the demo.
 
 ## Known limitations and open questions
 
-- **Whether L = 48 costs earliness relative to L = 24 is untested.** L = 48
-  measurably detects more test campaigns (recall 0.893 vs 0.821), but the two
-  configurations have never been compared on the campaigns they both detect,
-  which is the only comparison that isolates earliness from coverage. The
-  paired comparison is implemented and wired into `oracle-diagnose`; it needs
-  one full-data Kaggle run. Until then neither lookback should be described as
-  earlier than the other. See
-  §[the paired method](#comparing-two-configurations-the-paired-method).
+- **Some campaigns are undetectable by construction, and they are not
+  randomly distributed.** On the sample's test split, 5 of 56 campaigns are
+  `structurally_disconnected`: pooling every one of their own edges before
+  the deadline, their largest connected set of accounts is 2, and the rule
+  needs 3. All are BIPARTITE and all are `fragmentable`. No model, lookback
+  or condition can ever detect them, so they are a fixed floor under every
+  result — and because they sit in the group whose fragmentation Phase 5
+  studies, they would dilute that comparison if left in the denominator.
+  Hence `oracle_reachable`. The full-data split of this floor across all
+  three splits needs the next Kaggle run; only the pooled totals (36/30) are
+  measured on the full data so far.
+- **The 1% sample keeps every campaign transaction and thins only the
+  background**, so it has 53,960 rows at a 5.99% laundering rate against the
+  full data's 0.1%. Campaign-level recall and lead time transfer closely —
+  it reproduces the full-data test outcomes exactly — but anything involving
+  the background does not: false-alarm rates, precision, FA/day and any
+  threshold chosen against them are ~60x off and must come from a full-data
+  run.
 - The pipeline currently targets only `HI-Small`; generalization to
   `HI-Medium`/`HI-Large` or the `LI-*` (low-illicit-ratio) files is
   unverified and deferred to a possible later replication.
@@ -1765,6 +1924,59 @@ Tagged points in the repository, newest first. Check one out with
 | `v0.1-data-pipeline` | 2026-10-08 | Phase 2 complete, plus the stage 3.0 Kaggle runner. The research pipeline (campaign ground truth, splits, topology groups, institutions, visibility), the artifact export, the read-only FastAPI server, and the full React frontend — 69 backend tests and 48 frontend tests passing. **No models and no experiment results**: the four conditions are defined and the result schema is fixed, but nothing has been trained or run, and the full-data regression numbers are still unverified (that is what stage 3.0's Kaggle run is for). |
 
 ## Changelog
+
+- **2026-10-17 (later)** — **Full-data results recorded, and three
+  refinements before stage 3.3.** Kaggle run at commit `eacb6d3`; the
+  evidence files are committed under `docs/reference/`, and the real 1%
+  sample is in `backend/data/sample/` (gitignored, as always).
+
+  *The earliness question is answered.* The paired comparison ran on the
+  full data: **0.0h difference with a 95% CI of [0.0, 0.0] on every split**,
+  for absolute, normalized and `frac_observed` lead time alike. L = 48 costs
+  no earliness and detects 4 test campaigns L = 24 misses (187, 194, 238,
+  245) while missing none. The withdrawn claim was not merely unsupported;
+  it was wrong, and the paired method is what showed that.
+
+  *Also measured:* 24 of 24 pinned regression numbers pass again, and the
+  five visibility digests are byte-identical in a **third** independent
+  session. Oracle misses: 36 sparsity + 2 `late_only` + 0 `purity_failure`
+  at L = 24, and 30 + 1 + 1 at L = 48. **Decision: the matching rule stays
+  frozen** — one purity failure in 70 misses means the 50% condition is not
+  what the ceiling is made of.
+
+  *`temporal_sparsity` is now two reasons*, `structurally_disconnected` and
+  `slow`, with precedence `purity_failure` → `late_only` →
+  `structurally_disconnected` → `slow`. The first pools **every** own edge
+  before the deadline, with no window at all, and still cannot connect 3
+  accounts, so no lookback can ever detect it; the second can, and a longer
+  lookback may reach it. They were separated because they imply opposite
+  actions. On the sample's test split the 8 pooled sparsity misses at L = 24
+  split 5 / 3, all 10 disconnected cases across both lookbacks are BIPARTITE
+  and fragmentable, the count does not move with L, and the 4 campaigns
+  L = 48 rescues are exactly the 3 `slow` ones plus 1 `late_only` — the
+  mechanism behind its recall, now named rather than inferred.
+
+  *A fourth test subset, `oracle_reachable`*, and
+  `recall_relative_to_ceiling`, reported for every scorer and model
+  alongside `all` / `fully_observed` / `no_shared_accounts`. `summarize`
+  **raises** if asked for the subset without the oracle's detected ids,
+  rather than dividing by the wrong denominator. Phase 5 will report the
+  visibility analysis on both `all` and `oracle_reachable`, because the
+  structurally undetectable campaigns sit in the fragmentable group and
+  would add the same dead weight to all four conditions, compressing the
+  effect the experiment exists to measure.
+
+  *The false-alarm summary is corrected.* It read "best overlap 0.667
+  (below the 0.5 the rule requires)", which contradicts itself. Purity and
+  coverage are now checked against their own thresholds and the binding one
+  named: on the sample, 21 of 22 clusters fail **coverage**, median purity
+  0.667 against 0.50 and median coverage 2 accounts against 3. The oracle's
+  false alarms are mostly fragments of real campaigns too small to claim,
+  which the three-account floor creates by design.
+
+  *Tests:* backend 256 passed, 25 skipped (`test_oracle_diagnose.py` 14,
+  `test_evaluation.py` 36). All three refinements were also run end to end
+  through `oracle-diagnose` and `evaluate-scorers` on the real sample.
 
 - **2026-10-17** — **Lookback and condition comparisons are now paired, and
   the earliness claim about L = 48 is withdrawn as untested.**

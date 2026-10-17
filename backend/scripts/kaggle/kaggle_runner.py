@@ -981,17 +981,51 @@ def command_evaluate_scorers(args: argparse.Namespace) -> int:
                         }
                     )
 
+        # --- the ceiling first -------------------------------------------
+        # Every scorer is reported on `oracle_reachable` as well, which is
+        # the set of campaigns the oracle detects at this lookback and
+        # split, and against the oracle's recall on the same subset. So the
+        # oracle has to be evaluated before anything can be compared to it.
+        # Kept and reused below rather than evaluated twice.
+        oracle_evaluated: dict[tuple[int, str], object] = {}
+        oracle_reachable: dict[tuple[int, str], list[int]] = {}
+        oracle_recall: dict[tuple[int, str, str], float | None] = {}
+        for split in splits:
+            with step(f"ceiling: oracle on {split}, L={lookback}h"):
+                evaluated = evaluation.evaluate_split(
+                    result.full_df, result.camp, result.pattern_df,
+                    result.accounts_by_campaign, split, oracle,
+                    tau=chosen["oracle"], lookback_h=lookback, seed=args.seed,
+                    scorer_name="oracle",
+                )
+            oracle_evaluated[(lookback, split)] = evaluated
+            reachable = [o.campaign_id for o in evaluated.outcomes if o.detected]
+            oracle_reachable[(lookback, split)] = reachable
+            for subset in constants.TEST_SUBSETS:
+                oracle_recall[(lookback, split, subset)] = evaluation.summarize(
+                    evaluated, subset=subset, bootstrap_seed=args.seed,
+                    n_resamples=args.bootstrap, oracle_reachable=reachable,
+                )["campaign_recall"]
+            print(
+                f"  {split}: oracle reaches {len(reachable)}/"
+                f"{len(evaluated.outcomes)} campaigns; that set is the "
+                f"`oracle_reachable` denominator"
+            )
+
         # --- evaluate each horizon at the frozen tau ---------------------
         for name, scorer in (("oracle", oracle), ("random", make_random(args.seed))):
             tau = chosen[name]
             for split in splits:
-                with step(f"evaluate {name} on {split}, L={lookback}h, tau={tau}"):
-                    evaluated = evaluation.evaluate_split(
-                        result.full_df, result.camp, result.pattern_df,
-                        result.accounts_by_campaign, split, scorer,
-                        tau=tau, lookback_h=lookback, seed=args.seed,
-                        scorer_name=name,
-                    )
+                if name == "oracle":
+                    evaluated = oracle_evaluated[(lookback, split)]
+                else:
+                    with step(f"evaluate {name} on {split}, L={lookback}h, tau={tau}"):
+                        evaluated = evaluation.evaluate_split(
+                            result.full_df, result.camp, result.pattern_df,
+                            result.accounts_by_campaign, split, scorer,
+                            tau=tau, lookback_h=lookback, seed=args.seed,
+                            scorer_name=name,
+                        )
                 for subset in constants.TEST_SUBSETS:
                     summary_rows.append(
                         {
@@ -999,6 +1033,10 @@ def command_evaluate_scorers(args: argparse.Namespace) -> int:
                             **evaluation.summarize(
                                 evaluated, subset=subset,
                                 bootstrap_seed=args.seed, n_resamples=args.bootstrap,
+                                oracle_reachable=oracle_reachable[(lookback, split)],
+                                oracle_recall=oracle_recall[
+                                    (lookback, split, subset)
+                                ],
                             ),
                         }
                     )
@@ -1021,8 +1059,12 @@ def command_evaluate_scorers(args: argparse.Namespace) -> int:
     print("\n" + "=" * 126)
     print(
         f"{'L':>3} {'split':<7}{'scorer':<8}{'subset':<20}{'tau':>5}{'camp':>5}{'det':>5}"
-        f"{'recall':>8}{'prec':>7}{'FA/day':>8}{'other':>7}{'ambig':>7}"
+        f"{'recall':>8}{'vs ceil':>9}{'prec':>7}{'FA/day':>8}{'other':>7}{'ambig':>7}"
         f"{'lead_h':>9}{'norm':>7}{'frac':>7}"
+    )
+    print(
+        "  'vs ceil' is recall as a fraction of the oracle's on the same subset: "
+        "the honest denominator, since the oracle itself is well below 1.0."
     )
     print("-" * 126)
     for row in summary_rows:
@@ -1030,6 +1072,7 @@ def command_evaluate_scorers(args: argparse.Namespace) -> int:
             f"{row['lookback_h']:>3} {row['split']:<7}{row['scorer']:<8}"
             f"{row['test_subset']:<20}{row['tau']:>5}{row['n_campaigns']:>5}"
             f"{row['n_detected']:>5}{fmt(row['campaign_recall']):>8}"
+            f"{fmt(row['recall_relative_to_ceiling'], '.3f'):>9}"
             f"{fmt(row['campaign_precision']):>7}{row['false_alarms_per_day']:>8.1f}"
             f"{row['other_split_hits']:>7}{row['ambiguous']:>7}"
             f"{fmt(row['median_lead_time_h'], '.1f'):>9}"
@@ -1396,23 +1439,66 @@ def command_oracle_diagnose(args: argparse.Namespace) -> int:
     ):
         print(f"  L={row.lookback_h:>2} {row.group:<16} {row.reason:<20} {row.n:>4}")
 
-    sparse = frame[frame["reason"] == "temporal_sparsity"]
-    if not sparse.empty:
-        print("\n--- temporal sparsity: how far from matchable? ---")
+    disconnected = frame[frame["reason"] == "structurally_disconnected"]
+    if not disconnected.empty:
+        print("\n--- structurally disconnected: beyond ANY lookback ---")
         print(
-            f"  max connected accounts reached: median "
-            f"{sparse['max_connected_own_accounts'].median():.1f}, "
-            f"max {sparse['max_connected_own_accounts'].max()}"
+            "  Pooling every own edge before the deadline, with no window at all,"
         )
         print(
-            f"  n_txn: median {sparse['n_txn'].median():.1f}; "
-            f"duration_h: median {sparse['duration_h'].median():.1f}"
+            "  these never connect 3 accounts. No lookback can reach them, so they"
+        )
+        print("  are a property of the campaign and a hard floor on the ceiling.")
+        print(
+            f"  pooled connected accounts: median "
+            f"{disconnected['max_connected_all_edges'].median():.1f}, "
+            f"max {disconnected['max_connected_all_edges'].max()} "
+            f"(the rule needs 3)"
         )
         print(
-            f"  largest transaction gap: median {sparse['max_txn_gap_h'].median():.1f}h; "
+            f"  n_accounts: median {disconnected['n_accounts'].median():.1f}; "
+            f"n_txn: median {disconnected['n_txn'].median():.1f}; "
+            f"duration_h: median {disconnected['duration_h'].median():.1f}"
+        )
+        print("  by base_type:")
+        for base_type, n in (
+            disconnected.groupby("base_type").size().sort_values(ascending=False).items()
+        ):
+            print(f"    {base_type:<16} {n:>4}")
+        print("  by group:")
+        for group, n in disconnected.groupby("group").size().items():
+            print(f"    {group:<16} {n:>4}")
+
+    slow = frame[frame["reason"] == "slow"]
+    if not slow.empty:
+        print("\n--- slow: connects, but never inside one window ---")
+        print(
+            "  The evidence exists and arrives too spread out, so a longer lookback"
+        )
+        print("  may reach these. The transaction gap says whether it could.")
+        print(
+            f"  pooled connected accounts: median "
+            f"{slow['max_connected_all_edges'].median():.1f} "
+            f"(>= 3 by definition); best inside one window: median "
+            f"{slow['max_connected_own_accounts'].median():.1f}"
+        )
+        print(
+            f"  n_txn: median {slow['n_txn'].median():.1f}; "
+            f"duration_h: median {slow['duration_h'].median():.1f}"
+        )
+        print(
+            f"  largest transaction gap: median {slow['max_txn_gap_h'].median():.1f}h; "
             f"gap exceeds the lookback in "
-            f"{int(sparse['gap_exceeds_lookback'].sum())}/{len(sparse)} cases"
+            f"{int(slow['gap_exceeds_lookback'].sum())}/{len(slow)} cases"
         )
+        print("  by base_type:")
+        for base_type, n in (
+            slow.groupby("base_type").size().sort_values(ascending=False).items()
+        ):
+            print(f"    {base_type:<16} {n:>4}")
+        print("  by group:")
+        for group, n in slow.groupby("group").size().items():
+            print(f"    {group:<16} {n:>4}")
 
     impure = frame[frame["reason"] == "purity_failure"]
     if not impure.empty:
@@ -1460,10 +1546,36 @@ def command_oracle_diagnose(args: argparse.Namespace) -> int:
             f"max {fa_frame['campaigns_touched'].max()}"
         )
         print(
-            f"  best overlap with any campaign: median "
-            f"{fa_frame['best_overlap_fraction'].median():.3f} "
-            f"(below the 0.5 the rule requires, by construction)"
+            "\n  The rule has two conditions and a false alarm fails at least one:"
         )
+        print(
+            "  purity, >= 0.50 of the CLUSTER's accounts belonging to one campaign,"
+        )
+        print(
+            "  and coverage, >= 3 of that CAMPAIGN's accounts being in the cluster."
+        )
+        print("  Each is reported against its own threshold:")
+        print(
+            f"    best purity:   median "
+            f"{fa_frame['best_purity_fraction'].median():.3f} (threshold 0.50)"
+        )
+        print(
+            f"    best coverage: median "
+            f"{fa_frame['best_coverage_accounts'].median():.1f} accounts "
+            f"(threshold 3)"
+        )
+        print("  which condition was binding:")
+        for condition, n in fa_frame.groupby("fails").size().items():
+            meaning = {
+                "coverage": "pure enough, too few of the campaign's accounts",
+                "purity": "enough of the campaign, too diluted by other accounts",
+                "both": "neither condition met",
+                "no_campaign_accounts": "touches no campaign account at all",
+            }.get(condition, "")
+            print(
+                f"    {condition:<22} {n:>4}  "
+                f"({n / len(fa_frame):.0%})  {meaning}"
+            )
         print(
             f"  unassigned-laundering accounts per cluster: median "
             f"{fa_frame['accounts_unassigned_laundering'].median():.1f}"
@@ -1528,9 +1640,12 @@ def command_oracle_diagnose(args: argparse.Namespace) -> int:
                 "",
                 "| reason | meaning |",
                 "|---|---|",
-                "| `temporal_sparsity` | at no window before the deadline did 3+ of "
-                "its accounts connect through its own laundering edges, and none "
-                "formed afterwards either |",
+                "| `structurally_disconnected` | pooling every own edge before "
+                "the deadline, with no window at all, its largest connected set of "
+                "accounts is still under 3 - no lookback can ever detect it |",
+                "| `slow` | pooled, its own edges do connect 3+ accounts, but never "
+                "inside a single window before the deadline - a longer lookback "
+                "may reach it |",
                 "| `purity_failure` | a 3+ fragment did form, but the cluster it sat "
                 "in was under half the campaign's own accounts |",
                 "| `late_only` | a matching cluster existed, but only after the "

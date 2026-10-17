@@ -388,12 +388,70 @@ def test_summary_subsets_and_precision_exclude_other_and_ambiguous():
         full_df, camp, pattern_df, accounts, "test", _oracle,
         tau=0.5, lookback_h=24, scorer_name="oracle",
     )
+    reachable = [o.campaign_id for o in result.outcomes if o.detected]
     for subset in constants.TEST_SUBSETS:
-        summary = evaluation.summarize(result, subset=subset)
+        summary = evaluation.summarize(
+            result, subset=subset, oracle_reachable=reachable,
+            oracle_recall=1.0,
+        )
         assert summary["campaign_recall"] == 1.0
         assert summary["campaign_precision"] == 1.0
         assert summary["false_alarms"] == 0
         assert summary["test_subset"] == subset
+        assert summary["recall_relative_to_ceiling"] == 1.0
+
+
+def test_oracle_reachable_subset_scores_against_the_reachable_ceiling():
+    """The oracle's own recall on `oracle_reachable` is 1.0 by construction,
+    and a weaker scorer's recall rises on it because the campaigns no
+    detector could reach are no longer in the denominator."""
+    full_df, camp, pattern_df, accounts = _world(
+        [
+            ("2022-09-06 07:00", "1_A", "1_B", 0),
+            ("2022-09-06 08:00", "1_B", "1_C", 0),
+            ("2022-09-06 09:00", "1_C", "1_D", 0),
+            ("2022-09-07 20:00", "1_D", "1_A", 0),
+            # 40h gaps: no window ever holds 3 of its accounts, so the
+            # oracle cannot reach it either
+            ("2022-09-06 02:00", "2_A", "2_B", 1),
+            ("2022-09-07 18:00", "2_B", "2_C", 1),
+            ("2022-09-09 10:00", "2_C", "2_D", 1),
+        ]
+    )
+    result = evaluation.evaluate_split(
+        full_df, camp, pattern_df, accounts, "test", _oracle,
+        tau=0.5, lookback_h=24, scorer_name="oracle",
+    )
+    reachable = [o.campaign_id for o in result.outcomes if o.detected]
+    assert len(reachable) == 1  # campaign 0 only
+
+    on_all = evaluation.summarize(result, subset="all")
+    on_reachable = evaluation.summarize(
+        result, subset="oracle_reachable", oracle_reachable=reachable
+    )
+    assert on_all["campaign_recall"] == 0.5
+    assert on_reachable["campaign_recall"] == 1.0
+    assert on_reachable["n_campaigns"] == 1
+
+
+def test_recall_relative_to_ceiling_uses_the_oracle_as_the_denominator():
+    assert evaluation.recall_relative_to_ceiling(0.5, 1.0) == 0.5
+    # the point of the measure: 0.6 against a 0.8 ceiling is 0.75, not 0.6
+    assert evaluation.recall_relative_to_ceiling(0.6, 0.8) == pytest.approx(0.75)
+    # an unreachable split cannot be divided by
+    assert evaluation.recall_relative_to_ceiling(0.4, 0.0) is None
+    assert evaluation.recall_relative_to_ceiling(None, 0.9) is None
+    assert evaluation.recall_relative_to_ceiling(0.4, None) is None
+
+
+def test_the_oracle_reachable_subset_refuses_to_guess_its_own_denominator():
+    """Silently falling back to every campaign would report a
+    ceiling-relative number against the wrong denominator, which is worse
+    than refusing."""
+    with pytest.raises(ValueError, match="oracle_reachable"):
+        evaluation.subset_filter("oracle_reachable")
+    assert "oracle_reachable" in constants.TEST_SUBSETS
+    assert "oracle_reachable" not in constants.STATIC_TEST_SUBSETS
 
 
 def test_bootstrap_ci_is_seeded_and_brackets_the_statistic():

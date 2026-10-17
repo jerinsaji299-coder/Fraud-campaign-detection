@@ -33,16 +33,68 @@ TIGHT = [
 ]
 
 
-def test_temporal_sparsity_when_transactions_are_further_apart_than_the_lookback():
-    """40-hour gaps mean no 24h window ever holds 3 connected accounts."""
+def test_slow_when_transactions_are_further_apart_than_the_lookback():
+    """40-hour gaps mean no 24h window ever holds 3 connected accounts.
+
+    The evidence does exist: pooled over the whole campaign its own edges
+    connect 3 accounts. That is what makes this `slow` rather than
+    `structurally_disconnected` — a longer lookback could reach it.
+    """
     full_df, camp, _, accounts = _world(SPARSE)
     row = evaluation.diagnose_misses(full_df, camp, accounts, [0], "test", 24)[0]
 
-    assert row["reason"] == "temporal_sparsity"
+    assert row["reason"] == "slow"
     assert row["max_connected_own_accounts"] < 3
+    assert row["max_connected_all_edges"] >= 3
     assert row["gap_exceeds_lookback"] is True
     assert row["max_txn_gap_h"] > 24
     assert "largest gap" in row["detail"]
+
+
+def test_structurally_disconnected_when_the_evidence_never_connects():
+    """Three disjoint pairs: six accounts, no two edges sharing an account.
+
+    Pool every edge, ignore windows entirely, and the largest connected set
+    is still 2. No lookback can ever make this matchable, which is a
+    different statement from "too slow" and gets its own reason.
+    """
+    disjoint = [
+        ("2022-09-06 02:00", "1_A", "1_B", 0),
+        ("2022-09-06 03:00", "1_C", "1_D", 0),
+        ("2022-09-06 04:00", "1_E", "1_F", 0),
+    ]
+    full_df, camp, _, accounts = _world(disjoint)
+    row = evaluation.diagnose_misses(full_df, camp, accounts, [0], "test", 24)[0]
+
+    assert row["reason"] == "structurally_disconnected"
+    assert row["max_connected_all_edges"] == 2
+    assert row["gap_exceeds_lookback"] is False  # nothing to do with timing
+    assert "no lookback can" in row["detail"]
+
+
+def test_the_two_sparsity_reasons_are_told_apart_by_pooled_connectivity():
+    """The one thing that separates them, stated as a test: same miss, and
+    the pooled connectivity alone decides which reason is reported."""
+    disjoint = [
+        ("2022-09-06 02:00", "1_A", "1_B", 0),
+        ("2022-09-06 03:00", "1_C", "1_D", 0),
+        ("2022-09-06 04:00", "1_E", "1_F", 0),
+    ]
+    rows = {}
+    for name, campaign_rows in (("slow", SPARSE), ("disconnected", disjoint)):
+        full_df, camp, _, accounts = _world(campaign_rows)
+        rows[name] = evaluation.diagnose_misses(
+            full_df, camp, accounts, [0], "test", 24
+        )[0]
+
+    # neither ever gets 3 connected accounts inside a window
+    assert rows["slow"]["max_connected_own_accounts"] < 3
+    assert rows["disconnected"]["max_connected_own_accounts"] < 3
+    # pooled, one does and one does not
+    assert rows["slow"]["max_connected_all_edges"] >= 3
+    assert rows["disconnected"]["max_connected_all_edges"] < 3
+    assert rows["slow"]["reason"] == "slow"
+    assert rows["disconnected"]["reason"] == "structurally_disconnected"
 
 
 def test_a_longer_lookback_can_rescue_a_sparse_campaign():
@@ -105,7 +157,8 @@ def test_every_reported_field_is_present_and_the_reason_is_known():
     for field in (
         "campaign_id", "split", "lookback_h", "base_type", "group", "reason",
         "detail", "n_txn", "n_accounts", "duration_h", "deadline",
-        "max_connected_own_accounts", "max_txn_gap_h", "gap_exceeds_lookback",
+        "max_connected_own_accounts", "max_connected_all_edges",
+        "max_txn_gap_h", "gap_exceeds_lookback",
         "best_cluster_purity", "best_cluster_size", "merged_with_campaigns",
         "merged_with_unassigned", "windows_checked",
     ):
@@ -143,7 +196,7 @@ def test_a_detected_campaign_is_not_diagnosed_as_sparse():
     assert result.outcomes[0].detected
     row = evaluation.diagnose_misses(full_df, camp, accounts, [0], "test", 24)[0]
     assert row["max_connected_own_accounts"] >= 3
-    assert row["reason"] != "temporal_sparsity"
+    assert row["reason"] not in ("slow", "structurally_disconnected")
 
 
 def test_false_alarm_diagnosis_characterises_the_clusters():
@@ -173,8 +226,80 @@ def test_false_alarm_diagnosis_characterises_the_clusters():
     )
     for row in rows:
         assert row["cluster_size"] >= 3
-        assert row["best_overlap_fraction"] < 0.5
+        assert row["fails"] in evaluation.FALSE_ALARM_CONDITIONS
         assert {"t", "split", "lookback_h", "campaigns_touched"} <= set(row)
+        # whichever condition is named, the rule really does decline it
+        assert not (
+            row["best_purity_fraction"] >= 0.5
+            and row["best_coverage_accounts"] >= 3
+        )
+
+
+def test_a_false_alarm_can_fail_coverage_while_passing_purity():
+    """The case the old summary line contradicted itself over.
+
+    A cluster two thirds of which belongs to one campaign has passed the
+    0.5 purity condition comfortably. What it failed is coverage: it holds
+    only 2 of that campaign's accounts and the rule needs 3. Reporting its
+    0.667 as "below the 0.5 the rule requires" was simply wrong, so each
+    condition is now checked against its own threshold.
+    """
+    from fraudcamp.evaluation.diagnose import _failed_condition
+
+    campaign = {0: ("1_A", "1_B", "1_C", "1_D")}
+    row = _failed_condition({"1_A", "1_B", "7_X"}, {0}, campaign)
+
+    assert row["best_purity_fraction"] > 0.5
+    assert row["best_coverage_accounts"] == 2
+    assert row["fails"] == "coverage"
+
+
+def test_each_failing_condition_is_named_for_the_binding_bound():
+    from fraudcamp.evaluation.diagnose import _failed_condition
+
+    campaign = {0: ("1_A", "1_B", "1_C", "1_D")}
+
+    # enough of the campaign's accounts, but swamped by other accounts
+    diluted = _failed_condition(
+        {"1_A", "1_B", "1_C", "7_X", "7_Y", "7_Z", "7_W"}, {0}, campaign
+    )
+    assert diluted["best_coverage_accounts"] == 3
+    assert diluted["best_purity_fraction"] < 0.5
+    assert diluted["fails"] == "purity"
+
+    # neither condition met
+    both = _failed_condition({"1_A", "7_X", "7_Y", "7_Z"}, {0}, campaign)
+    assert both["fails"] == "both"
+
+    # touches no campaign account at all: pure unassigned laundering
+    none = _failed_condition({"7_X", "7_Y", "7_Z"}, set(), campaign)
+    assert none["fails"] == "no_campaign_accounts"
+    assert none["best_purity_fraction"] == 0.0
+    assert none["best_coverage_accounts"] == 0
+
+
+def test_the_named_condition_agrees_with_the_frozen_matching_rule():
+    """The classification must use the rule's own thresholds, not a copy
+    that could drift from them."""
+    from fraudcamp.evaluation.clusters import cluster_hits_campaign
+    from fraudcamp.evaluation.diagnose import _failed_condition
+
+    campaign_accounts = ("1_A", "1_B", "1_C", "1_D")
+    campaign = {0: campaign_accounts}
+    clusters = [
+        {"1_A", "1_B", "7_X"},
+        {"1_A", "1_B", "1_C", "7_X", "7_Y", "7_Z", "7_W"},
+        {"1_A", "7_X", "7_Y", "7_Z"},
+        {"1_A", "1_B", "1_C"},
+        {"1_A", "1_B", "1_C", "1_D", "7_X"},
+    ]
+    for cluster in clusters:
+        row = _failed_condition(cluster, {0}, campaign)
+        hits = cluster_hits_campaign(cluster, campaign_accounts)
+        passes_both = (
+            row["best_purity_fraction"] >= 0.5 and row["best_coverage_accounts"] >= 3
+        )
+        assert hits == passes_both, (cluster, row)
 
 
 def test_diagnosis_does_not_change_the_matching_rule():

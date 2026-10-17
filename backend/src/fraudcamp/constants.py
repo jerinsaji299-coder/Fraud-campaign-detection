@@ -105,7 +105,13 @@ MATCH_MIN_ACCOUNTS = 3
 #: belongs to no campaign. The design says "mostly"; 0.5 mirrors the
 #: matching rule's threshold. Interpretation - see README decision log.
 AMBIGUOUS_MIN_FRACTION = 0.5
-TEST_SUBSETS = ["all", "fully_observed", "no_shared_accounts"]
+# `oracle_reachable` is the subset the oracle actually detects at a given
+# lookback and split, so it depends on an oracle run rather than on a
+# campaign's own fields. Recall on it is recall against the reachable
+# ceiling; recall on `all` keeps the honest denominator in view.
+TEST_SUBSETS = ["all", "fully_observed", "no_shared_accounts", "oracle_reachable"]
+#: The subsets that are pure predicates on a campaign's outcome.
+STATIC_TEST_SUBSETS = ["all", "fully_observed", "no_shared_accounts"]
 CONDITIONS = ["isolated", "fedavg_only", "fedavg_embedding", "centralized"]
 
 # ---------------------------------------------------------------------------

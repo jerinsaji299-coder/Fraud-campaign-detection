@@ -9,6 +9,7 @@ only if that time is at or before its deadline; otherwise it is missed.
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import asdict, dataclass, field
 
 import numpy as np
@@ -223,6 +224,43 @@ SUBSET_FILTERS = {
 }
 
 
+def subset_filter(subset: str, oracle_reachable: Iterable[int] | None = None):
+    """The predicate for a subset name.
+
+    `oracle_reachable` is not a property of a campaign — it is the set the
+    oracle detected at this lookback and split — so it has to be supplied.
+    Asking for it without supplying the set raises rather than quietly
+    falling back to every campaign, which would report a ceiling-relative
+    number against the wrong denominator.
+    """
+    if subset != "oracle_reachable":
+        return SUBSET_FILTERS[subset]
+    if oracle_reachable is None:
+        raise ValueError(
+            "the 'oracle_reachable' subset needs the oracle's detected campaign "
+            "ids for this split and lookback; pass oracle_reachable=..."
+        )
+    reachable = frozenset(int(c) for c in oracle_reachable)
+    return lambda o: o.campaign_id in reachable
+
+
+def recall_relative_to_ceiling(
+    recall: float | None, oracle_recall: float | None
+) -> float | None:
+    """A model's recall as a fraction of the oracle's.
+
+    The oracle is the best any detector can do under the frozen matching
+    rule, and on the full data it reaches 0.821 (L = 24) / 0.893 (L = 48) on
+    test — not 1.0. Reporting a model's recall against 1.0 therefore
+    understates it by counting campaigns no detector could have found. This
+    is the honest denominator; `campaign_recall` against `all` is kept
+    beside it so the absolute number stays visible.
+    """
+    if recall is None or oracle_recall is None or oracle_recall == 0:
+        return None
+    return recall / oracle_recall
+
+
 def bootstrap_ci(
     values: list[float],
     statistic=np.median,
@@ -250,9 +288,16 @@ def summarize(
     subset: str = "all",
     bootstrap_seed: int = 0,
     n_resamples: int = 1000,
+    oracle_reachable: Iterable[int] | None = None,
+    oracle_recall: float | None = None,
 ) -> dict:
-    """Campaign-level metrics for one subset of a split's campaigns."""
-    keep = SUBSET_FILTERS[subset]
+    """Campaign-level metrics for one subset of a split's campaigns.
+
+    `oracle_reachable` is required for the subset of that name. Passing
+    `oracle_recall` adds `recall_relative_to_ceiling`, the recall as a
+    fraction of what the oracle achieved on the same subset.
+    """
+    keep = subset_filter(subset, oracle_reachable)
     outcomes = [o for o in result.outcomes if keep(o)]
     detected = [o for o in outcomes if o.detected]
 
@@ -295,17 +340,25 @@ def summarize(
         "median_lead_time_h_ci": bootstrap_ci(lead_h, seed=bootstrap_seed, n_resamples=n_resamples),
         "median_normalized_lead_time": _median(normalized),
         "median_frac_observed_at_detection": _median(observed),
+        "oracle_recall": oracle_recall,
+        "recall_relative_to_ceiling": recall_relative_to_ceiling(
+            recall, oracle_recall
+        ),
     }
 
 
-def campaign_f1(result: EvaluationResult, subset: str = "all") -> dict:
+def campaign_f1(
+    result: EvaluationResult,
+    subset: str = "all",
+    oracle_reachable: Iterable[int] | None = None,
+) -> dict:
     """Campaign-level precision, recall and F1, without the bootstrap.
 
     Used for tau selection, where the statistic is recomputed for every
     candidate threshold and a 1000-sample bootstrap each time would dominate
     the runtime.
     """
-    keep = SUBSET_FILTERS[subset]
+    keep = subset_filter(subset, oracle_reachable)
     outcomes = [o for o in result.outcomes if keep(o)]
     detected = [o for o in outcomes if o.detected]
 

@@ -384,10 +384,14 @@ matching rule whatever the model, so it matters *why*.
 Classifies every missed `eval_ok` campaign (val, test, stress; both
 lookbacks) as:
 
-- `temporal_sparsity` — no window before the deadline ever held 3+ of its
-  accounts connected through its own laundering edges, and none formed
-  afterwards either. Reported with the largest fragment reached, `n_txn`,
-  duration, and the biggest transaction gap against the lookback.
+- `structurally_disconnected` — pool **every** one of its own edges before
+  the deadline, with no window at all, and its largest connected set of
+  accounts is still under 3. No lookback can ever detect it; this is the
+  hard floor under the ceiling. Reported by `base_type` and group.
+- `slow` — pooled, its own edges do connect 3+ accounts, but never inside a
+  single window before the deadline. A longer lookback may reach it, and the
+  reported largest transaction gap says whether it could. Also reported by
+  `base_type` and group.
 - `purity_failure` — a 3+ fragment did form, but the cluster was under half
   the campaign's own accounts. Reported with what it merged into: other
   campaigns, unassigned laundering, or both.
@@ -399,6 +403,11 @@ lookbacks) as:
 Summarised by reason, `base_type` and group, and it also characterises the
 oracle's false-alarm clusters (1–6 per day): since the oracle keeps only
 laundering edges, each one is real laundering the rule could not attribute.
+For each cluster it names **which of the rule's two conditions failed** —
+purity (≥ 0.5 of the cluster belonging to one campaign) or coverage (≥ 3 of
+that campaign's accounts in the cluster) — each against its own threshold,
+with counts. A cluster that is two thirds one campaign has passed purity and
+failed coverage, so one "best overlap" number cannot describe it.
 
 It also reports the **paired lead-time comparison between consecutive
 lookbacks**: for the campaigns both lookbacks detect, the per-campaign

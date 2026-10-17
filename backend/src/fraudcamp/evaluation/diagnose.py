@@ -5,15 +5,7 @@ scoring failure. It is always a property of the campaign's shape in time,
 or of the matching rule meeting a graph that does not cooperate. This
 module says which, per campaign, and never changes the rule.
 
-Four reasons, in the order they are tested:
-
-`temporal_sparsity`
-    At no detection time before the deadline do 3 or more of the
-    campaign's accounts connect to each other **through its own laundering
-    edges**. The campaign is spread too thinly in time for any window to
-    hold a connected fragment big enough to match. Reported with the
-    largest connected fragment ever reached, and the biggest gap between
-    consecutive transactions compared against the lookback.
+Five reasons, in the order they are tested:
 
 `purity_failure`
     A connected fragment of 3+ accounts did form, but the cluster it sat
@@ -25,6 +17,25 @@ Four reasons, in the order they are tested:
 `late_only`
     A cluster that would have matched did appear, but only after the
     deadline. The information arrived; it arrived too late to count.
+
+`structurally_disconnected`
+    Pool **every** one of the campaign's own edges before its deadline,
+    with no window at all, and its largest connected set of accounts is
+    still smaller than the rule's 3. No lookback, however long, can ever
+    detect it under the frozen rule: the evidence does not exist in the
+    graph, so this is a property of the campaign, not of the detector.
+    This is the ceiling's hard floor.
+
+`slow`
+    Its own edges *do* connect 3 or more accounts once the whole campaign
+    is pooled, but never within a single window before the deadline. The
+    evidence exists and arrives too spread out, so a longer lookback may
+    reach it — the reported largest transaction gap says whether it could.
+
+These last two were one reason, `temporal_sparsity`, until 2026-10-17. They
+were separated because they say opposite things about what to do: nothing
+can be done about a disconnected campaign, while a slow one is a lookback
+question. Pooling them hid which of the two the ceiling was made of.
 
 `unexplained`
     Nothing above fits. Reported loudly rather than bucketed away, because
@@ -41,7 +52,14 @@ import pandas as pd
 from .. import constants, windows
 from . import clusters as cluster_tools
 
-REASONS = ("temporal_sparsity", "purity_failure", "late_only", "unexplained")
+#: In precedence order: the first that fits is the reason reported.
+REASONS = (
+    "purity_failure",
+    "late_only",
+    "structurally_disconnected",
+    "slow",
+    "unexplained",
+)
 
 
 @dataclass
@@ -60,6 +78,11 @@ class MissDiagnosis:
     #: Largest set of the campaign's own accounts connected through its own
     #: laundering edges, over all windows up to the deadline.
     max_connected_own_accounts: int
+    #: The same, but pooling **every** own edge before the deadline with no
+    #: window at all. Below `MATCH_MIN_ACCOUNTS` this campaign is
+    #: undetectable at any lookback, which is what separates
+    #: `structurally_disconnected` from `slow`.
+    max_connected_all_edges: int
     #: Longest gap between consecutive campaign transactions, in hours, and
     #: whether it exceeds the lookback.
     max_txn_gap_h: float
@@ -102,6 +125,14 @@ def diagnose_missed_campaign(
     stamps = campaign_txns["ts"].to_numpy()
     gaps = np.diff(stamps) / np.timedelta64(1, "h") if len(stamps) > 1 else np.array([0.0])
     max_gap = float(gaps.max()) if gaps.size else 0.0
+
+    # The lookback-free upper bound on connectivity. Strictly before the
+    # deadline: a window ends at some t <= deadline and holds ts < t, so an
+    # edge at exactly the deadline can never be inside one. If this cannot
+    # reach 3 connected accounts, no window can either.
+    max_connected_all_edges = _own_edge_components(
+        campaign_txns[campaign_txns["ts"] < deadline], campaign_id
+    )
 
     all_times = windows.evaluation_detection_times(split)
     before = [t for t in all_times if t <= deadline]
@@ -206,13 +237,28 @@ def diagnose_missed_campaign(
             f"Reached {max_connected} connected accounts before the deadline, "
             f"over {len(before)} window(s)"
         )
-    elif not reached_three:
-        reason = "temporal_sparsity"
+    elif not reached_three and max_connected_all_edges < constants.MATCH_MIN_ACCOUNTS:
+        # Pooling every own edge before the deadline still cannot connect 3
+        # accounts, so no lookback can. Separated from `slow` because no
+        # choice of L would change it.
+        reason = "structurally_disconnected"
         detail = (
-            f"never more than {max_connected} of its {campaign_row.n_accounts} accounts "
-            f"connected via its own edges in any {lookback_h}h window before the "
-            f"deadline, and no matching cluster formed afterwards either; "
-            f"{campaign_row.n_txn} transactions over "
+            f"pooling every one of its own edges before the deadline, with no "
+            f"window at all, its largest connected set is "
+            f"{max_connected_all_edges} of its {campaign_row.n_accounts} accounts; "
+            f"the rule needs {constants.MATCH_MIN_ACCOUNTS}, so no lookback can "
+            f"detect it. {campaign_row.n_txn} transactions over "
+            f"{campaign_row.duration_h:.1f}h"
+        )
+    elif not reached_three:
+        # The evidence does connect, just never inside one window.
+        reason = "slow"
+        detail = (
+            f"its own edges connect {max_connected_all_edges} of its "
+            f"{campaign_row.n_accounts} accounts once the whole campaign is "
+            f"pooled, but never more than {max_connected} inside a single "
+            f"{lookback_h}h window before the deadline, and no matching cluster "
+            f"formed afterwards either; {campaign_row.n_txn} transactions over "
             f"{campaign_row.duration_h:.1f}h, largest gap {max_gap:.1f}h"
             + (f" (exceeds L={lookback_h}h)" if max_gap > lookback_h else "")
         )
@@ -237,6 +283,7 @@ def diagnose_missed_campaign(
         duration_h=float(campaign_row.duration_h),
         deadline=str(deadline),
         max_connected_own_accounts=max_connected,
+        max_connected_all_edges=max_connected_all_edges,
         max_txn_gap_h=round(max_gap, 2),
         gap_exceeds_lookback=bool(max_gap > lookback_h),
         best_cluster_purity=round(best_purity, 4) if best_purity is not None else None,
@@ -245,6 +292,59 @@ def diagnose_missed_campaign(
         merged_with_unassigned=merged_unassigned,
         windows_checked=len(before),
     )
+
+
+def _failed_condition(
+    cluster: set[str],
+    touching: set[int],
+    accounts_by_campaign: dict[int, tuple[str, ...]],
+) -> dict:
+    """Which half of the matching rule does this false alarm fail?
+
+    The rule has two conditions, and reporting only one number cannot say
+    which bound was binding:
+
+    * **purity** — at least `MATCH_MIN_ACCOUNT_FRACTION` of the *cluster's*
+      accounts belong to the campaign;
+    * **coverage** — the cluster covers at least `MATCH_MIN_ACCOUNTS` of the
+      *campaign's* accounts.
+
+    A cluster two thirds of which belongs to one campaign has passed purity
+    comfortably and failed coverage, so describing its 0.667 as "below the
+    0.5 the rule requires" is simply wrong. Each is therefore reported
+    against its own threshold, and `fails` names the binding one.
+    """
+    best_purity = 0.0
+    best_coverage = 0
+    passes_purity = False
+    passes_coverage = False
+    for cid in touching:
+        overlap = len(cluster & set(accounts_by_campaign[cid]))
+        purity = overlap / len(cluster) if cluster else 0.0
+        best_purity = max(best_purity, purity)
+        best_coverage = max(best_coverage, overlap)
+        if purity >= constants.MATCH_MIN_ACCOUNT_FRACTION:
+            passes_purity = True
+        if overlap >= constants.MATCH_MIN_ACCOUNTS:
+            passes_coverage = True
+
+    if not touching:
+        fails = "no_campaign_accounts"
+    elif passes_purity:
+        fails = "coverage"  # pure enough, too few of the campaign's accounts
+    elif passes_coverage:
+        fails = "purity"  # enough of the campaign, too diluted by others
+    else:
+        fails = "both"
+
+    return {
+        "best_purity_fraction": round(best_purity, 4),
+        "best_coverage_accounts": best_coverage,
+        "fails": fails,
+    }
+
+
+FALSE_ALARM_CONDITIONS = ("purity", "coverage", "both", "no_campaign_accounts")
 
 
 def diagnose_false_alarms(
@@ -304,16 +404,7 @@ def diagnose_false_alarms(
                     "accounts_in_some_campaign": in_campaigns,
                     "campaigns_touched": len(touching),
                     "accounts_unassigned_laundering": len(cluster & unassigned_accounts),
-                    "best_overlap_fraction": round(
-                        max(
-                            (
-                                len(cluster & set(campaign_splits_accounts[cid])) / len(cluster)
-                                for cid in touching
-                            ),
-                            default=0.0,
-                        ),
-                        4,
-                    ),
+                    **_failed_condition(cluster, touching, campaign_splits_accounts),
                 }
             )
             if len(rows) >= limit:
