@@ -426,6 +426,42 @@ are characterised.
 **This changes no rule.** It is diagnosis, so that the ceiling can be
 explained rather than merely reported.
 
+## 5g. Stage 3.3: the XGBoost baseline
+
+Two cells, in this order, in one session. `train` writes the models into
+`/kaggle/working/models/`, and `evaluate` reads them back, so running
+`evaluate` first exits 2 rather than guessing.
+
+```python
+!cd /kaggle/temp/repo/backend && python scripts/kaggle/kaggle_runner.py train
+```
+
+```python
+!cd /kaggle/temp/repo/backend && python scripts/kaggle/kaggle_runner.py evaluate
+```
+
+`train` pools every rule-3-valid training detection time into one matrix —
+13 windows at L = 24, 9 at L = 48 — and fits one booster per lookback with
+frozen hyperparameters, identical for both lookbacks. It reports the matrix
+size and memory, each window's class weight, and gain-based feature
+importance. Expect the matrix to be the memory peak of the step: it is
+`rows x 44` float32, and the sample's 13 windows came to 68k rows, so the
+full data will be far larger. If it does not fit, say so with the number
+rather than working around it.
+
+`evaluate` chooses tau on validation only by campaign-level F1, then scores
+val / test / stress on all four subsets against the oracle ceiling,
+including `oracle_reachable` and recall relative to the ceiling. It also
+reports the alert budgets and two **paired** comparisons: the model against
+the ceiling, and the model's L = 24 against L = 48. If the chosen tau lands
+at either edge of the grid it says so — pass `--tau-grid` with a wider
+comma-separated list to check beyond it.
+
+What to send back: `train_baseline.md` and `evaluate_baseline.md`, plus the
+CSVs. On the 1% sample the baseline reached 92-94% of the oracle's test
+recall and was exactly as early as the ceiling when it fired; the full-data
+numbers are what decides whether that holds.
+
 ## 6. Later stages
 
 `kaggle_runner.py` also accepts `train` and `evaluate`. Both currently exit

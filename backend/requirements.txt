@@ -8,3 +8,8 @@ pytest
 fastapi
 uvicorn
 pydantic
+
+# xgboost arrives with stage 3.3 (the non-graph baseline). torch and
+# torch_geometric still wait for 3.4, so a Phase 3 baseline session does not
+# pay for the CUDA stack. Pinned loosely: the Kaggle image ships its own.
+xgboost>=2.1

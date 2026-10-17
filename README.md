@@ -36,6 +36,7 @@ git clone https://github.com/jerinsaji299-coder/Fraud-campaign-detection.git
 17. [Future phases](#future-phases)
 18. [Phase 3 definitions](#phase-3-definitions-centralized-baselines)
     - [Oracle ceiling](#oracle-ceiling)
+    - [Stage 3.3: the XGBoost baseline](#stage-33-the-xgboost-baseline)
     - [Comparing two configurations: the paired method](#comparing-two-configurations-the-paired-method)
     - [Recall against the ceiling](#recall-against-the-ceiling)
 19. [Version history](#version-history)
@@ -78,11 +79,14 @@ bank).
 (extraction, matching with other-split hits, horizons, lead time, metrics,
 bootstrap CIs) and the oracle/random sanity scorers are in place and
 validated.
-**Next step:** run `oracle-diagnose` and `make-sample` on Kaggle (run order
-in `backend/scripts/kaggle/run_on_kaggle.md`), then stage 3.3 — the XGBoost
-baseline. The evaluation is validated on full data and the oracle ceiling is
-recorded; the training regime for 3.4 is already frozen (neighbour sampling
-for both candidate lookbacks; see Decision log).
+**Next step:** run `train` and `evaluate` on Kaggle (run order in
+`backend/scripts/kaggle/run_on_kaggle.md`) to get the baseline's full-data
+numbers, after deciding the tau-grid question in
+§[stage 3.3](#stage-33-the-xgboost-baseline). The baseline is implemented
+and validated on the real 1% sample; the evaluation, the oracle ceiling and
+the miss diagnosis are all measured on the full data. The training regime
+for 3.4 is already frozen (neighbour sampling for both candidate lookbacks;
+see Decision log).
 
 **Phase 2 — pipeline, artifacts, API, frontend (complete)**
 
@@ -107,7 +111,7 @@ no visibility reassignment is used in this phase.
 | 3.0 | Kaggle runner + Phase 2 full-data verification | done — all 24 numbers PASS, determinism confirmed |
 | 3.1 | Window builder + features + leakage tests | done |
 | 3.2 | Evaluation module (extraction, matching, lead time, bootstrap CIs) + oracle and random scorers | done, **validated on full data**; ceiling, miss diagnosis and the paired lookback comparison all measured and recorded |
-| 3.3 | XGBoost baseline: train, select tau on validation, evaluate on test | not started |
+| 3.3 | XGBoost baseline: train, select tau on validation, evaluate on test | **code complete and validated on the real 1% sample**; awaiting the full-data Kaggle run |
 | 3.4 | GNN centralized (GINEConv edge classification) | not started |
 | 3.5 | Gate report + results files + frontend Results page wired to real baseline results | not started |
 
@@ -468,6 +472,115 @@ the sentence, and refuses to state a direction when the CI includes zero.
 unpaired medians say the better detector got worse by 45 hours while the
 paired difference is zero with one extra campaign detected.
 
+### Stage 3.3: the XGBoost baseline
+
+The non-graph control the GNN has to beat. Same windows, same causal
+bounds, same features; one transaction per row, so no message passing and
+no neighbourhood beyond the two endpoints. If the GNN cannot beat this, the
+graph structure is not where the signal is.
+
+**Hyperparameters, frozen and identical for both lookbacks** (tuning per
+lookback would turn the L comparison into a comparison of tuning effort):
+
+| Parameter | Value |
+|---|---|
+| `n_estimators` | 300 |
+| `max_depth` | 6 |
+| `learning_rate` | 0.1 |
+| `subsample` | 0.8 |
+| `colsample_bytree` | 0.8 |
+| `min_child_weight` | 1.0 |
+| `reg_lambda` | 1.0 |
+| `tree_method` | `hist` |
+| `max_bin` | 256 |
+| `objective` / `eval_metric` | `binary:logistic` / `aucpr` |
+| `seed` | 0 (the only source of randomness) |
+
+**Training.** One model per lookback, over every rule-3-valid training
+detection time pooled into a single matrix — 13 windows at L = 24, 9 at
+L = 48. Pooling is what makes one scorer usable at every detection time;
+rule 3 keeps a silently clamped short window out of the training
+distribution. The class weight `n_negative / n_positive` is applied **per
+window**, as a per-row weight: a positive carries its own window's weight
+and a negative carries 1.0. Pooling the weight instead would let a busy
+window's balance set the weight for a quiet one.
+
+**What the model does not have.** No tau — it emits probabilities, and the
+threshold is chosen on validation only by `evaluation.select_tau`, exactly
+as the sanity scorers were. No campaign knowledge: labels are
+per-transaction `Is Laundering`, including laundering that belongs to no
+campaign. No features of its own: they come from `features.py` unchanged,
+so the leakage properties already tested there apply without a second
+implementation to keep honest.
+
+**Development results — the real 1% sample, not the full data.** Recorded
+because they are what stage 3.3 was validated against; every number here is
+provisional until the Kaggle run. The sample keeps every campaign
+transaction and thins the background to 1%, so recall and lead time
+transfer closely while **precision and false alarms per day do not** (the
+laundering rate is 5.99% against the full data's 0.102%).
+
+| L | Split | Recall (`all`) | vs ceiling | Median lead | FA/day | Oracle recall |
+|---|---|---:|---:|---:|---:|---:|
+| 24 | val | 0.692 | 0.947 | 67.3h | 2.2 | 0.731 |
+| 24 | test | 0.768 | **0.935** | 74.8h | 5.5 | 0.821 |
+| 24 | stress | 0.671 | 0.927 | 80.3h | 8.7 | 0.724 |
+| 48 | val | 0.769 | **1.000** | 67.2h | 5.5 | 0.769 |
+| 48 | test | 0.821 | 0.920 | 73.8h | 7.8 | 0.893 |
+| 48 | stress | 0.658 | 0.893 | 79.1h | 9.4 | 0.737 |
+
+Three things worth stating plainly, all on sample data:
+
+- **The baseline is strong**: 92–94% of the oracle's recall on test, and it
+  matches the ceiling exactly on validation at L = 48. A non-graph model
+  reaching most of the achievable recall sets a high bar for 3.4, which is
+  the gate question working as intended rather than a disappointment.
+- **It is exactly as early as the ceiling when it fires.** Paired against
+  the oracle on every split and both lookbacks: **0.0h, 95% CI [0.0, 0.0]**,
+  and it never detects a campaign the oracle misses. Its entire deficit is
+  coverage — 3 campaigns on test at L = 24, 4 at L = 48 — not lateness.
+  That follows from the 6-hourly grid: the first detection time at which a
+  campaign is matchable is the same one for any detector that scores those
+  edges above tau, so earliness is won or lost by *whether* a model fires,
+  not by *when*.
+- **Its own lookbacks also tie on earliness** (paired, 0.0h, CI [0.0, 0.0]):
+  L = 48 gains 4 test campaigns and loses 1 against L = 24, and on stress
+  gains 3 and loses 4 — so unlike the oracle, the model does not get a free
+  lift from the longer window.
+
+**Interpretation caveat.** On the sample, gain-based importance is dominated
+by payment format: `fmt_ACH` alone is 46%, and the format one-hots together
+are ~87%. Payment format is an allowed feature under the frozen design, so
+this is not leakage, but it does mean the baseline is mostly learning a
+categorical correlate rather than transactional structure — which is useful
+context for reading whatever margin the GNN shows in 3.4. Whether it holds
+on the full data is a question for the Kaggle run.
+
+**Open question for the full-data run: the tau grid.** `DEFAULT_TAU_GRID`
+is `(0.5, 0.75, 0.9, 0.95, 0.99)`, weighted high because a low tau keeps
+most of a million-edge window. That grid was designed for the sanity
+scorers, whose scores are 0 or 1. A probabilistic model is different: on the
+sample the chosen tau landed on the grid's **lowest** value, and widening
+the grid moved the validation optimum below it.
+
+| tau | Precision | Recall | F1 | FA/day |
+|---|---:|---:|---:|---:|
+| 0.05 | 0.780 | 0.731 | 0.754 | 14.2 |
+| 0.1 | 0.812 | 0.731 | 0.769 | 11.6 |
+| 0.2 | 0.893 | 0.731 | 0.804 | 5.8 |
+| **0.3** | 0.936 | 0.731 | **0.821** | 3.3 |
+| 0.4 | 0.956 | 0.692 | 0.803 | 2.2 |
+| 0.5 (grid floor) | 0.955 | 0.692 | 0.803 | 2.2 |
+| 0.75 | 0.967 | 0.615 | 0.752 | 1.5 |
+
+The grid is an implementation default, not a frozen research definition, so
+**it has not been changed.** `evaluate` reports when the chosen tau sits at
+either edge of the grid, and `--tau-grid` can widen it for the full-data
+run. The options, for the record: (a) leave the grid and accept a tau at the
+floor; (b) extend it downward for model scorers only; (c) extend it for
+everything, at the cost of clustering time in the region no detector would
+choose. This is a decision to make before the full-data run, not during it.
+
 ### Recall against the ceiling
 
 **Frozen 2026-10-17.** The oracle reaches 0.821 (L = 24) / 0.893 (L = 48)
@@ -738,6 +851,9 @@ transactions.
 | 2026-10-17 | **The matching rule stays frozen.** The oracle's misses on the full data are 36 sparsity + 2 `late_only` + 0 `purity_failure` at L = 24, and 30 + 1 + 1 at L = 48 | One purity failure in 70 misses. The 50% purity condition is not what the ceiling is made of, so relaxing it would buy almost nothing and would cost the frozen definition every earlier result depends on | user decision, 2026-10-17; `docs/reference/oracle_diagnose.md` |
 | 2026-10-17 | **`temporal_sparsity` split into `structurally_disconnected` and `slow`**, precedence `purity_failure` → `late_only` → `structurally_disconnected` → `slow`. The first pools **every** own edge before the deadline with no window at all and still cannot connect 3 accounts; the second can, but never inside one window | The two imply opposite actions — nothing can be done about a disconnected campaign, while a slow one is a lookback question — and pooling them hid which of the two the ceiling was made of. On the sample all 10 disconnected cases are BIPARTITE and fragmentable, and the count does not move with L, which is the definition working | user decision, 2026-10-17; `tests/test_oracle_diagnose.py` |
 | 2026-10-17 | **Fourth test subset `oracle_reachable`** (the campaigns the oracle detects at that lookback and split) and **`recall_relative_to_ceiling`** reported for every scorer and model. Phase 5 reports the visibility analysis on both `all` and `oracle_reachable` | The oracle reaches 0.821/0.893 on test, so recall against 1.0 counts campaigns no detector could find. For Phase 5 specifically: the structurally undetectable campaigns are concentrated in the fragmentable group and are undetectable in every condition at every visibility level, so leaving them in the denominator adds the same dead weight to all four conditions and compresses the very differences the experiment measures. `all` is still reported, because that is what an institution would experience | user decision, 2026-10-17; `tests/test_evaluation.py` |
+| 2026-10-17 | **Stage 3.3 hyperparameters frozen and identical for both lookbacks**: 300 trees, depth 6, eta 0.1, subsample 0.8, colsample 0.8, `hist`, `binary:logistic` with `aucpr`, seed 0. The class weight `n_negative / n_positive` is applied **per window** as a per-row weight (positives carry their own window's weight, negatives 1.0) | Tuning per lookback would make the L comparison a comparison of tuning effort rather than of lookback length, and the same applies to the four conditions in Phase 4-5. The values are deliberately unremarkable: this is a baseline, not a contender. Per-window weighting rather than pooled because the windows differ by an order of magnitude in size, and a pooled weight would let a busy window set the balance for a quiet one | implementation, stage 3.3; `tests/test_xgb_baseline.py` |
+| 2026-10-17 | `xgboost>=2.1` added to requirements.txt; torch and torch_geometric still wait for 3.4 | Each dependency lands with the stage that uses it, so a baseline session does not pay for the CUDA stack. Local development used xgboost 3.4.1; the Kaggle image ships its own, hence the loose pin | implementation, stage 3.3 |
+| 2026-10-17 | **The tau grid is NOT changed**, but `evaluate` now warns when the chosen tau sits at either edge of it, and `--tau-grid` can widen it | `DEFAULT_TAU_GRID` was designed for the sanity scorers, whose scores are 0 or 1. On the sample the model's tau landed on the grid's floor (0.5) and a wider sweep put the validation optimum at 0.3, F1 0.821 against 0.803. That is a real truncation, but the grid is an implementation default and changing it silently before a full-data run would change how every later model is thresholded. Reported with numbers and options instead | open question, 2026-10-17; §[stage 3.3](#stage-33-the-xgboost-baseline) |
 | 2026-10-17 | **False alarms report which of the rule's two conditions failed** — purity < 0.5 vs coverage < 3 campaign accounts — with counts, replacing a single "best overlap" number | The old summary line said "best overlap 0.667 (below the 0.5 the rule requires)", which contradicts itself. Those clusters passed purity and failed coverage. On the sample 21 of 22 fail coverage, so the oracle's false alarms are mostly fragments of real campaigns too small to claim — a different problem from pollution by unrelated traffic, and one the three-account floor creates by design | user-reported, 2026-10-17 |
 | 2026-10-10 | **Stage 3.4 training regime frozen: both candidate lookbacks train with neighbour sampling** (LinkNeighborLoader-style mini-batches of target edges with sampled multi-hop neighbourhoods). Inference scores full windows, chunked if needed. Fanouts, batch size and negative/positive handling are chosen in stage 3.4 and reported before training | If L = 24 trained full-batch and L = 48 trained with sampling, the L comparison would confound lookback length with training method, and the chosen L could not be attributed to the lookback. Using one regime for both keeps that comparison clean. It also sidesteps the capacity question: the busiest L = 48 window is estimated at ~16.6 GB full-batch against 16 GB GPUs | user decision, 2026-10-10 |
 | 2026-10-10 | `features-smoke` samples only rule-3-valid training detection times, and a cheap full scan of **every** usable detection time supplies the largest-window figures | The first full-data run reported Sept 2 12:00 at L = 48 as the largest candidate window (1.5M edges), but that time violates rule 3: its lookback starts before `DATA_START`, so the window was silently clamped — which is also why its L = 48 and L = 72 rows were identical. Sampling five detection times cannot find the true maximum anyway, so the scan replaces guesswork with a full enumeration (counts only, no features) | user-reported, 2026-10-10 |
@@ -848,7 +964,9 @@ project-root/
       regression.py               the full-data expected numbers + actual/expected comparison
       windows.py                  detection-time grid, causal window slicing, detection-time splits
       features.py                 edge + node features, training-only vocabularies and scaler
-      models/README.md            placeholder — stage 3.3+ (XGBoost, GNN)
+      models/
+        __init__.py               the Phase 3 baselines
+        xgb_baseline.py           stage 3.3: the non-graph control (no tau, no campaign knowledge)
       federation/README.md        placeholder — Phase 4+ (not this session)
       evaluation/
         __init__.py               the public evaluation API
@@ -872,10 +990,12 @@ project-root/
       make_sample.py              run ON KAGGLE: all pattern txns + random 1% of the rest, seed 42
       make_demo_data.py           seeded SYNTHETIC dev dataset (not the research sample)
       run_sanity_scorers.py       runs the oracle and random scorers through the real evaluation code
+      run_xgb_baseline.py         stage 3.3 locally on the 1% sample: train, tau, evaluate, paired
       run_pipeline.py             runs the pipeline end to end; prints every Verified-numbers value; --export writes artifacts
       kaggle/
         run_on_kaggle.md          the exact notebook cells for running this repo on Kaggle
-        kaggle_runner.py          verify / pipeline (train / evaluate land in stages 3.3-3.4)
+        kaggle_runner.py          verify / pipeline / features-smoke / evaluate-scorers /
+                                  oracle-diagnose / make-sample / train / evaluate
     tests/
       conftest.py                 src/ on sys.path + the `mini_dataset` synthetic-dataset fixture
       test_load_data.py           leading-zero banks, account IDs, timestamp parsing, cutoff
@@ -893,6 +1013,7 @@ project-root/
       test_tau_and_budgets.py     the deterministic tau tie-break and the alert budgets
       test_oracle_diagnose.py     the four oracle-miss reasons, each on a hand-built case
       test_paired_comparison.py   the paired lead-time method, incl. the misleading-medians case
+      test_xgb_baseline.py        the baseline: rule 3, score alignment, identity, save/load
       test_features.py            feature shapes + the leakage properties (future, labels, identity)
       test_fulldata.py            @pytest.mark.fulldata, one test per regression number; skip if no data
     data/                         gitignored: raw/, sample/, processed/
@@ -999,6 +1120,27 @@ project-root/
   `python backend/scripts/make_sample.py` (writes
   `/kaggle/working/HI-Small_Trans.csv` and `HI-Small_Patterns.txt`); then
   download those two files into `backend/data/sample/`.
+- **Train and evaluate the baseline locally, on the 1% sample:**
+  ```
+  cd backend
+  python scripts/run_xgb_baseline.py --config configs/local.yaml
+  ```
+  Trains one model per lookback, picks tau on validation, evaluates every
+  split on all four subsets against the oracle ceiling, and writes
+  `artifacts/baseline_dev/`. Development only — the sample's background is
+  thinned to 1%, so precision and false alarms per day do not transfer. A
+  couple of minutes end to end.
+- **Train and evaluate the baseline on the full data (on Kaggle):**
+  ```
+  cd backend
+  python scripts/kaggle/kaggle_runner.py train
+  python scripts/kaggle/kaggle_runner.py evaluate
+  ```
+  `train` writes the models under `/kaggle/working/models/xgb_L*` plus
+  `train_baseline.{md,json}` and 3 CSVs; `evaluate` reads them back, chooses
+  tau on validation, and writes `evaluate_baseline.{md,json}` and 5 CSVs.
+  They are separate so a threshold sweep can be re-run without retraining;
+  `evaluate` refuses to guess and exits 2 if no model is there.
 - **Verify Phase 2 against the full data (on Kaggle):**
   ```
   cd backend
@@ -1281,6 +1423,18 @@ committed.
   - `scorers.py` — the oracle (score = true label) and random scorers.
   The scorer is called as `scorer(window_transactions, t)` and only ever
   receives the window, so a scorer cannot reach past `t` even if it tries.
+- **`models/xgb_baseline.py`** — the non-graph baseline. `XGBParams`
+  holds the frozen hyperparameters; `build_training_data` pools every
+  rule-3-valid training window into one matrix and carries each row's
+  per-window class weight; `train_baseline` fits one booster per lookback;
+  `TrainedBaseline.scorer()` returns a `scorer(window, t)` that
+  `evaluate_split` accepts unchanged, so a model is scored by exactly the
+  code that scored the oracle. `save`/`load` round-trip the booster, the
+  feature spec and the parameters together, and scoring refuses a spec that
+  does not match the model rather than producing numbers that look fine.
+  `feature_importance` is report-only — selecting features from it would
+  make the baseline's feature set differ from the GNN's, which is what the
+  comparison holds fixed.
 - **`regression.py`** — the single source for the full-data expectations:
   `METRICS` (each with its expected value and the notebook cell it came
   from), `compute_actuals(result)`, `compare`, `format_table` /
@@ -1658,6 +1812,23 @@ campaign_id)`:
   rather than approximating, the curve sorted for plotting, and the
   motivating case written as a test: of two detectors the profligate one has
   the higher recall and is the one the budget rejects.
+- **Backend baseline tests** (`test_xgb_baseline.py`, 13 tests): the
+  things that would quietly invalidate a result rather than the model's
+  accuracy, which is measured on the full data and not asserted in a unit
+  test. That training uses only rule-3-valid training detection times (13
+  at L = 24) and that a feature spec cannot be fitted outside training;
+  that the class weight is per window and not pooled; that no account,
+  bank, institution, campaign or label name reaches the feature matrix;
+  that scores line up positionally with the window's rows, checked against
+  a column whose relationship to the score is known rather than by
+  comparing a reversed input to a reversed output, which would cancel; that
+  an empty window scores to an empty array; that the same seed gives the
+  same model; that save/load round-trips to identical scores; that a
+  mismatched spec is refused instead of scored; that the model chooses no
+  threshold of its own; and that it plugs into `evaluate_split` with no
+  model-specific path. **Proven able to fail:** dropping the rule-3 filter
+  fails the first, and permuting the scorer's output fails the alignment
+  test.
 - **Backend paired-comparison tests** (`test_paired_comparison.py`, 14
   tests): the decisive one is constructed so that the *unpaired* medians give
   the wrong answer — B detects everything A detects at exactly the same time,
@@ -1810,7 +1981,7 @@ campaign_id)`:
     stubbed in these tests.
 
 **Current pass status (2026-10-17):**
-- Backend: `python -m pytest tests/` from `backend/` → 256 passed, 25
+- Backend: `python -m pytest tests/` from `backend/` → 269 passed, 25
   skipped, 0 failed. The skips are the full-data suite, which needs the
   dataset that only exists on Kaggle; all 24 of its numbers passed there on
   2026-10-08/09.
@@ -1840,6 +2011,11 @@ is the one piece that most warrants a look in a browser before the demo.
   Hence `oracle_reachable`. The full-data split of this floor across all
   three splits needs the next Kaggle run; only the pooled totals (36/30) are
   measured on the full data so far.
+- **The baseline has no full-data numbers yet.** Everything reported for
+  stage 3.3 comes from the 1% sample, including the 92-94%-of-ceiling
+  recall and the payment-format dominance. Both could change on the full
+  data, where the laundering rate is 60x lower and the background is
+  complete.
 - **The 1% sample keeps every campaign transaction and thins only the
   background**, so it has 53,960 rows at a 5.99% laundering rate against the
   full data's 0.1%. Campaign-level recall and lead time transfer closely —
@@ -1924,6 +2100,45 @@ Tagged points in the repository, newest first. Check one out with
 | `v0.1-data-pipeline` | 2026-10-08 | Phase 2 complete, plus the stage 3.0 Kaggle runner. The research pipeline (campaign ground truth, splits, topology groups, institutions, visibility), the artifact export, the read-only FastAPI server, and the full React frontend — 69 backend tests and 48 frontend tests passing. **No models and no experiment results**: the four conditions are defined and the result schema is fixed, but nothing has been trained or run, and the full-data regression numbers are still unverified (that is what stage 3.0's Kaggle run is for). |
 
 ## Changelog
+
+- **2026-10-17 (stage 3.3)** — **The XGBoost baseline is implemented and
+  validated on the real 1% sample.** Ready for the full-data Kaggle run;
+  nothing here is a full-data result.
+
+  `models/xgb_baseline.py` trains one booster per lookback over every
+  rule-3-valid training detection time pooled into one matrix, with the
+  class weight `n_negative / n_positive` applied per window as a per-row
+  weight. Hyperparameters are frozen and identical for both lookbacks. The
+  model emits probabilities and chooses no threshold: tau comes from
+  `evaluation.select_tau` on validation only, and `TrainedBaseline.scorer()`
+  plugs into the same `evaluate_split` that scored the oracle, so there is
+  no model-specific evaluation path to keep honest.
+
+  *On the sample*, test recall is 0.768 at L = 24 and 0.821 at L = 48 —
+  **92–94% of the oracle's** — and at L = 48 on validation it matches the
+  ceiling exactly. Paired against the oracle it is **0.0h, CI [0.0, 0.0]**
+  on every split and both lookbacks, and it never finds a campaign the
+  oracle misses: the entire deficit is coverage, not lateness. Its own
+  lookbacks tie on earliness too (L = 48 gains 4 test campaigns, loses 1).
+  A strong non-graph baseline sets a high bar for 3.4, which is the gate
+  question working rather than a disappointment. Caveat: gain is dominated
+  by payment format (`fmt_ACH` 46%, formats together ~87%) — an allowed
+  feature, but it means the baseline is mostly learning a categorical
+  correlate.
+
+  *Reported, not changed:* on the sample the chosen tau landed on
+  `DEFAULT_TAU_GRID`'s floor of 0.5, and a wider sweep put the validation
+  optimum at 0.3 (F1 0.821 vs 0.803). The grid was designed for scorers
+  whose scores are 0 or 1. It is an implementation default rather than a
+  frozen definition, so it is left alone; `evaluate` now warns when the
+  chosen tau sits at an edge, `--tau-grid` can widen it, and the options are
+  written up for a decision **before** the full-data run.
+
+  *New:* `kaggle_runner.py train` and `evaluate` (no longer stubs),
+  `scripts/run_xgb_baseline.py` for local development, `xgboost>=2.1` in
+  requirements.txt, and `tests/test_xgb_baseline.py` (13 tests, backend 269
+  passed / 25 skipped), with the rule-3 filter and the score alignment each
+  proven able to fail.
 
 - **2026-10-17 (later)** — **Full-data results recorded, and three
   refinements before stage 3.3.** Kaggle run at commit `eacb6d3`; the

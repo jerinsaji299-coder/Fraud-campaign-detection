@@ -20,8 +20,9 @@ Subcommands:
                false-alarm clusters actually are
     make-sample
                build the 1% development sample for download
-    train      (Stage 3.3+) not implemented yet
-    evaluate   (Stage 3.3+) not implemented yet
+    train      train the XGBoost baseline, one model per lookback
+    evaluate   score the trained baseline: tau on validation, then the
+               horizons, against the oracle ceiling
 
 Everything it writes goes to --out (default /kaggle/working), which is the
 only directory Kaggle persists. Each step prints its elapsed time and peak
@@ -1715,6 +1716,488 @@ def command_make_sample(args: argparse.Namespace) -> int:
     return 0
 
 
+
+# --------------------------------------------------------------------------
+# stage 3.3: the XGBoost baseline
+# --------------------------------------------------------------------------
+
+
+def _model_dir(args: argparse.Namespace, lookback: int) -> Path:
+    """Where one lookback's trained baseline lives.
+
+    Under `--out` so it survives in /kaggle/working between the `train` and
+    `evaluate` steps of one session, and can be downloaded with the reports.
+    """
+    root = Path(args.model_dir) if args.model_dir else Path(args.out) / "models"
+    return root / f"xgb_L{lookback}"
+
+
+def command_train(args: argparse.Namespace) -> int:
+    """Train the non-graph baseline, one model per lookback.
+
+    Training pools every rule-3-valid training detection time into one
+    matrix: 13 windows at L = 24 and 9 at L = 48. Rule 3 matters here more
+    than anywhere else - a silently clamped short window would train the
+    model on a distribution it never meets at evaluation time.
+
+    No threshold is chosen here and no evaluation horizon is touched. The
+    model emits probabilities; `evaluate` turns them into detections with a
+    tau chosen on validation only.
+    """
+    import pandas as pd
+
+    from fraudcamp import constants, pipeline
+    from fraudcamp.models import xgb_baseline
+
+    out = Path(args.out)
+    out.mkdir(parents=True, exist_ok=True)
+    lookbacks = (
+        [int(v) for v in args.lookbacks.split(",")] if args.lookbacks
+        else list(constants.LOOKBACKS_H)
+    )
+    params = xgb_baseline.XGBParams(seed=args.seed)
+
+    with step("build pipeline"):
+        result = pipeline.build(Path(args.config))
+    print(
+        f"  rows: {len(result.full_df):,}, campaigns: {len(result.camp):,}, "
+        f"laundering rate {result.full_df['Is Laundering'].mean():.4%}"
+    )
+
+    print("\nhyperparameters (identical for both lookbacks, by design - a per-L")
+    print("tuning would confound the lookback comparison with tuning effort):")
+    for key, value in vars(params).items():
+        print(f"  {key:<18} {value}")
+
+    report: list[dict] = []
+    window_rows: list[dict] = []
+    importance_rows: list[dict] = []
+
+    for lookback in lookbacks:
+        print(f"\n{'=' * 78}\nL = {lookback}h\n{'=' * 78}")
+
+        with step(f"build training matrix, L={lookback}h"):
+            data = xgb_baseline.build_training_data(result.full_df, lookback)
+        print(
+            f"  {data.n_rows:,} rows x {data.matrix.shape[1]} features over "
+            f"{len(data.times)} windows; {data.n_positive:,} positive "
+            f"({data.positive_rate:.4%}); {data.memory_mb():,.0f} MB"
+        )
+        print("  per-window class weight (n_negative / n_positive):")
+        for row in data.per_window:
+            window_rows.append({"lookback_h": lookback, **row})
+            print(
+                f"    {row['t']}  {row['n_edges']:>9,} edges  "
+                f"{row['n_positive']:>6,} pos  weight {row['class_weight']:>9,.1f}"
+            )
+
+        with step(f"train, L={lookback}h"):
+            model = xgb_baseline.train_baseline(
+                result.full_df, lookback, params=params, data=data
+            )
+        directory = _model_dir(args, lookback)
+        model.save(directory)
+        print(f"  saved to {directory}")
+
+        top = xgb_baseline.feature_importance(model, top=20)
+        for row in top:
+            importance_rows.append({"lookback_h": lookback, **row})
+        print("  top features by gain:")
+        for row in top[:10]:
+            print(f"    {row['feature']:<30} {row['share']:>7.1%}")
+
+        report.append(
+            {
+                "lookback_h": lookback,
+                "model_dir": str(directory),
+                **{k: v for k, v in model.training.items() if k != "per_window"},
+            }
+        )
+
+    frame = pd.DataFrame(report)
+    frame.to_csv(out / "train_baseline.csv", index=False)
+    pd.DataFrame(window_rows).to_csv(out / "train_baseline_windows.csv", index=False)
+    pd.DataFrame(importance_rows).to_csv(
+        out / "train_baseline_importance.csv", index=False
+    )
+    (out / "train_baseline.json").write_text(
+        json.dumps(
+            {
+                "params": vars(params),
+                "seed": args.seed,
+                "models": report,
+                "windows": window_rows,
+                "importance": importance_rows,
+            },
+            indent=2,
+            default=str,
+        ),
+        encoding="utf-8",
+    )
+    (out / "train_baseline.md").write_text(
+        "\n".join(
+            [
+                "# XGBoost baseline: training",
+                "",
+                "The non-graph control. Same windows, same causal bounds and the",
+                "same features as the GNN will see; each transaction is an",
+                "independent row. No threshold is chosen here.",
+                "",
+                "## Hyperparameters",
+                "",
+                _markdown_table(
+                    pd.DataFrame(
+                        [{"parameter": k, "value": v} for k, v in vars(params).items()]
+                    )
+                ),
+                "",
+                "## Models",
+                "",
+                _markdown_table(frame),
+                "",
+                "## Training windows",
+                "",
+                _markdown_table(pd.DataFrame(window_rows)),
+                "",
+                "## Feature importance (gain, report only - never used to select)",
+                "",
+                _markdown_table(pd.DataFrame(importance_rows)),
+                "",
+                "## Timing",
+                "",
+                steps_markdown(),
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    print(f"\nWrote {out / 'train_baseline.md'} (+ .json and 3 CSVs)")
+    print("Next: `evaluate` in the same session, which reads these models.")
+    return 0
+
+
+def command_evaluate(args: argparse.Namespace) -> int:
+    """Score the trained baseline: tau on validation, then the horizons.
+
+    Reported against the oracle throughout, because the oracle - not 1.0 -
+    is the best achievable under the frozen matching rule. Earliness is
+    compared to the ceiling and between lookbacks by the **paired** method
+    only; two median lead times are never subtracted.
+    """
+    import pandas as pd
+
+    from fraudcamp import constants, evaluation, pipeline
+    from fraudcamp.evaluation import scorers
+    from fraudcamp.models import xgb_baseline
+
+    out = Path(args.out)
+    out.mkdir(parents=True, exist_ok=True)
+    splits = [s.strip() for s in args.splits.split(",") if s.strip()]
+    lookbacks = (
+        [int(v) for v in args.lookbacks.split(",")] if args.lookbacks
+        else list(constants.LOOKBACKS_H)
+    )
+    tau_grid = (
+        tuple(float(v) for v in args.tau_grid.split(","))
+        if args.tau_grid
+        else evaluation.DEFAULT_TAU_GRID
+    )
+
+    missing = [str(_model_dir(args, L)) for L in lookbacks if not _model_dir(args, L).exists()]
+    if missing:
+        print(
+            "No trained model at: " + ", ".join(missing)
+            + "\nRun `train` first, in this session.",
+            file=sys.stderr,
+        )
+        return 2
+
+    with step("build pipeline"):
+        result = pipeline.build(Path(args.config))
+    print(f"  rows: {len(result.full_df):,}, campaigns: {len(result.camp):,}")
+
+    def oracle(window, t):
+        return scorers.oracle_scores(window["Is Laundering"].to_numpy())
+
+    summary_rows: list[dict] = []
+    curve_rows: list[dict] = []
+    tau_choices: list[dict] = []
+    budget_rows: list[dict] = []
+    operating_rows: list[dict] = []
+    paired_rows: list[dict] = []
+    paired_notes: list[str] = []
+    model_outcomes: dict[tuple[int, str], list] = {}
+
+    for lookback in lookbacks:
+        print(f"\n{'=' * 78}\nL = {lookback}h\n{'=' * 78}")
+        model = xgb_baseline.TrainedBaseline.load(_model_dir(args, lookback))
+        scorer = model.scorer()
+        print(f"  loaded {_model_dir(args, lookback)}")
+
+        with step(f"select tau on validation, L={lookback}h"):
+            tau, curve = evaluation.select_tau(
+                result.full_df, result.camp, result.pattern_df,
+                result.accounts_by_campaign, scorer,
+                tau_grid=tau_grid, lookback_h=lookback, seed=args.seed,
+                scorer_name="xgboost",
+            )
+        tau_choices.append(
+            {
+                "scorer": "xgboost", "lookback_h": lookback, "chosen_tau": tau,
+                "selected_on": "val", "grid": list(tau_grid), "seed": args.seed,
+                "criterion": (
+                    "max campaign-level F1; ties by higher precision, then "
+                    "fewer false alarms, then higher tau"
+                ),
+            }
+        )
+        for row in curve:
+            curve_rows.append({"scorer": "xgboost", **row})
+        for point in evaluation.recall_vs_false_alarms(curve):
+            operating_rows.append({"scorer": "xgboost", **point})
+
+        print(f"  chosen tau = {tau} (campaign-F1 on validation)")
+        print(f"  {'tau':>6} {'prec':>10} {'recall':>8} {'F1':>8} {'FA/day':>12}")
+        for row in curve:
+            print(
+                f"  {row['tau']:>6} {row['campaign_precision']:>10.3f} "
+                f"{row['campaign_recall']:>8.3f} {row['campaign_f1']:>8.3f} "
+                f"{row['false_alarms_per_day']:>12,.1f}"
+            )
+        if tau in (min(tau_grid), max(tau_grid)):
+            print(
+                f"  NOTE: the chosen tau is at the edge of the grid "
+                f"{list(tau_grid)}, so the optimum may lie beyond it. "
+                f"Re-run with --tau-grid to widen."
+            )
+
+        for budget in evaluation.FALSE_ALARM_BUDGETS:
+            budget_tau = evaluation.select_tau_for_budget(curve, budget)
+            if budget_tau is None:
+                cheapest = min(row["false_alarms_per_day"] for row in curve)
+                print(
+                    f"  budget {budget}/day: UNREACHABLE on this grid "
+                    f"(cheapest tau gives {cheapest:,.1f}/day)"
+                )
+                budget_rows.append(
+                    {
+                        "scorer": "xgboost", "lookback_h": lookback,
+                        "budget_per_day": budget, "tau": None, "reachable": False,
+                        "split": None, "campaign_recall": None,
+                        "median_lead_time_h": None, "false_alarms_per_day": None,
+                        "note": f"cheapest tau on the grid gives {cheapest:,.1f}/day",
+                    }
+                )
+                continue
+            print(f"  budget {budget}/day: tau = {budget_tau}")
+            for split in splits:
+                with step(f"xgboost at budget {budget}/day on {split}, L={lookback}h"):
+                    at_budget = evaluation.evaluate_split(
+                        result.full_df, result.camp, result.pattern_df,
+                        result.accounts_by_campaign, split, scorer,
+                        tau=budget_tau, lookback_h=lookback, seed=args.seed,
+                        scorer_name="xgboost",
+                    )
+                summary = evaluation.summarize(
+                    at_budget, subset="all", bootstrap_seed=args.seed,
+                    n_resamples=args.bootstrap,
+                )
+                budget_rows.append(
+                    {
+                        "scorer": "xgboost", "lookback_h": lookback,
+                        "budget_per_day": budget, "tau": budget_tau,
+                        "reachable": True, "split": split,
+                        "campaign_recall": summary["campaign_recall"],
+                        "median_lead_time_h": summary["median_lead_time_h"],
+                        "median_frac_observed_at_detection": summary[
+                            "median_frac_observed_at_detection"
+                        ],
+                        "false_alarms_per_day": summary["false_alarms_per_day"],
+                        "n_campaigns": summary["n_campaigns"],
+                        "n_detected": summary["n_detected"],
+                        "note": "",
+                    }
+                )
+
+        for split in splits:
+            with step(f"ceiling: oracle on {split}, L={lookback}h"):
+                ceiling = evaluation.evaluate_split(
+                    result.full_df, result.camp, result.pattern_df,
+                    result.accounts_by_campaign, split, oracle,
+                    tau=scorers.SANITY_TAU["oracle"], lookback_h=lookback,
+                    seed=args.seed, scorer_name="oracle",
+                )
+            reachable = [o.campaign_id for o in ceiling.outcomes if o.detected]
+
+            with step(f"evaluate xgboost on {split}, L={lookback}h, tau={tau}"):
+                evaluated = evaluation.evaluate_split(
+                    result.full_df, result.camp, result.pattern_df,
+                    result.accounts_by_campaign, split, scorer,
+                    tau=tau, lookback_h=lookback, seed=args.seed,
+                    scorer_name="xgboost",
+                )
+            model_outcomes[(lookback, split)] = evaluated.outcomes
+
+            for subset in constants.TEST_SUBSETS:
+                ceiling_recall = evaluation.summarize(
+                    ceiling, subset=subset, bootstrap_seed=args.seed,
+                    n_resamples=args.bootstrap, oracle_reachable=reachable,
+                )["campaign_recall"]
+                for name, evaluated_result in (
+                    ("oracle", ceiling), ("xgboost", evaluated)
+                ):
+                    summary_rows.append(
+                        {
+                            "lookback_h": lookback,
+                            **evaluation.summarize(
+                                evaluated_result, subset=subset,
+                                bootstrap_seed=args.seed, n_resamples=args.bootstrap,
+                                oracle_reachable=reachable,
+                                oracle_recall=ceiling_recall,
+                            ),
+                        }
+                    )
+
+            paired = evaluation.paired_lead_time_comparison(
+                ceiling.outcomes, evaluated.outcomes, "oracle", "xgboost",
+                split=split, bootstrap_seed=args.seed,
+            )
+            paired_rows.append({"comparison": "xgboost_vs_oracle", **paired.as_dict()})
+            paired_notes.append(
+                f"[{split}, L={lookback}h, model vs ceiling] "
+                + evaluation.describe_paired_comparison(paired)
+            )
+
+    # the model's own lookback comparison, paired
+    for split in splits:
+        for earlier, later in zip(lookbacks, lookbacks[1:]):
+            a = model_outcomes.get((earlier, split))
+            b = model_outcomes.get((later, split))
+            if not a or not b:
+                continue
+            paired = evaluation.paired_lead_time_comparison(
+                a, b, f"L={earlier}h", f"L={later}h", split=split,
+                bootstrap_seed=args.seed,
+            )
+            paired_rows.append({"comparison": "lookbacks", **paired.as_dict()})
+            paired_notes.append(
+                f"[{split}, model lookbacks] "
+                + evaluation.describe_paired_comparison(paired)
+            )
+
+    # --- report ---------------------------------------------------------
+    def fmt(value, spec=".3f"):
+        return format(value, spec) if value is not None else "-"
+
+    print("\n" + "=" * 126)
+    print(
+        f"{'L':>3} {'split':<7}{'scorer':<9}{'subset':<20}{'tau':>5}{'camp':>5}"
+        f"{'det':>5}{'recall':>8}{'vs ceil':>9}{'prec':>7}{'FA/day':>10}"
+        f"{'lead_h':>9}{'norm':>7}{'frac':>7}"
+    )
+    print("-" * 126)
+    for row in summary_rows:
+        print(
+            f"{row['lookback_h']:>3} {row['split']:<7}{row['scorer']:<9}"
+            f"{row['test_subset']:<20}{row['tau']:>5}{row['n_campaigns']:>5}"
+            f"{row['n_detected']:>5}{fmt(row['campaign_recall']):>8}"
+            f"{fmt(row['recall_relative_to_ceiling']):>9}"
+            f"{fmt(row['campaign_precision']):>7}"
+            f"{row['false_alarms_per_day']:>10,.1f}"
+            f"{fmt(row['median_lead_time_h'], '.1f'):>9}"
+            f"{fmt(row['median_normalized_lead_time'], '.2f'):>7}"
+            f"{fmt(row['median_frac_observed_at_detection'], '.2f'):>7}"
+        )
+    print("=" * 126)
+    print(
+        "  'vs ceil' is recall as a fraction of the oracle's on the same subset."
+    )
+
+    print("\nPAIRED COMPARISONS (earliness only on campaigns both detect)")
+    for note in paired_notes:
+        print(f"  {note}")
+
+    print("\nGATE QUESTION: does the baseline detect campaigns early at all?")
+    for row in summary_rows:
+        if row["scorer"] != "xgboost" or row["test_subset"] != "all":
+            continue
+        print(
+            f"  L={row['lookback_h']:>2} {row['split']:<7} recall "
+            f"{fmt(row['campaign_recall'])} "
+            f"({fmt(row['recall_relative_to_ceiling'])} of the ceiling), "
+            f"median lead {fmt(row['median_lead_time_h'], '.1f')}h, "
+            f"{row['false_alarms_per_day']:,.1f} false alarms/day"
+        )
+
+    pd.DataFrame(summary_rows).to_csv(out / "evaluate_baseline.csv", index=False)
+    pd.DataFrame(curve_rows).to_csv(out / "evaluate_baseline_tau_curve.csv", index=False)
+    pd.DataFrame(paired_rows).to_csv(out / "evaluate_baseline_paired.csv", index=False)
+    pd.DataFrame(budget_rows).to_csv(out / "evaluate_baseline_budgets.csv", index=False)
+    pd.DataFrame(operating_rows).to_csv(
+        out / "evaluate_baseline_operating.csv", index=False
+    )
+    (out / "evaluate_baseline.json").write_text(
+        json.dumps(
+            {
+                "seed": args.seed,
+                "tau_grid": list(tau_grid),
+                "tau_choices": tau_choices,
+                "summary": summary_rows,
+                "tau_curve": curve_rows,
+                "paired": paired_rows,
+                "paired_notes": paired_notes,
+                "budgets": budget_rows,
+                "operating_curve": operating_rows,
+            },
+            indent=2,
+            default=str,
+        ),
+        encoding="utf-8",
+    )
+    (out / "evaluate_baseline.md").write_text(
+        "\n".join(
+            [
+                "# XGBoost baseline: results",
+                "",
+                "Tau chosen on validation only, by campaign-level F1. Every",
+                "number is reported against the oracle, which is the best",
+                "achievable under the frozen matching rule and is well below",
+                "1.0. Earliness is compared only by the paired method.",
+                "",
+                "## Chosen tau",
+                "",
+                _markdown_table(pd.DataFrame(tau_choices)),
+                "",
+                "## Summary",
+                "",
+                _markdown_table(pd.DataFrame(summary_rows)),
+                "",
+                "## Paired comparisons",
+                "",
+                *["- " + note for note in paired_notes],
+                "",
+                _markdown_table(pd.DataFrame(paired_rows)),
+                "",
+                "## At fixed false-alarm budgets",
+                "",
+                _markdown_table(pd.DataFrame(budget_rows)),
+                "",
+                "## Tau curve (validation)",
+                "",
+                _markdown_table(pd.DataFrame(curve_rows)),
+                "",
+                "## Timing",
+                "",
+                steps_markdown(),
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    print(f"\nWrote {out / 'evaluate_baseline.md'} (+ .json and 5 CSVs)")
+    return 0
+
+
 # --------------------------------------------------------------------------
 # not yet implemented
 # --------------------------------------------------------------------------
@@ -1723,7 +2206,7 @@ def command_make_sample(args: argparse.Namespace) -> int:
 def command_not_yet(args: argparse.Namespace) -> int:
     print(
         f"`{args.command}` is not implemented yet. It arrives with Phase 3 "
-        "stage 3.3 (XGBoost baseline) and 3.4 (GNN). Nothing to run.",
+        "stage 3.4 (the GNN). Nothing to run.",
         file=sys.stderr,
     )
     return 2
@@ -1753,15 +2236,22 @@ def main() -> int:
     )
     parser.add_argument(
         "--splits", default="val,test,stress",
-        help="evaluate-scorers: horizons to evaluate (default: val,test,stress)",
+        help="evaluate-scorers/evaluate: horizons (default: val,test,stress)",
     )
     parser.add_argument(
         "--lookbacks", default="",
-        help="evaluate-scorers: comma-separated lookbacks (default: the candidates)",
+        help="comma-separated lookbacks (default: the candidates, 24 and 48)",
     )
     parser.add_argument(
         "--tau-grid", default="",
-        help="evaluate-scorers: comma-separated taus to sweep on validation",
+        help=(
+            "evaluate-scorers/evaluate: comma-separated taus to sweep on "
+            "validation (default: DEFAULT_TAU_GRID)"
+        ),
+    )
+    parser.add_argument(
+        "--model-dir", default="",
+        help="train/evaluate: where models live (default: <out>/models)",
     )
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument(
@@ -1781,8 +2271,8 @@ def main() -> int:
         "evaluate-scorers": command_evaluate_scorers,
         "oracle-diagnose": command_oracle_diagnose,
         "make-sample": command_make_sample,
-        "train": command_not_yet,
-        "evaluate": command_not_yet,
+        "train": command_train,
+        "evaluate": command_evaluate,
     }
     started = time.perf_counter()
     code = handlers[args.command](args)
