@@ -9,7 +9,7 @@ only if that time is at or before its deadline; otherwise it is missed.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 
 import numpy as np
 import pandas as pd
@@ -447,6 +447,161 @@ def recall_vs_false_alarms(curve: list[dict]) -> list[dict]:
         for row in curve
     ]
     return sorted(points, key=lambda row: (row["false_alarms_per_day"], row["tau"]))
+
+
+@dataclass
+class PairedComparison:
+    """Lead time compared between two detectors, campaign by campaign."""
+
+    label_a: str
+    label_b: str
+    split: str
+    #: Campaigns both detected — the only ones a lead-time difference is
+    #: defined on.
+    n_both: int
+    n_only_a: int
+    n_only_b: int
+    n_neither: int
+    only_a_campaigns: list[int]
+    only_b_campaigns: list[int]
+    #: `b - a` over paired campaigns, so **positive means b detected earlier**
+    #: (more lead time).
+    median_difference_h: float | None
+    difference_ci_h: tuple[float | None, float | None]
+    median_normalized_difference: float | None
+    median_frac_observed_difference: float | None
+    #: Sign counts, which do not depend on magnitude.
+    n_b_earlier: int
+    n_a_earlier: int
+    n_tied: int
+
+    def as_dict(self) -> dict:
+        data = asdict(self)
+        data["ci_low_h"], data["ci_high_h"] = data.pop("difference_ci_h")
+        data["only_a_campaigns"] = ",".join(str(c) for c in self.only_a_campaigns)
+        data["only_b_campaigns"] = ",".join(str(c) for c in self.only_b_campaigns)
+        return data
+
+
+def paired_lead_time_comparison(
+    outcomes_a: list[CampaignOutcome],
+    outcomes_b: list[CampaignOutcome],
+    label_a: str,
+    label_b: str,
+    split: str = "",
+    bootstrap_seed: int = 0,
+    n_resamples: int = 1000,
+) -> PairedComparison:
+    """Compare two detectors' earliness **on the campaigns both detected**.
+
+    This is the only valid way to compare lead time between two detectors,
+    and it is the method to use whenever lookbacks or conditions are
+    compared.
+
+    Comparing two medians of `median_lead_time_h` is invalid, because each
+    median is taken over a different set of campaigns. A detector that
+    finds strictly more campaigns will usually show a *lower* median lead
+    time, since the extra ones it reaches are the harder, slower campaigns
+    that are detected late — so a genuine improvement reads as a
+    regression. The composition of the set changes, not the earliness.
+
+    Two things are therefore reported separately, and neither substitutes
+    for the other:
+
+    1. **Earliness**, as the per-campaign difference `b - a` over the
+       campaigns both detected, with a bootstrap CI over campaigns. Positive
+       means `b` was earlier. Sign counts are given too, since they hold
+       regardless of magnitude.
+    2. **Coverage**, as how many campaigns each detector found that the
+       other missed — the discordant sets, named by id so they can be
+       inspected rather than assumed to be random.
+    """
+    by_id_a = {o.campaign_id: o for o in outcomes_a}
+    by_id_b = {o.campaign_id: o for o in outcomes_b}
+    shared_ids = sorted(set(by_id_a) & set(by_id_b))
+
+    both, only_a, only_b, neither = [], [], [], []
+    for campaign_id in shared_ids:
+        a, b = by_id_a[campaign_id], by_id_b[campaign_id]
+        if a.detected and b.detected:
+            both.append((a, b))
+        elif a.detected:
+            only_a.append(campaign_id)
+        elif b.detected:
+            only_b.append(campaign_id)
+        else:
+            neither.append(campaign_id)
+
+    differences = [
+        b.lead_time_h - a.lead_time_h
+        for a, b in both
+        if a.lead_time_h is not None and b.lead_time_h is not None
+    ]
+    normalized = [
+        b.normalized_lead_time - a.normalized_lead_time
+        for a, b in both
+        if a.normalized_lead_time is not None and b.normalized_lead_time is not None
+    ]
+    observed = [
+        b.frac_observed - a.frac_observed
+        for a, b in both
+        if a.frac_observed is not None and b.frac_observed is not None
+    ]
+
+    return PairedComparison(
+        label_a=label_a,
+        label_b=label_b,
+        split=split,
+        n_both=len(both),
+        n_only_a=len(only_a),
+        n_only_b=len(only_b),
+        n_neither=len(neither),
+        only_a_campaigns=only_a,
+        only_b_campaigns=only_b,
+        median_difference_h=float(np.median(differences)) if differences else None,
+        difference_ci_h=bootstrap_ci(
+            differences, statistic=np.median, seed=bootstrap_seed, n_resamples=n_resamples
+        ),
+        median_normalized_difference=float(np.median(normalized)) if normalized else None,
+        median_frac_observed_difference=float(np.median(observed)) if observed else None,
+        n_b_earlier=sum(1 for d in differences if d > 0),
+        n_a_earlier=sum(1 for d in differences if d < 0),
+        n_tied=sum(1 for d in differences if d == 0),
+    )
+
+
+def describe_paired_comparison(comparison: PairedComparison) -> str:
+    """A sentence that states what the paired numbers do and do not show."""
+    if comparison.n_both == 0:
+        return (
+            f"{comparison.label_a} and {comparison.label_b} share no detected "
+            "campaigns, so earliness cannot be compared."
+        )
+
+    low, high = comparison.difference_ci_h
+    median = comparison.median_difference_h
+    bounds = (
+        f"[{low:.1f}, {high:.1f}]"
+        if low is not None and high is not None
+        else "[n/a]"
+    )
+    straddles_zero = low is not None and high is not None and low <= 0 <= high
+
+    verdict = (
+        "the interval includes zero, so no earliness difference is demonstrated"
+        if straddles_zero
+        else f"{comparison.label_b} is "
+        + ("earlier" if median and median > 0 else "later")
+        + " on the campaigns both detect"
+    )
+    return (
+        f"On the {comparison.n_both} campaigns both detect, "
+        f"{comparison.label_b} - {comparison.label_a} = {median:.1f}h "
+        f"(95% CI {bounds}); {verdict}. "
+        f"Separately, {comparison.label_b} detects {comparison.n_only_b} that "
+        f"{comparison.label_a} misses, and {comparison.label_a} detects "
+        f"{comparison.n_only_a} that {comparison.label_b} misses."
+    )
 
 
 def summarize_by(result: EvaluationResult, attribute: str) -> list[dict]:

@@ -400,8 +400,19 @@ Summarised by reason, `base_type` and group, and it also characterises the
 oracle's false-alarm clusters (1–6 per day): since the oracle keeps only
 laundering edges, each one is real laundering the rule could not attribute.
 
-Writes `oracle_diagnose.{md,json}` plus three CSVs.
-`--false-alarm-limit` caps how many clusters are characterised.
+It also reports the **paired lead-time comparison between consecutive
+lookbacks**: for the campaigns both lookbacks detect, the per-campaign
+lead-time difference as a median with a seeded bootstrap CI (positive means
+the longer lookback was earlier), and separately how many campaigns each
+lookback detects that the other misses, by id. Two median lead times are
+never subtracted — each is over a different set of campaigns, so a longer
+lookback that reaches more of the slow campaigns shows a lower median even if
+nothing got later. This is the method for every lookback and condition
+comparison; see the README section "Comparing two configurations".
+
+Writes `oracle_diagnose.{md,json}` plus up to four CSVs, the paired one being
+`oracle_diagnose_paired.csv`. `--false-alarm-limit` caps how many clusters
+are characterised.
 
 **This changes no rule.** It is diagnosis, so that the ceiling can be
 explained rather than merely reported.

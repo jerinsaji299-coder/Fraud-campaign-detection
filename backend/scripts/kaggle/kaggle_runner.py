@@ -1272,6 +1272,7 @@ def command_oracle_diagnose(args: argparse.Namespace) -> int:
     unassigned_accounts = set(unassigned["src"]) | set(unassigned["dst"])
 
     diagnoses: list[dict] = []
+    outcomes_by: dict[tuple[int, str], list] = {}
     false_alarms: list[dict] = []
     coverage: list[dict] = []
 
@@ -1284,6 +1285,7 @@ def command_oracle_diagnose(args: argparse.Namespace) -> int:
                     tau=scorers.SANITY_TAU["oracle"], lookback_h=lookback,
                     seed=args.seed, scorer_name="oracle",
                 )
+            outcomes_by[(lookback, split)] = evaluated.outcomes
             missed = [o.campaign_id for o in evaluated.outcomes if not o.detected]
             total = len(evaluated.outcomes)
             coverage.append(
@@ -1318,6 +1320,48 @@ def command_oracle_diagnose(args: argparse.Namespace) -> int:
                         limit=args.false_alarm_limit,
                     )
                 )
+
+    paired: list[dict] = []
+    paired_notes: list[str] = []
+    for split in splits:
+        for earlier, later in zip(lookbacks, lookbacks[1:]):
+            a = outcomes_by.get((earlier, split))
+            b = outcomes_by.get((later, split))
+            if not a or not b:
+                continue
+            comparison = evaluation.paired_lead_time_comparison(
+                a, b, f"L={earlier}h", f"L={later}h", split=split,
+                bootstrap_seed=args.seed,
+            )
+            paired.append(comparison.as_dict())
+            paired_notes.append(evaluation.describe_paired_comparison(comparison))
+
+    if paired:
+        print("\n" + "=" * 96)
+        print("PAIRED LEAD-TIME COMPARISON BETWEEN LOOKBACKS")
+        print("=" * 96)
+        print("  Earliness is compared only on campaigns BOTH lookbacks detect.")
+        print("  Comparing two median lead times is invalid: each median is taken")
+        print("  over a different set of campaigns, and the extra campaigns a")
+        print("  longer lookback reaches are the slow ones detected late, which")
+        print("  drags its median down even when nothing got later. Coverage is")
+        print("  reported separately, as the campaigns each one finds alone.")
+        for row, note in zip(paired, paired_notes):
+            print(
+                f"\n  {row['split']}  {row['label_a']} vs {row['label_b']}  "
+                f"(positive = {row['label_b']} earlier)"
+            )
+            print(f"    {note}")
+            print(
+                f"    sign counts: {row['label_b']} earlier {row['n_b_earlier']}, "
+                f"{row['label_a']} earlier {row['n_a_earlier']}, tied {row['n_tied']}"
+            )
+            if row["only_b_campaigns"]:
+                print(f"    only {row['label_b']}: {row['only_b_campaigns']}")
+            if row["only_a_campaigns"]:
+                print(f"    only {row['label_a']}: {row['only_a_campaigns']}")
+        pd.DataFrame(paired).to_csv(out / "oracle_diagnose_paired.csv", index=False)
+        print(f"\nWrote {out / 'oracle_diagnose_paired.csv'}")
 
     if not diagnoses:
         print("\nThe oracle missed nothing; there is nothing to diagnose.")
@@ -1439,6 +1483,8 @@ def command_oracle_diagnose(args: argparse.Namespace) -> int:
                 "lookbacks": lookbacks,
                 "splits": splits,
                 "coverage": coverage,
+                "paired_lead_time": paired,
+                "paired_lead_time_notes": paired_notes,
                 "reason_counts": by_reason.to_dict(orient="records"),
                 "diagnoses": diagnoses,
                 "false_alarm_sample": false_alarms,
@@ -1462,6 +1508,21 @@ def command_oracle_diagnose(args: argparse.Namespace) -> int:
                 "## Coverage",
                 "",
                 _markdown_table(pd.DataFrame(coverage)),
+                "",
+                "## Paired lead-time comparison between lookbacks",
+                "",
+                "Earliness is compared **only on the campaigns both lookbacks",
+                "detect**. Two median lead times cannot be compared directly:",
+                "each median is over a different set of campaigns, and the extra",
+                "campaigns a longer lookback reaches are the slow ones detected",
+                "late, so its median falls even when no campaign got later.",
+                "Coverage is a separate question, reported as the campaigns each",
+                "lookback finds that the other misses. A positive difference",
+                "means the second lookback was earlier.",
+                "",
+                _markdown_table(pd.DataFrame(paired)) if paired else "_not computed_",
+                "",
+                *(["- " + note for note in paired_notes] if paired_notes else []),
                 "",
                 "## Misses by reason",
                 "",
@@ -1509,7 +1570,7 @@ def command_oracle_diagnose(args: argparse.Namespace) -> int:
         ),
         encoding="utf-8",
     )
-    print(f"\nWrote {out / 'oracle_diagnose.md'} (+ .json and 3 CSVs)")
+    print(f"\nWrote {out / 'oracle_diagnose.md'} (+ .json and up to 4 CSVs)")
     return 0
 
 

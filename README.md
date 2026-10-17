@@ -35,6 +35,8 @@ git clone https://github.com/jerinsaji299-coder/Fraud-campaign-detection.git
 16. [Known limitations and open questions](#known-limitations-and-open-questions)
 17. [Future phases](#future-phases)
 18. [Phase 3 definitions](#phase-3-definitions-centralized-baselines)
+    - [Oracle ceiling](#oracle-ceiling)
+    - [Comparing two configurations: the paired method](#comparing-two-configurations-the-paired-method)
 19. [Version history](#version-history)
 20. [Changelog](#changelog)
 
@@ -379,11 +381,16 @@ whereas 60% of the theoretical 100% would be meaningless.
 | L | Split | Oracle recall | Median lead time | Median `frac_observed` |
 |---|---|---:|---:|---:|
 | 24 | val | 0.731 | 68.5h | — |
-| 24 | test | 0.821 | **74.7h** | **0.25** |
+| 24 | test | 0.821 | 74.7h | **0.25** |
 | 24 | stress | 0.724 | 81.7h | — |
 | 48 | val | 0.769 | 67.3h | — |
-| 48 | test | **0.893** | **72.1h** | **0.25** |
+| 48 | test | **0.893** | 72.1h | **0.25** |
 | 48 | stress | 0.737 | 81.5h | — |
+
+Each median lead time in this table is taken **over that row's own detected
+campaigns**, so the medians in different rows are not comparable with each
+other. A row's median is a description of that configuration, not a term in a
+subtraction. Comparisons between rows use the paired method below.
 
 Read these as the budget every later result is spent against. Two things
 stand out:
@@ -394,10 +401,15 @@ stand out:
   model. Reporting a model's recall as a fraction of 1.0 would understate it;
   the honest denominator is the oracle. §[Why the oracle misses](#why-the-oracle-misses-campaigns)
   explains where that gap comes from.
-- **L = 48 buys recall, not earliness.** It lifts test recall from 0.821 to
-  0.893 while median lead time *falls* slightly, 74.7h → 72.1h. The longer
-  window finds more campaigns, a little later. That is a genuine trade-off
-  for stage 3.3 to weigh, not a free improvement.
+- **L = 48 raises recall. Whether it costs earliness is untested.** Test
+  recall rises from 0.821 to 0.893. The earliness side cannot be read off
+  this table: 74.7h and 72.1h are medians over *different sets of
+  campaigns*, and the extra campaigns L = 48 reaches are the harder, slower
+  ones that are detected late, which pulls its median down even if no
+  campaign got detected later. The two bootstrap CIs also overlap almost
+  entirely. The paired comparison below is what will decide this; until
+  `oracle-diagnose` has run with it on the full data, **the earliness
+  trade-off is untested and no direction should be claimed.**
 
 Median `frac_observed` of 0.25 on test means the oracle fires when about a
 quarter of a campaign's transactions have happened — earlier than the
@@ -406,6 +418,37 @@ front-load their account activity.
 
 Synthetic development figures, kept only as a code check: median lead 32.9h
 (val) / 25.0h (test) / 27.1h (stress), `frac_observed` 0.40 / 0.33 / 0.33.
+
+### Comparing two configurations: the paired method
+
+**Frozen.** Whenever two configurations are compared — lookbacks here, and
+the four conditions in Phase 4–5 — earliness and coverage are reported as two
+separate things, and neither is allowed to stand in for the other.
+
+1. **Earliness, paired.** Restrict to the campaigns **both** configurations
+   detect, take the per-campaign difference in lead time, and report its
+   median with a seeded bootstrap CI over campaigns, plus the counts of
+   campaigns where each side was earlier and where they tied. The sign
+   convention is `b − a`, so **positive means `b` detected earlier**. The
+   same pairing is applied to `normalized_lead_time` and `frac_observed`.
+2. **Coverage, separately.** Report how many campaigns each configuration
+   detects that the other misses, **by campaign id**, so the discordant sets
+   can be inspected rather than assumed to be random.
+
+Comparing two medians of `median_lead_time_h` is invalid and is not done
+anywhere in this project. Each median is over a different set of campaigns,
+so a configuration that detects strictly more campaigns usually shows a
+*lower* median lead time — the extra campaigns it reaches are the slow ones
+detected late. A real improvement then reads as a regression. What changed is
+the composition of the set, not the earliness.
+
+Implemented once, in `evaluation.paired_lead_time_comparison`, and reported
+by `oracle-diagnose` as `oracle_diagnose_paired.csv` plus a section in
+`oracle_diagnose.{md,json}`. `evaluation.describe_paired_comparison` writes
+the sentence, and refuses to state a direction when the CI includes zero.
+`tests/test_paired_comparison.py` pins it, including the case where the
+unpaired medians say the better detector got worse by 45 hours while the
+paired difference is zero with one extra campaign detected.
 
 ### Why the oracle misses campaigns
 
@@ -575,6 +618,7 @@ transactions.
 | 2026-10-15 | **Alert-budget metrics added to the evaluation**: campaign recall and median lead time at false-alarm budgets of 10, 50 and 100 per day, taking the lowest tau whose validation alarm rate stays inside the budget, plus the full recall-vs-false-alarms curve saved for plotting. Campaign-F1 on validation stays the primary tau rule | On the full data the random scorer reached 0.27 recall at L = 48 while raising ~47,000 false alarms per day. Recall alone cannot distinguish a detector from one that simply alerts more, and a reader could mistake that 0.27 for signal. A budget makes the comparison operational: what recall can you get for an alarm rate an analyst could actually work through | user decision, 2026-10-15; `tests/test_tau_and_budgets.py` |
 | 2026-10-15 | **Tau tie-break made fully deterministic**: among thresholds with equal campaign-F1, prefer higher precision, then fewer false alarms, then the higher tau | Ties are common — a binary-scoring detector ties everywhere — and the previous rule (lowest tau) still left the outcome sensitive to what else tied. The new order expresses a preference rather than an accident: of two equally-scoring thresholds, take the one that cries wolf less, and failing that the cheaper, more conservative one. Tested to be independent of grid order | user decision, 2026-10-15 |
 | 2026-10-15 | `features-smoke` training probes are rule-3 filtered and the largest window comes from a full scan; the oracle's misses are diagnosed rather than accepted | The oracle misses 18% (L = 24) and 11% (L = 48) of test campaigns despite perfect information, so the ceiling is well below 1.0 and the reason matters: a campaign unreachable because of temporal sparsity says something different about the method than one lost to a purity failure. `oracle-diagnose` classifies each, and deliberately changes no rule | user decision, 2026-10-15; `tests/test_oracle_diagnose.py` |
+| 2026-10-17 | **Two configurations are compared by the paired method, and never by subtracting two median lead times.** Earliness is the per-campaign lead-time difference over the campaigns **both** detect — median, seeded bootstrap CI, and per-side earlier/tied counts, sign convention `b − a` so positive means `b` was earlier — applied equally to `normalized_lead_time` and `frac_observed`. Coverage is reported separately as the campaigns each side detects that the other misses, by id. Applies to the lookback comparison now and to the four conditions in Phase 4-5. The earlier claim that L = 48 loses earliness (74.7h → 72.1h) is **withdrawn as untested** | Those two medians are over different sets of campaigns. L = 48 additionally detects the harder, slower campaigns, which are detected late, so its median falls even if nothing was detected later than under L = 24 — a genuine improvement reads as a regression, and the bootstrap CIs overlapped almost entirely anyway. What changed is the composition of the set, not the earliness | user-reported, 2026-10-17; `tests/test_paired_comparison.py` |
 | 2026-10-10 | **Stage 3.4 training regime frozen: both candidate lookbacks train with neighbour sampling** (LinkNeighborLoader-style mini-batches of target edges with sampled multi-hop neighbourhoods). Inference scores full windows, chunked if needed. Fanouts, batch size and negative/positive handling are chosen in stage 3.4 and reported before training | If L = 24 trained full-batch and L = 48 trained with sampling, the L comparison would confound lookback length with training method, and the chosen L could not be attributed to the lookback. Using one regime for both keeps that comparison clean. It also sidesteps the capacity question: the busiest L = 48 window is estimated at ~16.6 GB full-batch against 16 GB GPUs | user decision, 2026-10-10 |
 | 2026-10-10 | `features-smoke` samples only rule-3-valid training detection times, and a cheap full scan of **every** usable detection time supplies the largest-window figures | The first full-data run reported Sept 2 12:00 at L = 48 as the largest candidate window (1.5M edges), but that time violates rule 3: its lookback starts before `DATA_START`, so the window was silently clamped — which is also why its L = 48 and L = 72 rows were identical. Sampling five detection times cannot find the true maximum anyway, so the scan replaces guesswork with a full enumeration (counts only, no features) | user-reported, 2026-10-10 |
 | 2026-10-10 | "Mostly involved in unassigned-laundering edges", for the ambiguous rule, is read as **at least 50% of the cluster's accounts** touching a laundering edge that belongs to no campaign | The design says "mostly" without a number; 0.5 mirrors the matching rule's own threshold, so the two use one consistent notion of majority. Exposed as `constants.AMBIGUOUS_MIN_FRACTION` rather than buried in the code | interpretation, stage 3.2 |
@@ -718,6 +762,7 @@ project-root/
       test_evaluation.py          extraction, matching, outcomes, lead time, metrics, bootstrap CIs
       test_tau_and_budgets.py     the deterministic tau tie-break and the alert budgets
       test_oracle_diagnose.py     the four oracle-miss reasons, each on a hand-built case
+      test_paired_comparison.py   the paired lead-time method, incl. the misleading-medians case
       test_features.py            feature shapes + the leakage properties (future, labels, identity)
       test_fulldata.py            @pytest.mark.fulldata, one test per regression number; skip if no data
     data/                         gitignored: raw/, sample/, processed/
@@ -1084,7 +1129,12 @@ committed.
     statistic the sweep uses instead of a bootstrap at every candidate;
     `best_tau` applies the deterministic tie-break, and
     `select_tau_for_budget` / `recall_vs_false_alarms` provide the
-    alert-budget view.
+    alert-budget view. `paired_lead_time_comparison` is the **only**
+    sanctioned way to compare two configurations' earliness — per-campaign
+    differences over the campaigns both detect, with coverage reported
+    separately — and `describe_paired_comparison` renders it in words,
+    declining to state a direction when the CI includes zero. See
+    §[the paired method](#comparing-two-configurations-the-paired-method).
   - `diagnose.py` — `diagnose_misses` classifies every missed campaign into
     `temporal_sparsity` / `purity_failure` / `late_only` / `unexplained`
     with the evidence behind the verdict, and `diagnose_false_alarms`
@@ -1468,6 +1518,24 @@ campaign_id)`:
   rather than approximating, the curve sorted for plotting, and the
   motivating case written as a test: of two detectors the profligate one has
   the higher recall and is the one the budget rejects.
+- **Backend paired-comparison tests** (`test_paired_comparison.py`, 14
+  tests): the decisive one is constructed so that the *unpaired* medians give
+  the wrong answer — B detects everything A detects at exactly the same time,
+  plus one campaign only detectable late, so medians make B look 45 hours
+  worse while the paired difference is 0.0h with one extra detection. Then
+  the sign convention in both directions, coverage counted separately and by
+  id, campaigns neither side detects excluded but counted, campaigns missing
+  from one evaluation ignored rather than treated as misses, no shared
+  detections yielding `None` instead of a number, the normalized and
+  `frac_observed` pairings, a missing normalized value not sinking the hours
+  comparison, identical detectors giving a zero interval, the interval being
+  a function of the seed alone, `describe_paired_comparison` refusing a
+  direction when zero is inside the interval and stating one when it is not,
+  and `as_dict` staying flat enough for a CSV row. One test runs the real
+  oracle through `evaluate_split` at both lookbacks on a built world where a
+  campaign's 30-hour gaps put it beyond any 24h window, checking it surfaces
+  as coverage rather than as a lead-time change. **Proven able to fail:**
+  making the comparison unpaired fails 4 of the 14.
 - **Backend oracle-diagnosis tests** (`test_oracle_diagnose.py`, 11 tests):
   each of the four reasons on a hand-built case where the answer follows
   from the construction — 40-hour gaps for `temporal_sparsity`, a campaign
@@ -1592,8 +1660,8 @@ campaign_id)`:
     note). Cytoscape needs a real canvas, so the graph component itself is
     stubbed in these tests.
 
-**Current pass status (2026-10-08):**
-- Backend: `python -m pytest tests/` from `backend/` → 234 passed, 25
+**Current pass status (2026-10-17):**
+- Backend: `python -m pytest tests/` from `backend/` → 248 passed, 25
   skipped, 0 failed. The skips are the full-data suite, which needs the
   dataset that only exists on Kaggle; all 24 of its numbers passed there on
   2026-10-08/09.
@@ -1612,6 +1680,14 @@ is the one piece that most warrants a look in a browser before the demo.
 
 ## Known limitations and open questions
 
+- **Whether L = 48 costs earliness relative to L = 24 is untested.** L = 48
+  measurably detects more test campaigns (recall 0.893 vs 0.821), but the two
+  configurations have never been compared on the campaigns they both detect,
+  which is the only comparison that isolates earliness from coverage. The
+  paired comparison is implemented and wired into `oracle-diagnose`; it needs
+  one full-data Kaggle run. Until then neither lookback should be described as
+  earlier than the other. See
+  §[the paired method](#comparing-two-configurations-the-paired-method).
 - The pipeline currently targets only `HI-Small`; generalization to
   `HI-Medium`/`HI-Large` or the `LI-*` (low-illicit-ratio) files is
   unverified and deferred to a possible later replication.
@@ -1690,6 +1766,48 @@ Tagged points in the repository, newest first. Check one out with
 
 ## Changelog
 
+- **2026-10-17** — **Lookback and condition comparisons are now paired, and
+  the earliness claim about L = 48 is withdrawn as untested.**
+
+  The README claimed that L = 48 buys recall but loses earliness, 74.7h →
+  72.1h. That was not supported by the measurement. The two medians are taken
+  over *different sets of campaigns*: L = 48 additionally detects the harder,
+  slower campaigns, and those are detected late, so its median falls even if
+  no campaign was detected later than it would have been under L = 24. The
+  bootstrap CIs also overlap almost entirely. The claim is removed. The
+  recall numbers stand; the earliness side now reads **untested**, pending
+  the paired comparison on the full data.
+
+  *The paired method is frozen* as the way two configurations are ever
+  compared, lookbacks now and the four conditions in Phase 4–5. Earliness is
+  the per-campaign lead-time difference over the campaigns **both** detect,
+  as a median with a seeded bootstrap CI and the per-side earlier/tied
+  counts, sign convention `b − a` so positive means `b` was earlier; the same
+  pairing is applied to `normalized_lead_time` and `frac_observed`. Coverage
+  is reported **separately**, as how many campaigns each side detects that
+  the other misses, named by id. Two medians of `median_lead_time_h` are
+  never subtracted.
+
+  *New:* `evaluation.paired_lead_time_comparison` and
+  `evaluation.describe_paired_comparison`, the latter refusing to state a
+  direction when the CI includes zero. `oracle-diagnose` gained a paired
+  section, printed and written to `oracle_diagnose_paired.csv` and into
+  `oracle_diagnose.{md,json}`, so it lands with the next Kaggle run. The
+  ceiling table now says in words that its medians are each over that row's
+  own campaigns and are not comparable across rows.
+
+  *Tests:* `tests/test_paired_comparison.py`, 14 tests, backend now 248
+  passing (25 full-data tests skipped locally). The decisive one is built so
+  the unpaired medians are *wrong*: B detects everything A detects at exactly
+  the same time, plus one campaign only detectable late, which makes B look
+  45 hours worse by medians while the paired difference is 0.0h with one
+  extra detection. Proven able to fail: making the comparison unpaired
+  (`a.detected or b.detected`) fails 4 of the 14. One test runs the real
+  oracle through `evaluate_split` at both lookbacks on a built world where a
+  campaign's 30-hour gaps put it out of reach of any 24h window, and checks
+  it appears as coverage rather than as a lead-time change. The paired
+  section was also run end to end through the runner on the local demo data.
+
 - **2026-10-15** — **The evaluation is validated on the full data** (oracle
   far above random on every split), and three follow-ups landed before stage
   3.3 begins.
@@ -1700,9 +1818,9 @@ Tagged points in the repository, newest first. Check one out with
   readings worth keeping: 11–18% of evaluable test campaigns are
   **unreachable** under the frozen matching rule whatever the model, so the
   honest denominator for a model's recall is the oracle rather than 1.0; and
-  L = 48 buys recall while *losing* a little earliness (0.821 → 0.893 recall,
-  74.7h → 72.1h lead), which is a trade-off for 3.3 to weigh rather than a
-  free win.
+  L = 48 raises test recall from 0.821 to 0.893. *(Corrected 2026-10-17: this
+  entry originally read that L = 48 buys recall while losing earliness,
+  74.7h → 72.1h. That comparison was invalid — see the 2026-10-17 entry.)*
 
   *`oracle-diagnose`* explains every missed campaign as
   `temporal_sparsity`, `purity_failure`, `late_only` or `unexplained`, with
