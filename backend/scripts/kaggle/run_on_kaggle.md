@@ -428,8 +428,19 @@ explained rather than merely reported.
 
 ## 5g. Stage 3.3: the XGBoost baseline
 
-Two cells, in this order, in one session. `train` writes the models into
-`/kaggle/working/models/`, and `evaluate` reads them back, so running
+**CPU is enough. Do not use a GPU for this.** Use a CPU notebook (4 vCPU,
+30 GB RAM). Reasons, in order of weight:
+
+1. The dominant cost is not training. It is building window features
+   (pandas) and extracting clusters (scipy), both CPU-only. A GPU does not
+   touch either, so it would shorten perhaps 30-60 minutes of a ~4 hour run.
+2. A CPU session runs for 12 hours against a GPU session's 9, and the run
+   needs ~4.
+3. GPU quota is limited and stage 3.4's GNN genuinely needs it. Spending it
+   here would be spending it twice.
+
+Run both cells in **one session**, in this order. `train` writes the models
+into `/kaggle/working/models/`, and `evaluate` reads them back; running
 `evaluate` first exits 2 rather than guessing.
 
 ```python
@@ -440,27 +451,84 @@ Two cells, in this order, in one session. `train` writes the models into
 !cd /kaggle/temp/repo/backend && python scripts/kaggle/kaggle_runner.py evaluate
 ```
 
-`train` pools every rule-3-valid training detection time into one matrix —
-13 windows at L = 24, 9 at L = 48 — and fits one booster per lookback with
-frozen hyperparameters, identical for both lookbacks. It reports the matrix
-size and memory, each window's class weight, and gain-based feature
-importance. Expect the matrix to be the memory peak of the step: it is
-`rows x 44` float32, and the sample's 13 windows came to 68k rows, so the
-full data will be far larger. If it does not fit, say so with the number
-rather than working around it.
+Both default to the full matrix: **2 variants x 2 lookbacks x 5 seeds = 20
+boosters**, evaluated on val / test / stress.
 
-`evaluate` chooses tau on validation only by campaign-level F1, then scores
-val / test / stress on all four subsets against the oracle ceiling,
-including `oracle_reachable` and recall relative to the ceiling. It also
-reports the alert budgets and two **paired** comparisons: the model against
-the ceiling, and the model's L = 24 against L = 48. If the chosen tau lands
-at either edge of the grid it says so — pass `--tau-grid` with a wider
-comma-separated list to check beyond it.
+### What `train` does
 
-What to send back: `train_baseline.md` and `evaluate_baseline.md`, plus the
-CSVs. On the 1% sample the baseline reached 92-94% of the oracle's test
-recall and was exactly as early as the ceiling when it fired; the full-data
-numbers are what decides whether that holds.
+Pools every rule-3-valid training detection time into one matrix - 13
+windows at L = 24, 9 at L = 48 - and fits one booster per (variant,
+lookback, seed) with frozen hyperparameters, identical everywhere.
+
+The matrix is built **once per lookback**; the no-format variant is a
+column slice of it, and the slice is reused across seeds. So the two
+variants see byte-identical windows, labels and weights, which is what an
+ablation has to hold fixed, and nothing is featurised twice.
+
+Expect the matrix to be the memory peak: **6.71M rows x 66 features at
+L = 24 (~1.2 GB) and 9.11M at L = 48 (~1.6 GB)**, plus XGBoost's own copy,
+on top of the pipeline's ~3.2 GB. Around 7 GB peak, well inside 30 GB. If
+it does not fit, report the number rather than working around it.
+
+### What `evaluate` does
+
+Tau comes from the **model grid** - `0.05, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6,
+0.7, 0.8, 0.9, 0.95, 0.99` - chosen on validation only by campaign-level
+F1. The sanity scorers keep their own grid; this one exists because a
+class-weighted probabilistic model spreads its scores across the unit
+interval, where a 0/1 scorer does not.
+
+It reports, for every model and the oracle:
+
+- all four subsets, `all` / `fully_observed` / `no_shared_accounts` /
+  `oracle_reachable`, with `recall_relative_to_ceiling` beside each;
+- the spread across seeds, mean and [min, max] and sd, so a difference is
+  read against seed noise rather than taken from one run;
+- recall and lead time at the 10 / 50 / 100 per-day alert budgets;
+- three **paired** comparisons: each model against the oracle ceiling, each
+  variant's L = 24 against its L = 48, and the format ablation against the
+  full model at matched seeds. Earliness is only ever compared this way;
+- the **seconds each tau cost**, clustering only - the score cache is warmed
+  first, so featurisation is a separate step and the taus are comparable.
+
+**If a chosen tau lands on an edge of the grid, `evaluate` writes every
+report and then exits 3 with a STOP message.** An edge tau is a boundary,
+not a maximum. Send the reports back and decide the grid; it is frozen for
+every model and condition, so widening it is a decision, not a detail.
+
+### Expected runtime
+
+Estimated from rates measured on this dataset on Kaggle - 0.7s per 100k
+edges to featurise (`features_smoke`), ~14s per million edges clustered
+(back-calculated from the random scorer's timings in `evaluate_scorers`) -
+and the edge counts in `features_smoke_scan_full.csv`:
+
+| Step | L = 24 | L = 48 | Total |
+|---|---:|---:|---:|
+| `train`: build the matrix | ~50s | ~65s | ~2 min |
+| `train`: 10 boosters each | ~15 min | ~20 min | ~35 min |
+| `evaluate`: per model | ~5 min | ~9.5 min | - |
+| `evaluate`: 10 models each | ~50 min | ~95 min | ~2.5 h |
+
+**About 3.5-4.5 hours end to end**, inside a 12-hour CPU session with room
+to spare. Two things make this an estimate rather than a measurement: how
+fast Kaggle's CPUs are on the day, and what fraction of each window the
+model keeps at a low tau - on the 1% sample that was 3-10% for the full
+model and 2-23% for the ablated one, and clustering cost scales with it. The
+run prints the real per-tau seconds, so the next estimate will not have to
+guess.
+
+**If the budget is tight**, run `--seeds 0,1` first (about 1.5 hours end to
+end) to confirm the numbers look sane, then the full five. The models
+persist in `/kaggle/working`, so `evaluate` can also run in a later session
+from a saved notebook output instead of repeating `train`.
+
+### What to send back
+
+`train_baseline.md` and `evaluate_baseline.md`, plus the CSVs - especially
+`evaluate_baseline_across_seeds.csv`, `evaluate_baseline_paired.csv` and
+`evaluate_baseline_tau_curve.csv` (which carries the per-tau cost). Also
+say whether `evaluate` exited 0 or 3.
 
 ## 6. Later stages
 

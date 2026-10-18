@@ -14,6 +14,7 @@ from .clusters import (
 )
 from .evaluate import (
     DEFAULT_TAU_GRID,
+    MODEL_TAU_GRID,
     FALSE_ALARM_BUDGETS,
     SUBSET_FILTERS,
     CampaignOutcome,
@@ -28,6 +29,7 @@ from .evaluate import (
     recall_vs_false_alarms,
     select_tau,
     select_tau_for_budget,
+    tau_is_at_grid_edge,
     recall_relative_to_ceiling,
     subset_filter,
     summarize,
@@ -41,7 +43,13 @@ from .diagnose import (
     diagnose_misses,
     diagnose_missed_campaign,
 )
-from .scorers import SANITY_TAU, oracle_scores, random_scores, score_window
+from .scorers import (
+    SANITY_TAU,
+    CachingScorer,
+    oracle_scores,
+    random_scores,
+    score_window,
+)
 
 __all__ = [
     "build_account_index",
@@ -54,11 +62,13 @@ __all__ = [
     "EvaluationResult",
     "PairedComparison",
     "DEFAULT_TAU_GRID",
+    "MODEL_TAU_GRID",
     "FALSE_ALARM_BUDGETS",
     "SUBSET_FILTERS",
     "best_tau",
     "recall_vs_false_alarms",
     "select_tau_for_budget",
+    "tau_is_at_grid_edge",
     "bootstrap_ci",
     "campaign_f1",
     "describe_paired_comparison",
@@ -76,6 +86,7 @@ __all__ = [
     "diagnose_misses",
     "diagnose_missed_campaign",
     "SANITY_TAU",
+    "CachingScorer",
     "oracle_scores",
     "random_scores",
     "score_window",

@@ -7,19 +7,27 @@ is a comparison of models.
 """
 
 from .xgb_baseline import (
+    MODEL_SEEDS,
+    MODEL_VARIANTS,
     TrainedBaseline,
     TrainingData,
     XGBParams,
     build_training_data,
+    dropped_columns,
     feature_importance,
+    keep_mask,
     train_baseline,
 )
 
 __all__ = [
+    "MODEL_SEEDS",
+    "MODEL_VARIANTS",
     "TrainedBaseline",
     "TrainingData",
     "XGBParams",
     "build_training_data",
+    "dropped_columns",
     "feature_importance",
+    "keep_mask",
     "train_baseline",
 ]

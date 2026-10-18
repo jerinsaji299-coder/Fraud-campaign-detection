@@ -38,6 +38,53 @@ import pandas as pd
 
 from .. import constants, features, windows
 
+#: The model variants, as feature prefixes each one drops. Everything else
+#: — windows, labels, weighting, hyperparameters, seeds — is identical, so a
+#: difference between them is attributable to the dropped columns and
+#: nothing else.
+#:
+#: **Why the format ablation exists.** In the IBM synthetic data laundering
+#: is strongly linked to payment format: on the 1% sample `fmt_ACH` alone
+#: carries 46% of the baseline's gain and the format one-hots together carry
+#: ~87%. Payment format is an allowed input under the frozen design — it is
+#: a property of the transaction, not an identity or a label — but a feature
+#: that strong in *synthetic* data is a shortcut a model can take instead of
+#: learning transactional structure, and a result resting on it would say
+#: more about the generator than about campaign discovery. So every model
+#: from here on is reported **with and without** it, and the gap between the
+#: two is part of the result.
+#:
+#: These are model variant names. They are not the four Phase 4-5
+#: `constants.CONDITIONS`, which are about federation.
+MODEL_VARIANTS: dict[str, tuple[str, ...]] = {
+    "xgboost_centralized": (),
+    "xgboost_centralized_no_format": ("fmt_",),
+}
+
+#: Seeds every model is trained at, so a reported difference can be read
+#: against the spread across seeds rather than taken from one run.
+MODEL_SEEDS = (0, 1, 2, 3, 4)
+
+
+def dropped_columns(feature_names: list[str], prefixes: tuple[str, ...]) -> list[str]:
+    """The columns a variant removes, in the matrix's own order."""
+    return [
+        name for name in feature_names
+        if any(name.startswith(prefix) for prefix in prefixes)
+    ]
+
+
+def keep_mask(feature_names: list[str], prefixes: tuple[str, ...]):
+    """Boolean mask over columns: True for the ones a variant keeps."""
+    return np.array(
+        [
+            not any(name.startswith(prefix) for prefix in prefixes)
+            for name in feature_names
+        ],
+        dtype=bool,
+    )
+
+
 #: Frozen hyperparameters for stage 3.3. Chosen once, documented, and the
 #: same for both lookbacks so the L comparison is not confounded by a
 #: different model. Deliberately unremarkable: this is a baseline, and
@@ -89,6 +136,9 @@ class TrainingData:
     spec: features.FeatureSpec
     times: list[pd.Timestamp]
     per_window: list[dict]
+    #: Columns a variant removed, kept so the record survives slicing once
+    #: and reusing the result across seeds.
+    dropped: list[str] = field(default_factory=list)
 
     @property
     def n_rows(self) -> int:
@@ -106,6 +156,33 @@ class TrainingData:
         return float(
             self.matrix.nbytes + self.labels.nbytes + self.weights.nbytes
         ) / 1e6
+
+    def for_variant(self, variant: str) -> "TrainingData":
+        """The same pooled windows with a variant's columns removed.
+
+        Built as a view onto one matrix rather than by featurising twice:
+        the windows, labels and weights are identical by construction, which
+        is exactly what the ablation needs to hold fixed. On the full data
+        this also saves re-reading 6.7M rows of features per variant.
+        """
+        prefixes = MODEL_VARIANTS[variant]
+        if not prefixes:
+            return self
+        mask = keep_mask(self.feature_names, prefixes)
+        if mask.all():
+            return self  # already sliced: reused across seeds without a copy
+        return TrainingData(
+            matrix=self.matrix[:, mask],
+            labels=self.labels,
+            weights=self.weights,
+            feature_names=[
+                name for name, keep in zip(self.feature_names, mask) if keep
+            ],
+            spec=self.spec,
+            times=self.times,
+            per_window=self.per_window,
+            dropped=dropped_columns(self.feature_names, prefixes),
+        )
 
 
 def build_training_data(
@@ -172,7 +249,12 @@ class TrainedBaseline:
     lookback_h: int
     feature_names: list[str]
     params: XGBParams
+    variant: str = "xgboost_centralized"
     training: dict = field(default_factory=dict)
+
+    @property
+    def dropped_prefixes(self) -> tuple[str, ...]:
+        return MODEL_VARIANTS[self.variant]
 
     def scorer(self):
         """A `scorer(window_transactions, t)` for `evaluation.evaluate_split`.
@@ -195,6 +277,10 @@ class TrainedBaseline:
             )
             built = features.build_window_features(window, self.spec)
             matrix, names = built.xgboost_matrix()
+            if self.dropped_prefixes:
+                mask = keep_mask(names, self.dropped_prefixes)
+                matrix = matrix[:, mask]
+                names = [n for n, keep in zip(names, mask) if keep]
             if names != self.feature_names:
                 raise ValueError(
                     "feature names at scoring time differ from training; the "
@@ -215,6 +301,7 @@ class TrainedBaseline:
         (directory / "model_meta.json").write_text(
             json.dumps(
                 {
+                    "variant": self.variant,
                     "lookback_h": self.lookback_h,
                     "feature_names": self.feature_names,
                     "params": asdict(self.params),
@@ -241,6 +328,7 @@ class TrainedBaseline:
             lookback_h=int(meta["lookback_h"]),
             feature_names=list(meta["feature_names"]),
             params=XGBParams(**meta["params"]),
+            variant=meta.get("variant", "xgboost_centralized"),
             training=meta.get("training", {}),
         )
 
@@ -251,12 +339,20 @@ def train_baseline(
     params: XGBParams | None = None,
     spec: features.FeatureSpec | None = None,
     data: TrainingData | None = None,
+    variant: str = "xgboost_centralized",
 ) -> TrainedBaseline:
-    """Train one booster per lookback on the pooled training windows."""
+    """Train one booster, for one lookback, one variant and one seed."""
     import xgboost as xgb
 
+    if variant not in MODEL_VARIANTS:
+        raise ValueError(
+            f"unknown variant {variant!r}; expected one of {sorted(MODEL_VARIANTS)}"
+        )
     params = params or XGBParams()
     data = data or build_training_data(full_df, lookback_h, spec)
+    full_names = list(data.feature_names)
+    previously_dropped = list(data.dropped)
+    data = data.for_variant(variant)
 
     dtrain = xgb.DMatrix(
         data.matrix,
@@ -275,7 +371,15 @@ def train_baseline(
         lookback_h=lookback_h,
         feature_names=data.feature_names,
         params=params,
+        variant=variant,
         training={
+            "variant": variant,
+            "dropped_columns": (
+                data.dropped
+                or previously_dropped
+                or dropped_columns(full_names, MODEL_VARIANTS[variant])
+            ),
+            "n_features": len(data.feature_names),
             "n_windows": len(data.times),
             "detection_times": [str(t) for t in data.times],
             "n_rows": data.n_rows,

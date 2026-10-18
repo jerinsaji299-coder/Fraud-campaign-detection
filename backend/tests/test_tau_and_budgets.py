@@ -134,3 +134,125 @@ def test_budget_selection_is_independent_of_curve_order():
         assert evaluation.select_tau_for_budget(
             shuffled, budget
         ) == evaluation.select_tau_for_budget(BUDGET_CURVE, budget)
+
+
+# --- the model tau grid (frozen 2026-10-17) --------------------------------
+
+
+def test_the_model_grid_is_frozen_and_reaches_the_low_end():
+    """One grid for every model, so a comparison between models or
+    conditions is never a comparison of how far each was allowed to search.
+    """
+    assert evaluation.MODEL_TAU_GRID == (
+        0.05, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.95, 0.99,
+    )
+    # the sanity scorers keep theirs: their scores are 0/1, so the low end
+    # would only cost clustering time and change nothing
+    assert evaluation.DEFAULT_TAU_GRID == (0.5, 0.75, 0.9, 0.95, 0.99)
+    assert min(evaluation.MODEL_TAU_GRID) < min(evaluation.DEFAULT_TAU_GRID)
+
+
+def test_a_tau_at_either_end_of_the_grid_is_reported_as_an_edge():
+    """An edge tau is a boundary, not a maximum, and the full-data run stops
+    rather than extending the grid silently."""
+    grid = evaluation.MODEL_TAU_GRID
+    assert evaluation.tau_is_at_grid_edge(0.05, grid)
+    assert evaluation.tau_is_at_grid_edge(0.99, grid)
+    assert not evaluation.tau_is_at_grid_edge(0.3, grid)
+    assert not evaluation.tau_is_at_grid_edge(0.95, grid)
+    # a single-point grid is both ends at once
+    assert evaluation.tau_is_at_grid_edge(0.5, (0.5,))
+
+
+# --- the score cache -------------------------------------------------------
+
+
+def test_caching_a_scorer_cannot_change_the_curve():
+    """The whole justification for the cache: a scorer's output does not
+    depend on tau, so reusing it across the sweep must be invisible in the
+    result. Only the cost changes."""
+    import numpy as np
+
+    from test_evaluation import _world
+
+    rows = [
+        ("2022-09-05 02:00", "1_A", "1_B", 0),
+        ("2022-09-05 03:00", "1_B", "1_C", 0),
+        ("2022-09-05 04:00", "1_C", "1_D", 0),
+        ("2022-09-06 02:00", "1_D", "1_E", 0),
+    ]
+    full_df, camp, pattern_df, accounts = _world(rows, split="val")
+
+    calls = {"n": 0}
+
+    def scorer(window, t):
+        calls["n"] += 1
+        # deterministic in the window, as a model is
+        return np.linspace(0.1, 0.95, len(window))
+
+    uncached_tau, uncached_curve = evaluation.select_tau(
+        full_df, camp, pattern_df, accounts, scorer,
+        tau_grid=evaluation.MODEL_TAU_GRID, lookback_h=24,
+        scorer_name="fake", cache_scores=False,
+    )
+    uncached_calls = calls["n"]
+
+    calls["n"] = 0
+    cached_tau, cached_curve = evaluation.select_tau(
+        full_df, camp, pattern_df, accounts, scorer,
+        tau_grid=evaluation.MODEL_TAU_GRID, lookback_h=24,
+        scorer_name="fake", cache_scores=True,
+    )
+    cached_calls = calls["n"]
+
+    assert cached_tau == uncached_tau
+    # identical in everything except the timing column
+    strip = lambda curve: [  # noqa: E731
+        {k: v for k, v in row.items() if k != "seconds"} for row in curve
+    ]
+    assert strip(cached_curve) == strip(uncached_curve)
+    # and it did less work: one scoring call per window, not per (window, tau)
+    assert cached_calls < uncached_calls
+    assert cached_calls * len(evaluation.MODEL_TAU_GRID) == uncached_calls
+
+
+def test_the_cache_refuses_a_window_that_changed_under_it():
+    """Returning the wrong scores would be silent and wrong, so a key whose
+    row count no longer matches raises instead."""
+    import numpy as np
+    import pandas as pd
+
+    scorer = evaluation.CachingScorer(
+        lambda window, t: np.zeros(len(window)), lookback_h=24
+    )
+    t = pd.Timestamp("2022-09-06 12:00")
+    first = scorer(pd.DataFrame({"a": [1, 2, 3]}), t)
+    assert len(first) == 3
+    assert len(scorer(pd.DataFrame({"a": [1, 2, 3]}), t)) == 3  # a cache hit
+
+    with pytest.raises(ValueError, match="only valid"):
+        scorer(pd.DataFrame({"a": [1, 2]}), t)
+
+
+def test_every_curve_row_records_what_that_tau_cost():
+    """Low thresholds keep most of a window and clustering scales with the
+    edges kept, so the cost of searching the low end is on the record."""
+    from test_evaluation import _world
+
+    full_df, camp, pattern_df, accounts = _world(
+        [
+            ("2022-09-05 02:00", "1_A", "1_B", 0),
+            ("2022-09-05 03:00", "1_B", "1_C", 0),
+            ("2022-09-05 04:00", "1_C", "1_D", 0),
+        ],
+        split="val",
+    )
+    _, curve = evaluation.select_tau(
+        full_df, camp, pattern_df, accounts,
+        lambda window, t: [0.5] * len(window),
+        tau_grid=(0.2, 0.5), lookback_h=24, scorer_name="fake",
+    )
+    assert len(curve) == 2
+    for row in curve:
+        assert "seconds" in row
+        assert row["seconds"] >= 0

@@ -49,6 +49,7 @@ SRC = BACKEND / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
+_NEWLINE = chr(10)
 DEFAULT_OUT = Path("/kaggle/working")
 
 
@@ -1722,40 +1723,66 @@ def command_make_sample(args: argparse.Namespace) -> int:
 # --------------------------------------------------------------------------
 
 
-def _model_dir(args: argparse.Namespace, lookback: int) -> Path:
-    """Where one lookback's trained baseline lives.
+def _model_dir(args: argparse.Namespace, variant: str, lookback: int, seed: int) -> Path:
+    """Where one trained booster lives.
 
     Under `--out` so it survives in /kaggle/working between the `train` and
     `evaluate` steps of one session, and can be downloaded with the reports.
     """
     root = Path(args.model_dir) if args.model_dir else Path(args.out) / "models"
-    return root / f"xgb_L{lookback}"
+    return root / f"{variant}_L{lookback}_s{seed}"
 
 
-def command_train(args: argparse.Namespace) -> int:
-    """Train the non-graph baseline, one model per lookback.
-
-    Training pools every rule-3-valid training detection time into one
-    matrix: 13 windows at L = 24 and 9 at L = 48. Rule 3 matters here more
-    than anywhere else - a silently clamped short window would train the
-    model on a distribution it never meets at evaluation time.
-
-    No threshold is chosen here and no evaluation horizon is touched. The
-    model emits probabilities; `evaluate` turns them into detections with a
-    tau chosen on validation only.
-    """
-    import pandas as pd
-
-    from fraudcamp import constants, pipeline
+def _requested(args: argparse.Namespace):
+    """The (variants, lookbacks, seeds) this invocation covers."""
+    from fraudcamp import constants
     from fraudcamp.models import xgb_baseline
 
-    out = Path(args.out)
-    out.mkdir(parents=True, exist_ok=True)
+    variants = (
+        [v.strip() for v in args.variants.split(",") if v.strip()]
+        if args.variants
+        else list(xgb_baseline.MODEL_VARIANTS)
+    )
+    unknown = [v for v in variants if v not in xgb_baseline.MODEL_VARIANTS]
+    if unknown:
+        raise SystemExit(
+            f"unknown variant(s) {unknown}; expected "
+            f"{sorted(xgb_baseline.MODEL_VARIANTS)}"
+        )
     lookbacks = (
         [int(v) for v in args.lookbacks.split(",")] if args.lookbacks
         else list(constants.LOOKBACKS_H)
     )
-    params = xgb_baseline.XGBParams(seed=args.seed)
+    seeds = (
+        [int(v) for v in args.seeds.split(",") if v.strip()] if args.seeds
+        else list(xgb_baseline.MODEL_SEEDS)
+    )
+    return variants, lookbacks, seeds
+
+
+def command_train(args: argparse.Namespace) -> int:
+    """Train the baseline: both variants, both lookbacks, five seeds.
+
+    Training pools every rule-3-valid training detection time into one
+    matrix - 13 windows at L = 24, 9 at L = 48. Rule 3 matters here more
+    than anywhere else: a silently clamped short window would train the
+    model on a distribution it never meets at evaluation time.
+
+    The matrix is built **once per lookback** and the no-format variant is a
+    column slice of it, so the two variants see byte-identical windows,
+    labels and weights. That is exactly what an ablation has to hold fixed,
+    and on the full data it also saves re-featurising millions of rows.
+
+    No threshold is chosen here and no evaluation horizon is touched.
+    """
+    import pandas as pd
+
+    from fraudcamp import pipeline
+    from fraudcamp.models import xgb_baseline
+
+    out = Path(args.out)
+    out.mkdir(parents=True, exist_ok=True)
+    variants, lookbacks, seeds = _requested(args)
 
     with step("build pipeline"):
         result = pipeline.build(Path(args.config))
@@ -1763,18 +1790,26 @@ def command_train(args: argparse.Namespace) -> int:
         f"  rows: {len(result.full_df):,}, campaigns: {len(result.camp):,}, "
         f"laundering rate {result.full_df['Is Laundering'].mean():.4%}"
     )
-
-    print("\nhyperparameters (identical for both lookbacks, by design - a per-L")
-    print("tuning would confound the lookback comparison with tuning effort):")
-    for key, value in vars(params).items():
-        print(f"  {key:<18} {value}")
+    print(
+        f"\ntraining {len(variants)} variant(s) x {len(lookbacks)} lookback(s) "
+        f"x {len(seeds)} seed(s) = {len(variants) * len(lookbacks) * len(seeds)} "
+        f"boosters"
+    )
+    print("hyperparameters, identical for every variant, lookback and seed")
+    print("(tuning per configuration would confound the comparison with")
+    print("tuning effort):")
+    for key, value in vars(xgb_baseline.XGBParams()).items():
+        if key != "seed":
+            print(f"  {key:<18} {value}")
 
     report: list[dict] = []
     window_rows: list[dict] = []
     importance_rows: list[dict] = []
 
     for lookback in lookbacks:
-        print(f"\n{'=' * 78}\nL = {lookback}h\n{'=' * 78}")
+        print(f"\n{'=' * 78}")
+        print(f"L = {lookback}h")
+        print("=" * 78)
 
         with step(f"build training matrix, L={lookback}h"):
             data = xgb_baseline.build_training_data(result.full_df, lookback)
@@ -1791,28 +1826,45 @@ def command_train(args: argparse.Namespace) -> int:
                 f"{row['n_positive']:>6,} pos  weight {row['class_weight']:>9,.1f}"
             )
 
-        with step(f"train, L={lookback}h"):
-            model = xgb_baseline.train_baseline(
-                result.full_df, lookback, params=params, data=data
+        for variant in variants:
+            variant_data = data.for_variant(variant)
+            dropped = variant_data.dropped
+            print(
+                f"\n  --- {variant}: {variant_data.matrix.shape[1]} features"
+                + (f", dropped {len(dropped)}: {', '.join(dropped)}" if dropped
+                   else ", nothing dropped")
             )
-        directory = _model_dir(args, lookback)
-        model.save(directory)
-        print(f"  saved to {directory}")
-
-        top = xgb_baseline.feature_importance(model, top=20)
-        for row in top:
-            importance_rows.append({"lookback_h": lookback, **row})
-        print("  top features by gain:")
-        for row in top[:10]:
-            print(f"    {row['feature']:<30} {row['share']:>7.1%}")
-
-        report.append(
-            {
-                "lookback_h": lookback,
-                "model_dir": str(directory),
-                **{k: v for k, v in model.training.items() if k != "per_window"},
-            }
-        )
+            for seed in seeds:
+                with step(f"train {variant}, L={lookback}h, seed={seed}"):
+                    model = xgb_baseline.train_baseline(
+                        result.full_df, lookback,
+                        params=xgb_baseline.XGBParams(seed=seed),
+                        data=variant_data, variant=variant,
+                    )
+                directory = _model_dir(args, variant, lookback, seed)
+                model.save(directory)
+                report.append(
+                    {
+                        "variant": variant, "lookback_h": lookback, "seed": seed,
+                        "model_dir": str(directory),
+                        **{
+                            k: v for k, v in model.training.items()
+                            if k not in ("per_window", "dropped_columns")
+                        },
+                        "n_dropped_columns": len(dropped),
+                    }
+                )
+                if seed == seeds[0]:
+                    top = xgb_baseline.feature_importance(model, top=20)
+                    for row in top:
+                        importance_rows.append(
+                            {"variant": variant, "lookback_h": lookback,
+                             "seed": seed, **row}
+                        )
+                    print("    top features by gain (seed "
+                          f"{seed}, reported for one seed only):")
+                    for row in top[:8]:
+                        print(f"      {row['feature']:<30} {row['share']:>7.1%}")
 
     frame = pd.DataFrame(report)
     frame.to_csv(out / "train_baseline.csv", index=False)
@@ -1823,8 +1875,10 @@ def command_train(args: argparse.Namespace) -> int:
     (out / "train_baseline.json").write_text(
         json.dumps(
             {
-                "params": vars(params),
-                "seed": args.seed,
+                "params": vars(xgb_baseline.XGBParams()),
+                "variants": variants,
+                "lookbacks": lookbacks,
+                "seeds": seeds,
                 "models": report,
                 "windows": window_rows,
                 "importance": importance_rows,
@@ -1835,7 +1889,7 @@ def command_train(args: argparse.Namespace) -> int:
         encoding="utf-8",
     )
     (out / "train_baseline.md").write_text(
-        "\n".join(
+        _NEWLINE.join(
             [
                 "# XGBoost baseline: training",
                 "",
@@ -1843,11 +1897,22 @@ def command_train(args: argparse.Namespace) -> int:
                 "same features as the GNN will see; each transaction is an",
                 "independent row. No threshold is chosen here.",
                 "",
+                "Two variants, identical in every respect except the columns the",
+                "second drops: `xgboost_centralized` and",
+                "`xgboost_centralized_no_format`, the latter without the payment",
+                "format one-hots. In this synthetic data laundering is strongly",
+                "linked to format, which is an allowed input but a shortcut a",
+                "model can take instead of learning transactional structure, so",
+                "every model is reported with and without it.",
+                "",
                 "## Hyperparameters",
                 "",
                 _markdown_table(
                     pd.DataFrame(
-                        [{"parameter": k, "value": v} for k, v in vars(params).items()]
+                        [
+                            {"parameter": k, "value": v}
+                            for k, v in vars(xgb_baseline.XGBParams()).items()
+                        ]
                     )
                 ),
                 "",
@@ -1859,7 +1924,10 @@ def command_train(args: argparse.Namespace) -> int:
                 "",
                 _markdown_table(pd.DataFrame(window_rows)),
                 "",
-                "## Feature importance (gain, report only - never used to select)",
+                "## Feature importance (gain, one seed, report only)",
+                "",
+                "Never used to select features: that would make the variants'",
+                "feature sets differ by something other than the ablation.",
                 "",
                 _markdown_table(pd.DataFrame(importance_rows)),
                 "",
@@ -1877,37 +1945,51 @@ def command_train(args: argparse.Namespace) -> int:
 
 
 def command_evaluate(args: argparse.Namespace) -> int:
-    """Score the trained baseline: tau on validation, then the horizons.
+    """Score the trained baselines: tau on validation, then the horizons.
 
-    Reported against the oracle throughout, because the oracle - not 1.0 -
-    is the best achievable under the frozen matching rule. Earliness is
-    compared to the ceiling and between lookbacks by the **paired** method
-    only; two median lead times are never subtracted.
+    Tau comes from the **model** grid, which reaches down to 0.05 because a
+    class-weighted probabilistic model spreads its scores across the unit
+    interval, unlike the 0/1 sanity scorers the old grid was built for. If a
+    chosen tau still lands on an edge of that grid, this reports it and
+    **stops**: extending the grid silently would change how every later
+    model is thresholded, and that is a decision, not a detail.
+
+    Everything is reported against the oracle, because the oracle - not 1.0
+    - is the best achievable under the frozen matching rule. Earliness is
+    compared by the paired method only; two median lead times are never
+    subtracted.
     """
     import pandas as pd
 
-    from fraudcamp import constants, evaluation, pipeline
+    from fraudcamp import constants, evaluation, pipeline, windows
     from fraudcamp.evaluation import scorers
     from fraudcamp.models import xgb_baseline
 
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
     splits = [s.strip() for s in args.splits.split(",") if s.strip()]
-    lookbacks = (
-        [int(v) for v in args.lookbacks.split(",")] if args.lookbacks
-        else list(constants.LOOKBACKS_H)
-    )
+    variants, lookbacks, seeds = _requested(args)
     tau_grid = (
         tuple(float(v) for v in args.tau_grid.split(","))
         if args.tau_grid
-        else evaluation.DEFAULT_TAU_GRID
+        else evaluation.MODEL_TAU_GRID
     )
 
-    missing = [str(_model_dir(args, L)) for L in lookbacks if not _model_dir(args, L).exists()]
+    wanted = [
+        (variant, lookback, seed)
+        for variant in variants
+        for lookback in lookbacks
+        for seed in seeds
+    ]
+    missing = [
+        str(_model_dir(args, *key)) for key in wanted
+        if not _model_dir(args, *key).exists()
+    ]
     if missing:
         print(
-            "No trained model at: " + ", ".join(missing)
-            + "\nRun `train` first, in this session.",
+            "No trained model at:" + _NEWLINE
+            + _NEWLINE.join("  " + m for m in missing)
+            + _NEWLINE + "Run `train` first, in this session.",
             file=sys.stderr,
         )
         return 2
@@ -1915,6 +1997,7 @@ def command_evaluate(args: argparse.Namespace) -> int:
     with step("build pipeline"):
         result = pipeline.build(Path(args.config))
     print(f"  rows: {len(result.full_df):,}, campaigns: {len(result.camp):,}")
+    print(f"  tau grid: {list(tau_grid)}")
 
     def oracle(window, t):
         return scorers.oracle_scores(window["Is Laundering"].to_numpy())
@@ -1926,99 +2009,14 @@ def command_evaluate(args: argparse.Namespace) -> int:
     operating_rows: list[dict] = []
     paired_rows: list[dict] = []
     paired_notes: list[str] = []
-    model_outcomes: dict[tuple[int, str], list] = {}
+    model_outcomes: dict[tuple[str, int, int, str], list] = {}
+    ceilings: dict[tuple[int, str], object] = {}
+    reachable_by: dict[tuple[int, str], list[int]] = {}
+    edge_taus: list[dict] = []
 
+    # the ceiling first: every model is reported against it, and it does not
+    # depend on the model, so it is computed once per lookback and split
     for lookback in lookbacks:
-        print(f"\n{'=' * 78}\nL = {lookback}h\n{'=' * 78}")
-        model = xgb_baseline.TrainedBaseline.load(_model_dir(args, lookback))
-        scorer = model.scorer()
-        print(f"  loaded {_model_dir(args, lookback)}")
-
-        with step(f"select tau on validation, L={lookback}h"):
-            tau, curve = evaluation.select_tau(
-                result.full_df, result.camp, result.pattern_df,
-                result.accounts_by_campaign, scorer,
-                tau_grid=tau_grid, lookback_h=lookback, seed=args.seed,
-                scorer_name="xgboost",
-            )
-        tau_choices.append(
-            {
-                "scorer": "xgboost", "lookback_h": lookback, "chosen_tau": tau,
-                "selected_on": "val", "grid": list(tau_grid), "seed": args.seed,
-                "criterion": (
-                    "max campaign-level F1; ties by higher precision, then "
-                    "fewer false alarms, then higher tau"
-                ),
-            }
-        )
-        for row in curve:
-            curve_rows.append({"scorer": "xgboost", **row})
-        for point in evaluation.recall_vs_false_alarms(curve):
-            operating_rows.append({"scorer": "xgboost", **point})
-
-        print(f"  chosen tau = {tau} (campaign-F1 on validation)")
-        print(f"  {'tau':>6} {'prec':>10} {'recall':>8} {'F1':>8} {'FA/day':>12}")
-        for row in curve:
-            print(
-                f"  {row['tau']:>6} {row['campaign_precision']:>10.3f} "
-                f"{row['campaign_recall']:>8.3f} {row['campaign_f1']:>8.3f} "
-                f"{row['false_alarms_per_day']:>12,.1f}"
-            )
-        if tau in (min(tau_grid), max(tau_grid)):
-            print(
-                f"  NOTE: the chosen tau is at the edge of the grid "
-                f"{list(tau_grid)}, so the optimum may lie beyond it. "
-                f"Re-run with --tau-grid to widen."
-            )
-
-        for budget in evaluation.FALSE_ALARM_BUDGETS:
-            budget_tau = evaluation.select_tau_for_budget(curve, budget)
-            if budget_tau is None:
-                cheapest = min(row["false_alarms_per_day"] for row in curve)
-                print(
-                    f"  budget {budget}/day: UNREACHABLE on this grid "
-                    f"(cheapest tau gives {cheapest:,.1f}/day)"
-                )
-                budget_rows.append(
-                    {
-                        "scorer": "xgboost", "lookback_h": lookback,
-                        "budget_per_day": budget, "tau": None, "reachable": False,
-                        "split": None, "campaign_recall": None,
-                        "median_lead_time_h": None, "false_alarms_per_day": None,
-                        "note": f"cheapest tau on the grid gives {cheapest:,.1f}/day",
-                    }
-                )
-                continue
-            print(f"  budget {budget}/day: tau = {budget_tau}")
-            for split in splits:
-                with step(f"xgboost at budget {budget}/day on {split}, L={lookback}h"):
-                    at_budget = evaluation.evaluate_split(
-                        result.full_df, result.camp, result.pattern_df,
-                        result.accounts_by_campaign, split, scorer,
-                        tau=budget_tau, lookback_h=lookback, seed=args.seed,
-                        scorer_name="xgboost",
-                    )
-                summary = evaluation.summarize(
-                    at_budget, subset="all", bootstrap_seed=args.seed,
-                    n_resamples=args.bootstrap,
-                )
-                budget_rows.append(
-                    {
-                        "scorer": "xgboost", "lookback_h": lookback,
-                        "budget_per_day": budget, "tau": budget_tau,
-                        "reachable": True, "split": split,
-                        "campaign_recall": summary["campaign_recall"],
-                        "median_lead_time_h": summary["median_lead_time_h"],
-                        "median_frac_observed_at_detection": summary[
-                            "median_frac_observed_at_detection"
-                        ],
-                        "false_alarms_per_day": summary["false_alarms_per_day"],
-                        "n_campaigns": summary["n_campaigns"],
-                        "n_detected": summary["n_detected"],
-                        "note": "",
-                    }
-                )
-
         for split in splits:
             with step(f"ceiling: oracle on {split}, L={lookback}h"):
                 ceiling = evaluation.evaluate_split(
@@ -2027,109 +2025,365 @@ def command_evaluate(args: argparse.Namespace) -> int:
                     tau=scorers.SANITY_TAU["oracle"], lookback_h=lookback,
                     seed=args.seed, scorer_name="oracle",
                 )
+            ceilings[(lookback, split)] = ceiling
             reachable = [o.campaign_id for o in ceiling.outcomes if o.detected]
-
-            with step(f"evaluate xgboost on {split}, L={lookback}h, tau={tau}"):
-                evaluated = evaluation.evaluate_split(
-                    result.full_df, result.camp, result.pattern_df,
-                    result.accounts_by_campaign, split, scorer,
-                    tau=tau, lookback_h=lookback, seed=args.seed,
-                    scorer_name="xgboost",
-                )
-            model_outcomes[(lookback, split)] = evaluated.outcomes
-
+            reachable_by[(lookback, split)] = reachable
+            print(
+                f"  {split}: oracle reaches {len(reachable)}/"
+                f"{len(ceiling.outcomes)}; that set is `oracle_reachable`"
+            )
             for subset in constants.TEST_SUBSETS:
-                ceiling_recall = evaluation.summarize(
-                    ceiling, subset=subset, bootstrap_seed=args.seed,
-                    n_resamples=args.bootstrap, oracle_reachable=reachable,
-                )["campaign_recall"]
-                for name, evaluated_result in (
-                    ("oracle", ceiling), ("xgboost", evaluated)
-                ):
-                    summary_rows.append(
-                        {
-                            "lookback_h": lookback,
-                            **evaluation.summarize(
-                                evaluated_result, subset=subset,
-                                bootstrap_seed=args.seed, n_resamples=args.bootstrap,
+                summary_rows.append(
+                    {
+                        **evaluation.summarize(
+                            ceiling, subset=subset, bootstrap_seed=args.seed,
+                            n_resamples=args.bootstrap,
+                            oracle_reachable=reachable,
+                            oracle_recall=evaluation.summarize(
+                                ceiling, subset=subset,
+                                bootstrap_seed=args.seed,
+                                n_resamples=args.bootstrap,
                                 oracle_reachable=reachable,
-                                oracle_recall=ceiling_recall,
-                            ),
-                        }
+                            )["campaign_recall"],
+                        ),
+                        # last, so they are not overwritten by the summary's
+                        # own `seed` - the ceiling has no model seed
+                        "variant": "oracle",
+                        "lookback_h": lookback,
+                        "seed": None,
+                    }
+                )
+
+    for variant in variants:
+        for lookback in lookbacks:
+            for seed in seeds:
+                print(f"\n{'=' * 78}")
+                print(f"{variant}  L = {lookback}h  seed = {seed}")
+                print("=" * 78)
+                model = xgb_baseline.TrainedBaseline.load(
+                    _model_dir(args, variant, lookback, seed)
+                )
+                # one cache per model: scores are reused across the tau
+                # sweep, the budgets and the final evaluation, so each
+                # window is featurised once instead of ~20 times
+                cached = evaluation.CachingScorer(model.scorer(), lookback)
+
+                # Warm the cache before the sweep, so the per-tau seconds
+                # below are clustering cost alone. Otherwise the first tau
+                # silently carries every window's featurisation and the
+                # cost of the low thresholds cannot be read off the table.
+                with step(
+                    f"featurise validation windows: {variant}, L={lookback}h, "
+                    f"seed={seed}"
+                ):
+                    for t in windows.evaluation_detection_times("val"):
+                        window = windows.window_slice(result.full_df, t, lookback)
+                        if len(window):
+                            cached(window, t)
+
+                with step(f"select tau: {variant}, L={lookback}h, seed={seed}"):
+                    tau, curve = evaluation.select_tau(
+                        result.full_df, result.camp, result.pattern_df,
+                        result.accounts_by_campaign, cached,
+                        tau_grid=tau_grid, lookback_h=lookback, seed=seed,
+                        scorer_name=variant, cache_scores=False,
+                    )
+                tau_choices.append(
+                    {
+                        "variant": variant, "lookback_h": lookback, "seed": seed,
+                        "chosen_tau": tau, "selected_on": "val",
+                        "grid": list(tau_grid),
+                        "at_grid_edge": evaluation.tau_is_at_grid_edge(tau, tau_grid),
+                        "criterion": (
+                            "max campaign-level F1; ties by higher precision, "
+                            "then fewer false alarms, then higher tau"
+                        ),
+                    }
+                )
+                for row in curve:
+                    curve_rows.append(
+                        {"variant": variant, "seed": seed, **row}
+                    )
+                for point in evaluation.recall_vs_false_alarms(curve):
+                    operating_rows.append(
+                        {"variant": variant, "seed": seed, **point}
                     )
 
-            paired = evaluation.paired_lead_time_comparison(
-                ceiling.outcomes, evaluated.outcomes, "oracle", "xgboost",
-                split=split, bootstrap_seed=args.seed,
-            )
-            paired_rows.append({"comparison": "xgboost_vs_oracle", **paired.as_dict()})
-            paired_notes.append(
-                f"[{split}, L={lookback}h, model vs ceiling] "
-                + evaluation.describe_paired_comparison(paired)
-            )
+                print(f"  chosen tau = {tau} (campaign-F1 on validation)")
+                print(
+                    f"  {'tau':>6} {'prec':>9} {'recall':>8} {'F1':>8} "
+                    f"{'FA/day':>12} {'seconds':>9}"
+                )
+                for row in curve:
+                    print(
+                        f"  {row['tau']:>6} {row['campaign_precision']:>9.3f} "
+                        f"{row['campaign_recall']:>8.3f} {row['campaign_f1']:>8.3f} "
+                        f"{row['false_alarms_per_day']:>12,.1f} "
+                        f"{row['seconds']:>9,.1f}"
+                    )
+                print(
+                    f"  windows featurised once each: {cached.cached_windows} "
+                    f"(cache hits {cached.hits}, misses {cached.misses})"
+                )
+                if evaluation.tau_is_at_grid_edge(tau, tau_grid):
+                    edge_taus.append(
+                        {"variant": variant, "lookback_h": lookback,
+                         "seed": seed, "chosen_tau": tau}
+                    )
+                    print(
+                        f"  *** tau {tau} is at an EDGE of the grid "
+                        f"{list(tau_grid)}: the optimum may lie beyond it ***"
+                    )
 
-    # the model's own lookback comparison, paired
-    for split in splits:
-        for earlier, later in zip(lookbacks, lookbacks[1:]):
-            a = model_outcomes.get((earlier, split))
-            b = model_outcomes.get((later, split))
-            if not a or not b:
-                continue
-            paired = evaluation.paired_lead_time_comparison(
-                a, b, f"L={earlier}h", f"L={later}h", split=split,
-                bootstrap_seed=args.seed,
-            )
-            paired_rows.append({"comparison": "lookbacks", **paired.as_dict()})
-            paired_notes.append(
-                f"[{split}, model lookbacks] "
-                + evaluation.describe_paired_comparison(paired)
-            )
+                for budget in evaluation.FALSE_ALARM_BUDGETS:
+                    budget_tau = evaluation.select_tau_for_budget(curve, budget)
+                    if budget_tau is None:
+                        cheapest = min(r["false_alarms_per_day"] for r in curve)
+                        print(
+                            f"  budget {budget}/day: UNREACHABLE on this grid "
+                            f"(cheapest tau gives {cheapest:,.1f}/day)"
+                        )
+                        budget_rows.append(
+                            {
+                                "variant": variant, "lookback_h": lookback,
+                                "seed": seed, "budget_per_day": budget,
+                                "tau": None, "reachable": False, "split": None,
+                                "campaign_recall": None,
+                                "median_lead_time_h": None,
+                                "false_alarms_per_day": None,
+                                "note": (
+                                    f"cheapest tau on the grid gives "
+                                    f"{cheapest:,.1f}/day"
+                                ),
+                            }
+                        )
+                        continue
+                    print(f"  budget {budget}/day: tau = {budget_tau}")
+                    for split in splits:
+                        with step(
+                            f"{variant} at budget {budget}/day on {split}, "
+                            f"L={lookback}h, seed={seed}"
+                        ):
+                            at_budget = evaluation.evaluate_split(
+                                result.full_df, result.camp, result.pattern_df,
+                                result.accounts_by_campaign, split, cached,
+                                tau=budget_tau, lookback_h=lookback, seed=seed,
+                                scorer_name=variant,
+                            )
+                        summary = evaluation.summarize(
+                            at_budget, subset="all", bootstrap_seed=args.seed,
+                            n_resamples=args.bootstrap,
+                        )
+                        budget_rows.append(
+                            {
+                                "variant": variant, "lookback_h": lookback,
+                                "seed": seed, "budget_per_day": budget,
+                                "tau": budget_tau, "reachable": True,
+                                "split": split,
+                                "campaign_recall": summary["campaign_recall"],
+                                "median_lead_time_h": summary["median_lead_time_h"],
+                                "median_frac_observed_at_detection": summary[
+                                    "median_frac_observed_at_detection"
+                                ],
+                                "false_alarms_per_day": summary[
+                                    "false_alarms_per_day"
+                                ],
+                                "n_campaigns": summary["n_campaigns"],
+                                "n_detected": summary["n_detected"],
+                                "note": "",
+                            }
+                        )
+
+                for split in splits:
+                    ceiling = ceilings[(lookback, split)]
+                    reachable = reachable_by[(lookback, split)]
+                    with step(
+                        f"evaluate {variant} on {split}, L={lookback}h, "
+                        f"seed={seed}, tau={tau}"
+                    ):
+                        evaluated = evaluation.evaluate_split(
+                            result.full_df, result.camp, result.pattern_df,
+                            result.accounts_by_campaign, split, cached,
+                            tau=tau, lookback_h=lookback, seed=seed,
+                            scorer_name=variant,
+                        )
+                    model_outcomes[(variant, lookback, seed, split)] = (
+                        evaluated.outcomes
+                    )
+                    for subset in constants.TEST_SUBSETS:
+                        ceiling_recall = evaluation.summarize(
+                            ceiling, subset=subset, bootstrap_seed=args.seed,
+                            n_resamples=args.bootstrap,
+                            oracle_reachable=reachable,
+                        )["campaign_recall"]
+                        summary_rows.append(
+                            {
+                                **evaluation.summarize(
+                                    evaluated, subset=subset,
+                                    bootstrap_seed=args.seed,
+                                    n_resamples=args.bootstrap,
+                                    oracle_reachable=reachable,
+                                    oracle_recall=ceiling_recall,
+                                ),
+                                "variant": variant,
+                                "lookback_h": lookback,
+                                "seed": seed,
+                            }
+                        )
+
+                    paired = evaluation.paired_lead_time_comparison(
+                        ceiling.outcomes, evaluated.outcomes,
+                        "oracle", variant, split=split, bootstrap_seed=args.seed,
+                    )
+                    paired_rows.append(
+                        {
+                            "comparison": "model_vs_oracle", "lookback_h": lookback,
+                            "seed": seed, **paired.as_dict(),
+                        }
+                    )
+                    paired_notes.append(
+                        f"[{split}, L={lookback}h, seed {seed}, vs the ceiling] "
+                        + evaluation.describe_paired_comparison(paired)
+                    )
+                cached.clear()
+
+    # paired: the model's own lookbacks, and the two variants against each
+    # other, both at matched seeds so only one thing differs
+    for variant in variants:
+        for split in splits:
+            for seed in seeds:
+                for earlier, later in zip(lookbacks, lookbacks[1:]):
+                    a = model_outcomes.get((variant, earlier, seed, split))
+                    b = model_outcomes.get((variant, later, seed, split))
+                    if not a or not b:
+                        continue
+                    paired = evaluation.paired_lead_time_comparison(
+                        a, b, f"L={earlier}h", f"L={later}h", split=split,
+                        bootstrap_seed=args.seed,
+                    )
+                    paired_rows.append(
+                        {
+                            "comparison": f"lookbacks[{variant}]",
+                            "lookback_h": None, "seed": seed,
+                            **paired.as_dict(),
+                        }
+                    )
+                    paired_notes.append(
+                        f"[{split}, {variant}, seed {seed}, lookbacks] "
+                        + evaluation.describe_paired_comparison(paired)
+                    )
+
+    if len(variants) > 1:
+        base, ablated = variants[0], variants[1]
+        for lookback in lookbacks:
+            for split in splits:
+                for seed in seeds:
+                    a = model_outcomes.get((base, lookback, seed, split))
+                    b = model_outcomes.get((ablated, lookback, seed, split))
+                    if not a or not b:
+                        continue
+                    paired = evaluation.paired_lead_time_comparison(
+                        a, b, base, ablated, split=split, bootstrap_seed=args.seed,
+                    )
+                    paired_rows.append(
+                        {
+                            "comparison": "format_ablation",
+                            "lookback_h": lookback, "seed": seed,
+                            **paired.as_dict(),
+                        }
+                    )
+                    paired_notes.append(
+                        f"[{split}, L={lookback}h, seed {seed}, format ablation] "
+                        + evaluation.describe_paired_comparison(paired)
+                    )
 
     # --- report ---------------------------------------------------------
     def fmt(value, spec=".3f"):
         return format(value, spec) if value is not None else "-"
 
-    print("\n" + "=" * 126)
+    summary = pd.DataFrame(summary_rows)
+    print(_NEWLINE + "=" * 132)
+    print("PER-SEED RESULTS")
+    print("=" * 132)
     print(
-        f"{'L':>3} {'split':<7}{'scorer':<9}{'subset':<20}{'tau':>5}{'camp':>5}"
-        f"{'det':>5}{'recall':>8}{'vs ceil':>9}{'prec':>7}{'FA/day':>10}"
-        f"{'lead_h':>9}{'norm':>7}{'frac':>7}"
+        f"{'variant':<30}{'L':>3} {'split':<7}{'seed':>5} {'subset':<20}{'tau':>6}"
+        f"{'camp':>5}{'det':>5}{'recall':>8}{'vs ceil':>9}{'prec':>7}"
+        f"{'FA/day':>10}{'lead_h':>9}"
     )
-    print("-" * 126)
+    print("-" * 132)
     for row in summary_rows:
         print(
-            f"{row['lookback_h']:>3} {row['split']:<7}{row['scorer']:<9}"
-            f"{row['test_subset']:<20}{row['tau']:>5}{row['n_campaigns']:>5}"
+            f"{row['variant']:<30}{row['lookback_h']:>3} {row['split']:<7}"
+            f"{str(row['seed']) if row['seed'] is not None else '-':>5} "
+            f"{row['test_subset']:<20}{row['tau']:>6}{row['n_campaigns']:>5}"
             f"{row['n_detected']:>5}{fmt(row['campaign_recall']):>8}"
             f"{fmt(row['recall_relative_to_ceiling']):>9}"
             f"{fmt(row['campaign_precision']):>7}"
             f"{row['false_alarms_per_day']:>10,.1f}"
             f"{fmt(row['median_lead_time_h'], '.1f'):>9}"
-            f"{fmt(row['median_normalized_lead_time'], '.2f'):>7}"
-            f"{fmt(row['median_frac_observed_at_detection'], '.2f'):>7}"
         )
-    print("=" * 126)
+    print("=" * 132)
     print(
         "  'vs ceil' is recall as a fraction of the oracle's on the same subset."
     )
 
-    print("\nPAIRED COMPARISONS (earliness only on campaigns both detect)")
+    # across seeds, so a difference is read against the spread
+    across: list[dict] = []
+    if not summary.empty:
+        models_only = summary[summary["seed"].notna()]
+        if not models_only.empty:
+            grouped = models_only.groupby(
+                ["variant", "lookback_h", "split", "test_subset"], dropna=False
+            )
+            for key, chunk in grouped:
+                across.append(
+                    {
+                        "variant": key[0], "lookback_h": key[1], "split": key[2],
+                        "test_subset": key[3], "n_seeds": len(chunk),
+                        "recall_mean": round(chunk["campaign_recall"].mean(), 4),
+                        "recall_min": round(chunk["campaign_recall"].min(), 4),
+                        "recall_max": round(chunk["campaign_recall"].max(), 4),
+                        "recall_std": round(chunk["campaign_recall"].std(ddof=0), 4),
+                        "vs_ceiling_mean": round(
+                            chunk["recall_relative_to_ceiling"].mean(), 4
+                        ),
+                        "median_lead_h_mean": round(
+                            chunk["median_lead_time_h"].mean(), 2
+                        ),
+                        "fa_per_day_mean": round(
+                            chunk["false_alarms_per_day"].mean(), 2
+                        ),
+                    }
+                )
+            print(_NEWLINE + "ACROSS SEEDS (mean [min, max] over the seeds run)")
+            for row in across:
+                if row["test_subset"] != "all":
+                    continue
+                print(
+                    f"  {row['variant']:<30} L={row['lookback_h']:>2} "
+                    f"{row['split']:<7} recall {row['recall_mean']:.3f} "
+                    f"[{row['recall_min']:.3f}, {row['recall_max']:.3f}] "
+                    f"(sd {row['recall_std']:.3f}), "
+                    f"{row['vs_ceiling_mean']:.3f} of the ceiling, "
+                    f"lead {row['median_lead_h_mean']:.1f}h, "
+                    f"{row['fa_per_day_mean']:,.1f} FA/day"
+                )
+
+    print(_NEWLINE + "PAIRED COMPARISONS (earliness only on campaigns both detect)")
     for note in paired_notes:
         print(f"  {note}")
 
-    print("\nGATE QUESTION: does the baseline detect campaigns early at all?")
-    for row in summary_rows:
-        if row["scorer"] != "xgboost" or row["test_subset"] != "all":
-            continue
-        print(
-            f"  L={row['lookback_h']:>2} {row['split']:<7} recall "
-            f"{fmt(row['campaign_recall'])} "
-            f"({fmt(row['recall_relative_to_ceiling'])} of the ceiling), "
-            f"median lead {fmt(row['median_lead_time_h'], '.1f')}h, "
-            f"{row['false_alarms_per_day']:,.1f} false alarms/day"
-        )
+    print(_NEWLINE + "PER-TAU COST (clustering only: the cache is warmed first,")
+    print("so featurisation is the separate step above and every tau here is")
+    print("comparable. Clustering scales with the edges kept, so the low")
+    print("thresholds are the expensive ones.)")
+    if curve_rows:
+        cost = pd.DataFrame(curve_rows).groupby(["lookback_h", "tau"])["seconds"]
+        for (lookback, tau), seconds in cost.mean().items():
+            print(f"  L={lookback:>2} tau={tau:<5} mean {seconds:>8,.1f}s")
 
     pd.DataFrame(summary_rows).to_csv(out / "evaluate_baseline.csv", index=False)
+    pd.DataFrame(across).to_csv(out / "evaluate_baseline_across_seeds.csv", index=False)
     pd.DataFrame(curve_rows).to_csv(out / "evaluate_baseline_tau_curve.csv", index=False)
     pd.DataFrame(paired_rows).to_csv(out / "evaluate_baseline_paired.csv", index=False)
     pd.DataFrame(budget_rows).to_csv(out / "evaluate_baseline_budgets.csv", index=False)
@@ -2139,10 +2393,14 @@ def command_evaluate(args: argparse.Namespace) -> int:
     (out / "evaluate_baseline.json").write_text(
         json.dumps(
             {
-                "seed": args.seed,
                 "tau_grid": list(tau_grid),
+                "variants": variants,
+                "lookbacks": lookbacks,
+                "seeds": seeds,
                 "tau_choices": tau_choices,
+                "tau_at_grid_edge": edge_taus,
                 "summary": summary_rows,
+                "across_seeds": across,
                 "tau_curve": curve_rows,
                 "paired": paired_rows,
                 "paired_notes": paired_notes,
@@ -2155,20 +2413,25 @@ def command_evaluate(args: argparse.Namespace) -> int:
         encoding="utf-8",
     )
     (out / "evaluate_baseline.md").write_text(
-        "\n".join(
+        _NEWLINE.join(
             [
                 "# XGBoost baseline: results",
                 "",
-                "Tau chosen on validation only, by campaign-level F1. Every",
-                "number is reported against the oracle, which is the best",
-                "achievable under the frozen matching rule and is well below",
-                "1.0. Earliness is compared only by the paired method.",
+                "Tau chosen on validation only, by campaign-level F1, from the",
+                "model grid. Every number is reported against the oracle, which",
+                "is the best achievable under the frozen matching rule and is",
+                "well below 1.0. Earliness is compared only by the paired",
+                "method.",
                 "",
                 "## Chosen tau",
                 "",
                 _markdown_table(pd.DataFrame(tau_choices)),
                 "",
-                "## Summary",
+                "## Across seeds",
+                "",
+                _markdown_table(pd.DataFrame(across)),
+                "",
+                "## Per seed",
                 "",
                 _markdown_table(pd.DataFrame(summary_rows)),
                 "",
@@ -2182,7 +2445,7 @@ def command_evaluate(args: argparse.Namespace) -> int:
                 "",
                 _markdown_table(pd.DataFrame(budget_rows)),
                 "",
-                "## Tau curve (validation)",
+                "## Tau curve (validation), with the cost of each threshold",
                 "",
                 _markdown_table(pd.DataFrame(curve_rows)),
                 "",
@@ -2194,7 +2457,31 @@ def command_evaluate(args: argparse.Namespace) -> int:
         ),
         encoding="utf-8",
     )
-    print(f"\nWrote {out / 'evaluate_baseline.md'} (+ .json and 5 CSVs)")
+    print(f"\nWrote {out / 'evaluate_baseline.md'} (+ .json and 6 CSVs)")
+
+    if edge_taus:
+        print(_NEWLINE + "*" * 78)
+        print("STOPPING: a chosen tau is at an edge of the model grid.")
+        print("*" * 78)
+        for row in edge_taus:
+            print(
+                f"  {row['variant']} L={row['lookback_h']}h seed={row['seed']}: "
+                f"tau = {row['chosen_tau']}"
+            )
+        print(
+            "The optimum may lie outside the grid, so these results are a"
+        )
+        print(
+            "boundary rather than a maximum. The grid is frozen for every model,"
+        )
+        print(
+            "and widening it silently would change how every later model and"
+        )
+        print(
+            "condition is thresholded. Reports above are complete; send them back"
+        )
+        print("and decide the grid before using these numbers.")
+        return 3
     return 0
 
 
@@ -2245,9 +2532,18 @@ def main() -> int:
     parser.add_argument(
         "--tau-grid", default="",
         help=(
-            "evaluate-scorers/evaluate: comma-separated taus to sweep on "
-            "validation (default: DEFAULT_TAU_GRID)"
+            "comma-separated taus to sweep on validation (default: "
+            "DEFAULT_TAU_GRID for the sanity scorers, MODEL_TAU_GRID for "
+            "models)"
         ),
+    )
+    parser.add_argument(
+        "--variants", default="",
+        help="train/evaluate: model variants (default: both)",
+    )
+    parser.add_argument(
+        "--seeds", default="",
+        help="train/evaluate: comma-separated seeds (default: 0,1,2,3,4)",
     )
     parser.add_argument(
         "--model-dir", default="",

@@ -260,3 +260,101 @@ def test_hyperparameters_are_the_same_for_both_lookbacks():
     assert booster_params["seed"] == 3
     assert booster_params["objective"] == "binary:logistic"
     assert "scale_pos_weight" not in booster_params  # weighting is per row
+
+
+# --- the payment-format ablation ------------------------------------------
+
+
+def test_the_ablation_drops_every_format_column_and_nothing_else(trained):
+    """`fmt___other__` is easy to miss, and leaving it in would make the
+    ablation incomplete while looking complete."""
+    _, data, _ = trained
+    dropped = xgb_baseline.dropped_columns(
+        data.feature_names, xgb_baseline.MODEL_VARIANTS["xgboost_centralized_no_format"]
+    )
+    assert dropped, "the fixture should produce format columns"
+    assert all(name.startswith("fmt_") for name in dropped)
+    assert "fmt___other__" in dropped
+    assert set(dropped) == {n for n in data.feature_names if n.startswith("fmt_")}
+
+    kept = [n for n in data.feature_names if n not in dropped]
+    assert not any(n.startswith("fmt_") for n in kept)
+    # currencies, formats' neighbours in the one-hot block, are untouched
+    assert any(n.startswith("pay_cur_") for n in kept)
+    assert any(n.startswith("recv_cur_") for n in kept)
+    assert len(kept) + len(dropped) == len(data.feature_names)
+
+
+def test_the_ablation_changes_only_the_columns(trained):
+    """An ablation is only interpretable if everything else is identical, so
+    the two variants are built from one matrix rather than featurised twice.
+    """
+    _, data, _ = trained
+    ablated = data.for_variant("xgboost_centralized_no_format")
+
+    assert ablated.n_rows == data.n_rows
+    assert np.array_equal(ablated.labels, data.labels)
+    assert np.array_equal(ablated.weights, data.weights)
+    assert ablated.times == data.times
+    assert ablated.per_window == data.per_window
+    assert ablated.matrix.shape[1] == data.matrix.shape[1] - len(ablated.dropped)
+
+    # the kept columns are the same numbers, not recomputed ones
+    mask = xgb_baseline.keep_mask(data.feature_names, ("fmt_",))
+    assert np.array_equal(ablated.matrix, data.matrix[:, mask])
+
+
+def test_the_full_variant_is_a_no_op_view(trained):
+    _, data, _ = trained
+    assert data.for_variant("xgboost_centralized") is data
+
+
+def test_slicing_twice_is_free_so_seeds_can_share_a_matrix(trained):
+    """`train_baseline` slices per call; passing already-sliced data must
+    not copy 1.2 GB again for every seed."""
+    _, data, _ = trained
+    once = data.for_variant("xgboost_centralized_no_format")
+    twice = once.for_variant("xgboost_centralized_no_format")
+    assert twice is once
+    assert once.dropped  # and the record of what was dropped survives
+
+
+def test_an_ablated_model_trains_scores_and_round_trips(trained, tmp_path):
+    frame, data, _ = trained
+    ablated = xgb_baseline.train_baseline(
+        frame, 24,
+        params=xgb_baseline.XGBParams(n_estimators=20, seed=0),
+        data=data.for_variant("xgboost_centralized_no_format"),
+        variant="xgboost_centralized_no_format",
+    )
+    assert ablated.variant == "xgboost_centralized_no_format"
+    assert ablated.dropped_prefixes == ("fmt_",)
+    assert not any(n.startswith("fmt_") for n in ablated.feature_names)
+    assert ablated.training["dropped_columns"]
+
+    t = windows.evaluation_detection_times("test")[1]
+    window = windows.window_slice(frame, t, 24)
+    scores = ablated.scorer()(window, t)
+    assert scores.shape == (len(window),)
+
+    ablated.save(tmp_path / "ab")
+    loaded = xgb_baseline.TrainedBaseline.load(tmp_path / "ab")
+    assert loaded.variant == "xgboost_centralized_no_format"
+    assert np.allclose(loaded.scorer()(window, t), scores)
+
+
+def test_an_unknown_variant_is_refused(trained):
+    frame, data, _ = trained
+    with pytest.raises(ValueError, match="unknown variant"):
+        xgb_baseline.train_baseline(frame, 24, data=data, variant="xgboost_no_hour")
+
+
+def test_the_variants_and_seeds_are_frozen():
+    assert list(xgb_baseline.MODEL_VARIANTS) == [
+        "xgboost_centralized", "xgboost_centralized_no_format",
+    ]
+    assert xgb_baseline.MODEL_VARIANTS["xgboost_centralized"] == ()
+    assert xgb_baseline.MODEL_VARIANTS["xgboost_centralized_no_format"] == ("fmt_",)
+    assert xgb_baseline.MODEL_SEEDS == (0, 1, 2, 3, 4)
+    # variant names are model names, not the four federated conditions
+    assert not set(xgb_baseline.MODEL_VARIANTS) & set(constants.CONDITIONS)

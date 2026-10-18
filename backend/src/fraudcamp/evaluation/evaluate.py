@@ -9,6 +9,7 @@ only if that time is at or before its deadline; otherwise it is missed.
 
 from __future__ import annotations
 
+import time
 from collections.abc import Iterable
 from dataclasses import asdict, dataclass, field
 
@@ -17,6 +18,7 @@ import pandas as pd
 
 from .. import constants, windows
 from . import clusters as cluster_tools
+from .scorers import CachingScorer
 
 
 @dataclass
@@ -389,6 +391,26 @@ def campaign_f1(
 #: almost all its time in the region no detector would choose.
 DEFAULT_TAU_GRID = (0.5, 0.75, 0.9, 0.95, 0.99)
 
+#: The grid for **model** scorers: XGBoost now, the GNN and the federated
+#: conditions later. Frozen 2026-10-17 and the same for every model, so a
+#: comparison between models or conditions is never a comparison of how far
+#: each was allowed to search.
+#:
+#: Models need the low end that `DEFAULT_TAU_GRID` omits. That grid was
+#: built for the sanity scorers, whose scores are exactly 0 or 1, so every
+#: threshold in (0, 1] behaves identically and the choice is vacuous. A
+#: class-weighted probabilistic model is the opposite case: its scores
+#: spread across the unit interval, and on the 1% sample the XGBoost
+#: baseline's validation F1 peaked at 0.3 — below the old grid's floor of
+#: 0.5, which truncated the optimum rather than finding it.
+#:
+#: The low thresholds are the expensive ones, because clustering cost
+#: scales with the edges kept, so `select_tau` records the seconds each tau
+#: took and the reports carry them.
+MODEL_TAU_GRID = (
+    0.05, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.95, 0.99,
+)
+
 
 def select_tau(
     full_df: pd.DataFrame,
@@ -400,6 +422,7 @@ def select_tau(
     lookback_h: int = constants.DEFAULT_LOOKBACK_H,
     seed: int = 0,
     scorer_name: str = "custom",
+    cache_scores: bool = True,
 ) -> tuple[float, list[dict]]:
     """Choose tau on **validation only**, maximising campaign-level F1.
 
@@ -409,9 +432,24 @@ def select_tau(
 
     Validation is the only split touched here, so the threshold carries no
     information from test or stress.
+
+    Each row carries `seconds`, the wall time that tau cost. Low thresholds
+    keep most of a million-edge window and clustering scales with the edges
+    kept, so the cost of searching the low end is on the record rather than
+    inferred.
+
+    `cache_scores` wraps the scorer so each validation window is featurised
+    and scored **once** for the whole sweep instead of once per tau. A
+    scorer's output does not depend on tau, so this cannot change the curve
+    — `tests/test_tau_and_budgets.py` pins that it does not — and without it
+    a 12-point grid rebuilds every window's features 12 times.
     """
+    if cache_scores:
+        scorer = CachingScorer(scorer, lookback_h)
+
     curve: list[dict] = []
     for tau in tau_grid:
+        started = time.perf_counter()
         result = evaluate_split(
             full_df, camp, pattern_df, accounts_by_campaign,
             split="val", scorer=scorer, tau=float(tau),
@@ -423,10 +461,22 @@ def select_tau(
             "false_alarms_per_day": result.false_alarms_per_day,
             "horizon_days": result.horizon_days,
             **campaign_f1(result),
+            "seconds": round(time.perf_counter() - started, 2),
         }
         curve.append(row)
 
     return best_tau(curve), curve
+
+
+def tau_is_at_grid_edge(tau: float, tau_grid) -> bool:
+    """Is the chosen threshold the lowest or highest the sweep could pick?
+
+    If it is, the optimum may lie outside the grid and the number reported
+    is a boundary, not a maximum. Worth saying out loud rather than
+    discovering later.
+    """
+    values = [float(v) for v in tau_grid]
+    return float(tau) in (min(values), max(values))
 
 
 def best_tau(curve: list[dict]) -> float:
