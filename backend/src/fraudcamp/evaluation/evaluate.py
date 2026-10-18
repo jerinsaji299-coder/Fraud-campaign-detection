@@ -392,23 +392,36 @@ def campaign_f1(
 DEFAULT_TAU_GRID = (0.5, 0.75, 0.9, 0.95, 0.99)
 
 #: The grid for **model** scorers: XGBoost now, the GNN and the federated
-#: conditions later. Frozen 2026-10-17 and the same for every model, so a
-#: comparison between models or conditions is never a comparison of how far
+#: conditions later. Frozen 2026-10-18 and the same for every model and
+#: condition, so a comparison between them is never a comparison of how far
 #: each was allowed to search.
 #:
-#: Models need the low end that `DEFAULT_TAU_GRID` omits. That grid was
-#: built for the sanity scorers, whose scores are exactly 0 or 1, so every
+#: Models need both ends that `DEFAULT_TAU_GRID` omits. That grid was built
+#: for the sanity scorers, whose scores are exactly 0 or 1, so every
 #: threshold in (0, 1] behaves identically and the choice is vacuous. A
-#: class-weighted probabilistic model is the opposite case: its scores
-#: spread across the unit interval, and on the 1% sample the XGBoost
-#: baseline's validation F1 peaked at 0.3 — below the old grid's floor of
-#: 0.5, which truncated the optimum rather than finding it.
+#: class-weighted probabilistic model is the opposite case, and its scores
+#: are not merely spread over the unit interval — they **pile up against
+#: 1**. Both ends were found by running into them:
 #:
-#: The low thresholds are the expensive ones, because clustering cost
-#: scales with the edges kept, so `select_tau` records the seconds each tau
-#: took and the reports carry them.
+#: * On the 1% sample the baseline's validation F1 peaked at 0.3, below the
+#:   old floor of 0.5, so the low end was added.
+#: * On the full data (L = 24, seed 0) F1 then rose from 0.128 at tau 0.95
+#:   to 0.543 at 0.99 and the sweep chose 0.99, the top of the grid. A jump
+#:   that large across the last interval says the optimum is above it: with
+#:   per-window class weights of 495-3,461, scores concentrate so close to 1
+#:   that a linear grid cannot resolve the region where the decision
+#:   actually happens. Hence the near-1 tail.
+#:
+#: If a chosen tau ever lands on 0.9999, more nines are not the answer —
+#: that would mean the scores are saturated, and the thing to look at is the
+#: class weighting, which is a design decision rather than a grid detail.
+#:
+#: Cost is asymmetric: clustering scales with the edges kept, so the low
+#: thresholds are expensive and the tail is nearly free. `select_tau`
+#: records the seconds each tau took and the reports carry them.
 MODEL_TAU_GRID = (
     0.05, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.95, 0.99,
+    0.995, 0.999, 0.9995, 0.9999,
 )
 
 
@@ -442,7 +455,7 @@ def select_tau(
     and scored **once** for the whole sweep instead of once per tau. A
     scorer's output does not depend on tau, so this cannot change the curve
     — `tests/test_tau_and_budgets.py` pins that it does not — and without it
-    a 12-point grid rebuilds every window's features 12 times.
+    a 16-point grid rebuilds every window's features 16 times.
     """
     if cache_scores:
         scorer = CachingScorer(scorer, lookback_h)

@@ -465,18 +465,27 @@ column slice of it, and the slice is reused across seeds. So the two
 variants see byte-identical windows, labels and weights, which is what an
 ablation has to hold fixed, and nothing is featurised twice.
 
-Expect the matrix to be the memory peak: **6.71M rows x 66 features at
-L = 24 (~1.2 GB) and 9.11M at L = 48 (~1.6 GB)**, plus XGBoost's own copy,
-on top of the pipeline's ~3.2 GB. Around 7 GB peak, well inside 30 GB. If
-it does not fit, report the number rather than working around it.
+Expect the matrix build to be the memory peak. **Measured at L = 24:
+9.9 GB** for 6.71M rows x 66 features - more than the ~7 GB first estimated
+here, because `np.vstack` holds the per-window matrices and the pooled copy
+at the same time. L = 48 has 9.11M rows, 1.36x as many, so scaling the part
+that grows gives **~12-13 GB**. Both are inside a CPU notebook's 30 GB;
+neither would be comfortable on a GPU notebook's ~13-16 GB, which is one
+more reason this step is CPU. If L = 48 does run out, the fix is to
+preallocate the pooled matrix and fill it per window instead of stacking -
+report the number rather than working around it.
 
 ### What `evaluate` does
 
 Tau comes from the **model grid** - `0.05, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6,
-0.7, 0.8, 0.9, 0.95, 0.99` - chosen on validation only by campaign-level
-F1. The sanity scorers keep their own grid; this one exists because a
-class-weighted probabilistic model spreads its scores across the unit
-interval, where a 0/1 scorer does not.
+0.7, 0.8, 0.9, 0.95, 0.99, 0.995, 0.999, 0.9995, 0.9999` - chosen on
+validation only by campaign-level F1. The sanity scorers keep their own
+grid; this one exists because a class-weighted model's scores do not just
+spread over the unit interval, they **pile up against 1**. The near-1 tail
+was added on 2026-10-18 after the quick check chose 0.99, the old top, with
+F1 rising 0.128 -> 0.543 across that last interval. The extra taus are
+nearly free: clustering cost scales with the edges kept, and almost nothing
+survives a threshold of 0.999.
 
 It reports, for every model and the oracle:
 
@@ -498,25 +507,29 @@ every model and condition, so widening it is a decision, not a detail.
 
 ### Expected runtime
 
-Estimated from rates measured on this dataset on Kaggle - 0.7s per 100k
-edges to featurise (`features_smoke`), ~14s per million edges clustered
-(back-calculated from the random scorer's timings in `evaluate_scorers`) -
-and the edge counts in `features_smoke_scan_full.csv`:
+Now **measured at L = 24** by the quick check (one variant pair, seed 0)
+rather than estimated: **215s per booster** to train and **~3.5 min per
+model** to evaluate. The L = 48 column scales those by what actually grows:
+1.36x the training rows (9.11M against 6.71M) and 1.97x the evaluation
+edges (41.0M against 20.8M), from `features_smoke_scan_full.csv`.
 
 | Step | L = 24 | L = 48 | Total |
 |---|---:|---:|---:|
 | `train`: build the matrix | ~50s | ~65s | ~2 min |
-| `train`: 10 boosters each | ~15 min | ~20 min | ~35 min |
-| `evaluate`: per model | ~5 min | ~9.5 min | - |
-| `evaluate`: 10 models each | ~50 min | ~95 min | ~2.5 h |
+| `train`: per booster | 215s (measured) | ~290s | - |
+| `train`: 10 boosters each | ~36 min | ~49 min | **~1.5 h** |
+| `evaluate`: per model | ~4 min | ~7 min | - |
+| `evaluate`: 10 models each | ~40 min | ~70 min | **~2 h** |
 
-**About 3.5-4.5 hours end to end**, inside a 12-hour CPU session with room
-to spare. Two things make this an estimate rather than a measurement: how
-fast Kaggle's CPUs are on the day, and what fraction of each window the
-model keeps at a low tau - on the 1% sample that was 3-10% for the full
-model and 2-23% for the ablated one, and clustering cost scales with it. The
-run prints the real per-tau seconds, so the next estimate will not have to
-guess.
+**About 3.5-4 hours end to end**, inside a 12-hour CPU session with room to
+spare. The earlier estimate had training at ~35 minutes; it is ~1.5 hours,
+because a booster takes 215s rather than the ~90s guessed from scaling the
+sample. Evaluation came in slightly cheaper than estimated. The 16-tau grid
+adds four thresholds above 0.99 that keep almost no edges, so they cost
+little.
+
+What is still an estimate: Kaggle's CPU speed on the day, and the L = 48
+numbers, which are scaled rather than measured.
 
 **If the budget is tight**, run `--seeds 0,1` first (about 1.5 hours end to
 end) to confirm the numbers look sane, then the full five. The models
@@ -532,9 +545,13 @@ say whether `evaluate` exited 0 or 3.
 
 ## 6. Later stages
 
-`kaggle_runner.py` also accepts `train` and `evaluate`. Both currently exit
-with a message saying they are not implemented: they arrive with stage 3.3
-(XGBoost baseline) and stage 3.4 (GNN), together with the GPU settings and
-expected runtimes they need. Nothing about them is runnable yet. Those are
-the first commands that will need **Accelerator: GPU**; everything above
-runs on CPU.
+`train` and `evaluate` are implemented and are section 5g above: the stage
+3.3 XGBoost baseline, which runs on **CPU** - see 5g for why, and for the
+measured runtime and memory.
+
+Stage 3.4's GNN is the first thing here that will genuinely need
+**Accelerator: GPU**, and the first command not yet written. Its training
+regime is already frozen (neighbour sampling at both candidate lookbacks,
+so the lookback comparison is not confounded by the training method; see
+the README decision log), and `features_smoke` has measured the window
+sizes it has to fit. Everything in this document until then runs on CPU.

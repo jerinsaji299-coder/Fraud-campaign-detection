@@ -79,10 +79,11 @@ bank).
 (extraction, matching with other-split hits, horizons, lead time, metrics,
 bootstrap CIs) and the oracle/random sanity scorers are in place and
 validated.
-**Next step:** run `train` and `evaluate` on Kaggle (§5g of
-`backend/scripts/kaggle/run_on_kaggle.md`) for the baseline's first real
-numbers — both variants, both lookbacks, five seeds, on CPU, about 3.5-4.5
-hours. The baseline, the model tau grid, the payment-format ablation and the
+**Next step:** re-run `train` and `evaluate` on Kaggle (§5g of
+`backend/scripts/kaggle/run_on_kaggle.md`) with the extended tau grid —
+both variants, both lookbacks, five seeds, on CPU, about 3.5-4 hours. The
+quick check at L = 24, seed 0 ran cleanly but chose tau at the old grid's
+top edge, so its numbers are provisional. The baseline, the model tau grid, the payment-format ablation and the
 seed sweep are all implemented and pass development checks on the 1% sample;
 **none of those sample numbers is a result.** The evaluation, the oracle
 ceiling and the miss diagnosis are measured on the full data. The training
@@ -112,7 +113,7 @@ no visibility reassignment is used in this phase.
 | 3.0 | Kaggle runner + Phase 2 full-data verification | done — all 24 numbers PASS, determinism confirmed |
 | 3.1 | Window builder + features + leakage tests | done |
 | 3.2 | Evaluation module (extraction, matching, lead time, bootstrap CIs) + oracle and random scorers | done, **validated on full data**; ceiling, miss diagnosis and the paired lookback comparison all measured and recorded |
-| 3.3 | XGBoost baseline: train, select tau on validation, evaluate on test | **code complete**, two variants x two lookbacks x five seeds; development checks on the 1% sample pass; **no results yet** — awaiting the full-data Kaggle run |
+| 3.3 | XGBoost baseline: train, select tau on validation, evaluate on test | **code complete**, two variants x two lookbacks x five seeds. A full-data quick check (L = 24, seed 0) ran cleanly but chose a tau at the grid's edge, so the grid was extended; **provisional numbers only** — awaiting the five-seed run |
 | 3.4 | GNN centralized (GINEConv edge classification) | not started |
 | 3.5 | Gate report + results files + frontend Results page wired to real baseline results | not started |
 
@@ -538,39 +539,89 @@ laundering that belongs to no campaign. No features of its own: they come
 from `features.py` unchanged, so the leakage properties already tested
 there apply without a second implementation to keep honest.
 
-#### The model tau grid (frozen 2026-10-17)
+#### The model tau grid (frozen 2026-10-18)
 
 Model scorers — XGBoost now, the GNN and the federated conditions later —
 all use **one** grid:
 
 ```
-0.05, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.95, 0.99
+0.05, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.95, 0.99,
+0.995, 0.999, 0.9995, 0.9999
 ```
 
 The oracle and random scorers keep `DEFAULT_TAU_GRID`
 (`0.5, 0.75, 0.9, 0.95, 0.99`). The split exists because the two kinds of
 scorer are genuinely different: a sanity scorer's scores are exactly 0 or
-1, so every threshold in (0, 1] keeps the same edges and the low end would
-only cost clustering time. A class-weighted probabilistic model spreads its
-scores across the unit interval, and on the sample the old grid's floor of
-0.5 **truncated** the optimum — validation F1 peaked at 0.3 (0.821 against
-0.803 at 0.5). One grid for every model means a comparison between models
-or conditions is never a comparison of how far each was allowed to search.
+1, so every threshold in (0, 1] keeps the same edges and the choice is
+vacuous. A class-weighted model's scores are not merely spread over the
+unit interval — they **pile up against 1**.
 
-Low thresholds are the expensive ones, because clustering cost scales with
-the edges kept, so `select_tau` records **the seconds each tau took** and
-the reports carry them. The score cache is warmed before the sweep, so
-those seconds are clustering alone and comparable across taus — without it
+Both ends of this grid were found by running into them, which is why it has
+an odd shape:
+
+- **The low end**, added 2026-10-17: on the 1% sample validation F1 peaked
+  at 0.3, below `DEFAULT_TAU_GRID`'s floor of 0.5, so that grid was
+  truncating the optimum rather than finding it (0.821 against 0.803).
+- **The near-1 tail**, added 2026-10-18: on the full data (L = 24, seed 0)
+  F1 then rose from **0.128 at tau 0.95 to 0.543 at 0.99** and the sweep
+  chose 0.99, the top of the grid. A jump that large across the final
+  interval means the optimum lies beyond it. With per-window class weights
+  of **495–3,461**, scores concentrate so close to 1 that a linear grid
+  cannot resolve the region where the decision actually happens. The tail
+  halves the remaining distance to 1 at each step, so the resolution is in
+  `1 − tau` rather than in tau.
+
+One grid for every model and condition means a comparison between them is
+never a comparison of how far each was allowed to search.
+
+Cost is asymmetric. Clustering scales with the edges kept, so the low
+thresholds are the expensive ones and the tail is nearly free — almost
+nothing survives 0.999. `select_tau` records **the seconds each tau took**
+and the reports carry them. The score cache is warmed before the sweep, so
+those seconds are clustering alone and comparable across taus; without it
 the first tau would silently absorb every window's featurisation. Caching
 cannot change the curve, since a scorer's output does not depend on tau,
-and `tests/test_tau_and_budgets.py` pins that the cached and uncached
-curves are identical.
+and `tests/test_tau_and_budgets.py` pins the cached and uncached curves
+equal.
 
-**If a chosen tau still lands on an edge of the grid on full data,
-`evaluate` writes every report and then exits 3 with a STOP message.** An
-edge tau is a boundary, not a maximum. The grid is frozen for every model
-and condition, so widening it is a decision to take deliberately, not
-something to do mid-run.
+**If a chosen tau lands on an edge of the grid, `evaluate` writes every
+report and then exits 3 with a STOP message.** An edge tau is a boundary,
+not a maximum; that is how the tail came to be added. The grid is frozen
+for every model and condition, so widening it is a decision to take
+deliberately, not something to do mid-run. If a chosen tau ever reaches
+**0.9999**, more nines are not the answer: that would mean the scores are
+saturated, and the thing to examine is the class weighting itself — a
+design decision, not a grid detail.
+
+#### Full-data quick check (L = 24, seed 0) — provisional
+
+The first real numbers, from a single-seed run of both variants at L = 24
+on the full dataset. **Provisional, and not to be quoted as results**, for
+two reasons: one seed says nothing about seed spread, and the sweep chose
+**tau = 0.99, the top of the grid as it then stood**, so both models were
+thresholded at a boundary rather than at an optimum. That is what prompted
+the near-1 tail above; the numbers will move when the sweep can reach past
+0.99.
+
+| Variant | Test recall | vs ceiling | FA/day | Earliness vs the oracle (paired) |
+|---|---:|---:|---:|---|
+| `xgboost_centralized` | 0.661 | 0.804 | 3.4 | 0.0h — as early as the oracle on campaigns both detect |
+| `xgboost_centralized_no_format` | 0.500 | 0.609 | — | **−15h**, 95% CI [−27, −6] |
+
+Two things are worth noting even provisionally:
+
+- **The ablation gap is large**, 0.804 of the ceiling against 0.609. On
+  this evidence payment format is doing a substantial share of the work,
+  which is exactly the concern the ablation was frozen to expose.
+- **The no-format model is genuinely later**, by 15 hours, with a CI that
+  excludes zero. This is the **first non-zero paired earliness result in
+  the project** — every comparison so far has come back at 0.0h with CI
+  [0.0, 0.0]. If it survives the full run, it says format was buying
+  earliness and not only recall, which is a stronger statement than the
+  recall gap alone.
+
+Both readings need the five-seed run with the extended grid before they
+mean anything.
 
 #### Development checks on the 1% sample
 
@@ -883,10 +934,11 @@ transactions.
 | 2026-10-17 | **Fourth test subset `oracle_reachable`** (the campaigns the oracle detects at that lookback and split) and **`recall_relative_to_ceiling`** reported for every scorer and model. Phase 5 reports the visibility analysis on both `all` and `oracle_reachable` | The oracle reaches 0.821/0.893 on test, so recall against 1.0 counts campaigns no detector could find. For Phase 5 specifically: the structurally undetectable campaigns are concentrated in the fragmentable group and are undetectable in every condition at every visibility level, so leaving them in the denominator adds the same dead weight to all four conditions and compresses the very differences the experiment measures. `all` is still reported, because that is what an institution would experience | user decision, 2026-10-17; `tests/test_evaluation.py` |
 | 2026-10-17 | **Stage 3.3 hyperparameters frozen and identical for every variant, lookback and seed**: 300 trees, depth 6, eta 0.1, subsample 0.8, colsample 0.8, `hist`, `binary:logistic` with `aucpr`, seed 0. The class weight `n_negative / n_positive` is applied **per window** as a per-row weight (positives carry their own window's weight, negatives 1.0) | Tuning per lookback would make the L comparison a comparison of tuning effort rather than of lookback length, and the same applies to the four conditions in Phase 4-5. The values are deliberately unremarkable: this is a baseline, not a contender. Per-window weighting rather than pooled because the windows differ by an order of magnitude in size, and a pooled weight would let a busy window set the balance for a quiet one | implementation, stage 3.3; `tests/test_xgb_baseline.py` |
 | 2026-10-17 | `xgboost>=2.1` added to requirements.txt; torch and torch_geometric still wait for 3.4 | Each dependency lands with the stage that uses it, so a baseline session does not pay for the CUDA stack. Local development used xgboost 3.4.1; the Kaggle image ships its own, hence the loose pin | implementation, stage 3.3 |
-| 2026-10-17 | **A separate tau grid for model scorers, frozen**: `0.05, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.95, 0.99`, used by every model — XGBoost, the GNN, and the federated conditions. The oracle and random scorers keep `DEFAULT_TAU_GRID`. The edge warning stays, and if a model's chosen tau is still at an edge on full data the run reports it and **stops** rather than extending silently. `select_tau` records the seconds each tau cost | The two kinds of scorer are genuinely different: a sanity scorer's scores are 0 or 1, so every threshold keeps the same edges and the low end would only cost clustering time, while a class-weighted model spreads its scores across the unit interval and the old floor of 0.5 truncated its optimum (validation F1 0.821 at tau 0.3 against 0.803 at 0.5 on the sample). One grid for every model means a comparison between models or conditions is never a comparison of how far each was allowed to search. Per-tau timing is recorded because clustering cost scales with the edges kept, so the low thresholds are the expensive ones and that cost should be visible rather than inferred | user decision, 2026-10-17; `tests/test_tau_and_budgets.py` |
+| 2026-10-18 | **`MODEL_TAU_GRID` extended upward with a near-1 tail**: `0.05, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.95, 0.99, 0.995, 0.999, 0.9995, 0.9999`, the same grid for every model and condition from now on. The edge check stays: a chosen tau of 0.9999 exits 3 and stops | The full-data quick check (L = 24, seed 0) chose **0.99, the top of the grid**, for both variants, with F1 rising **0.128 at tau 0.95 to 0.543 at 0.99** - a jump that large across the final interval means the optimum lies beyond it. Per-window class weights of **495-3,461** push scores so close to 1 that a linear grid cannot resolve the region where the decision happens; the tail halves the remaining distance to 1 at each step, putting the resolution in `1 - tau`. The extra thresholds are nearly free, since almost no edges survive 0.999. If a tau ever reaches 0.9999 the answer is not more nines but the class weighting itself | user decision, 2026-10-18; `docs/reference` quick check, `tests/test_tau_and_budgets.py` |
+| 2026-10-17 | **A separate tau grid for model scorers** (extended 2026-10-18, above): `0.05, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.95, 0.99`, used by every model — XGBoost, the GNN, and the federated conditions. The oracle and random scorers keep `DEFAULT_TAU_GRID`. The edge warning stays, and if a model's chosen tau is still at an edge on full data the run reports it and **stops** rather than extending silently. `select_tau` records the seconds each tau cost | The two kinds of scorer are genuinely different: a sanity scorer's scores are 0 or 1, so every threshold keeps the same edges and the low end would only cost clustering time, while a class-weighted model spreads its scores across the unit interval and the old floor of 0.5 truncated its optimum (validation F1 0.821 at tau 0.3 against 0.803 at 0.5 on the sample). One grid for every model means a comparison between models or conditions is never a comparison of how far each was allowed to search. Per-tau timing is recorded because clustering cost scales with the edges kept, so the low thresholds are the expensive ones and that cost should be visible rather than inferred | user decision, 2026-10-17; `tests/test_tau_and_budgets.py` |
 | 2026-10-17 | **Payment-format ablation, frozen**: alongside `xgboost_centralized`, a variant `xgboost_centralized_no_format` trained without every `fmt_*` column (including `fmt___other__`), identical in all else. Every later model, the GNN and the federated conditions included, is reported **with and without** payment format | In the IBM synthetic data laundering is strongly linked to format: on the sample `fmt_ACH` alone carries 46% of the model's gain and the format columns ~87%. Format is an allowed input — a property of the transaction, not an identity or a label — but a feature that dominant in synthetic data is a shortcut a model can take instead of learning transactional structure, and a result resting on it would say more about the generator than about campaign discovery. The two variants are built from one matrix (the ablated one is a column slice), so they see byte-identical windows, labels and weights | user decision, 2026-10-17; `tests/test_xgb_baseline.py` |
 | 2026-10-17 | **Every model configuration is trained at seeds 0-4**, and results are reported per seed and as mean [min, max] across seeds | A single run cannot distinguish an effect from seed noise. XGBoost's `subsample` and `colsample_bytree` make the fit genuinely stochastic, so the spread is real and worth carrying | user decision, 2026-10-17 |
-| 2026-10-17 | A **score cache** is used for the tau sweep and warmed before it | A scorer's output does not depend on tau, so a 12-point grid would otherwise re-featurise every million-edge window twelve times for twelve identical answers. It cannot change the curve and the cached and uncached curves are pinned equal in a test. Warming it first keeps the per-tau seconds comparable instead of letting the first tau absorb all the featurisation | implementation, stage 3.3 |
+| 2026-10-17 | A **score cache** is used for the tau sweep and warmed before it | A scorer's output does not depend on tau, so a 16-point grid would otherwise re-featurise every million-edge window sixteen times for sixteen identical answers. It cannot change the curve and the cached and uncached curves are pinned equal in a test. Warming it first keeps the per-tau seconds comparable instead of letting the first tau absorb all the featurisation | implementation, stage 3.3 |
 | 2026-10-17 | **False alarms report which of the rule's two conditions failed** — purity < 0.5 vs coverage < 3 campaign accounts — with counts, replacing a single "best overlap" number | The old summary line said "best overlap 0.667 (below the 0.5 the rule requires)", which contradicts itself. Those clusters passed purity and failed coverage. On the sample 21 of 22 fail coverage, so the oracle's false alarms are mostly fragments of real campaigns too small to claim — a different problem from pollution by unrelated traffic, and one the three-account floor creates by design | user-reported, 2026-10-17 |
 | 2026-10-10 | **Stage 3.4 training regime frozen: both candidate lookbacks train with neighbour sampling** (LinkNeighborLoader-style mini-batches of target edges with sampled multi-hop neighbourhoods). Inference scores full windows, chunked if needed. Fanouts, batch size and negative/positive handling are chosen in stage 3.4 and reported before training | If L = 24 trained full-batch and L = 48 trained with sampling, the L comparison would confound lookback length with training method, and the chosen L could not be attributed to the lookback. Using one regime for both keeps that comparison clean. It also sidesteps the capacity question: the busiest L = 48 window is estimated at ~16.6 GB full-batch against 16 GB GPUs | user decision, 2026-10-10 |
 | 2026-10-10 | `features-smoke` samples only rule-3-valid training detection times, and a cheap full scan of **every** usable detection time supplies the largest-window figures | The first full-data run reported Sept 2 12:00 at L = 48 as the largest candidate window (1.5M edges), but that time violates rule 3: its lookback starts before `DATA_START`, so the window was silently clamped — which is also why its L = 48 and L = 72 rows were identical. Sampling five detection times cannot find the true maximum anyway, so the scan replaces guesswork with a full enumeration (counts only, no features) | user-reported, 2026-10-10 |
@@ -1173,11 +1225,13 @@ project-root/
   writes `train_baseline.{md,json}` + 3 CSVs and
   `evaluate_baseline.{md,json}` + 6 CSVs. **CPU is enough**: the dominant
   cost is pandas featurisation and scipy clustering, neither of which a GPU
-  touches, and stage 3.4 needs the GPU quota. Expect **3.5–4.5 hours** end
-  to end; `--seeds 0,1` first is about 1.5 hours if you want a sanity check
-  before committing. `evaluate` exits 2 if no model is there and **exits 3
-  if a chosen tau lands on an edge of the model grid**, after writing every
-  report. Full details in §5g of `run_on_kaggle.md`.
+  touches, and stage 3.4 needs the GPU quota. Expect **~3.5–4 hours** end to
+  end — training ~1.5 h (215s per booster, measured at L = 24) and
+  evaluation ~2 h (~3.5 min per model at L = 24, measured) — with memory
+  peaking at **9.9 GB at L = 24, measured**, and an estimated 12–13 GB at
+  L = 48. `evaluate` exits 2 if no model is there and **exits 3 if a chosen
+  tau lands on an edge of the model grid**, after writing every report. Full
+  details in §5g of `run_on_kaggle.md`.
 - **Verify Phase 2 against the full data (on Kaggle):**
   ```
   cd backend
@@ -2064,9 +2118,13 @@ is the one piece that most warrants a look in a browser before the demo.
   Hence `oracle_reachable`. The full-data split of this floor across all
   three splits needs the next Kaggle run; only the pooled totals (36/30) are
   measured on the full data so far.
-- **The baseline has no full-data numbers yet.** Everything reported for
-  stage 3.3 comes from the 1% sample and is a **development check, not a
-  result**: the thinned background makes separation artificially easy and
+- **The baseline's full-data numbers are provisional.** One seed, at
+  L = 24 only, with tau at the edge of the grid as it then stood — so the
+  0.661 recall, the 0.804-of-ceiling figure and the 15-hour earliness gap
+  for the no-format variant are all subject to change under the extended
+  grid and five seeds.
+- **Everything else reported for stage 3.3 comes from the 1% sample** and is
+  a **development check, not a result**: the thinned background makes separation artificially easy and
   false alarms artificially scarce, so neither the recall, the
   recall-against-ceiling, the payment-format dominance nor the ablation gap
   is evidence about the method. They are not a bar for stage 3.4.
@@ -2159,6 +2217,46 @@ Tagged points in the repository, newest first. Check one out with
 | `v0.1-data-pipeline` | 2026-10-08 | Phase 2 complete, plus the stage 3.0 Kaggle runner. The research pipeline (campaign ground truth, splits, topology groups, institutions, visibility), the artifact export, the read-only FastAPI server, and the full React frontend — 69 backend tests and 48 frontend tests passing. **No models and no experiment results**: the four conditions are defined and the result schema is fixed, but nothing has been trained or run, and the full-data regression numbers are still unverified (that is what stage 3.0's Kaggle run is for). |
 
 ## Changelog
+
+- **2026-10-18 (later)** — **The model tau grid gets a near-1 tail, and the
+  first full-data numbers are in — provisionally.**
+
+  The quick check (L = 24, seed 0, both variants) ran cleanly and
+  `evaluate` **exited 3**, as designed: the sweep chose **tau = 0.99, the
+  top of the grid**. The reason is visible in the curve — F1 rises from
+  **0.128 at 0.95 to 0.543 at 0.99** — and in the weights: at 495–3,461 per
+  window, a class-weighted model's scores pile up against 1, and a linear
+  grid cannot resolve the region where the decision happens. The grid is
+  therefore extended to `…, 0.99, 0.995, 0.999, 0.9995, 0.9999`, halving
+  the remaining distance to 1 at each step so the resolution sits in
+  `1 − tau`. Same grid for every model and condition. The edge check
+  stands: a chosen tau of 0.9999 exits 3 again, and at that point the thing
+  to examine would be the class weighting, not the grid.
+
+  *Provisional results, recorded as such:* the full model reaches test
+  recall **0.661 (0.804 of the ceiling)** at 3.4 false alarms a day and is
+  exactly as early as the oracle on the campaigns both detect; the
+  no-format variant reaches **0.500 (0.609 of the ceiling)** and is **15
+  hours later** than the oracle, 95% CI [−27, −6]. That last figure is the
+  **first non-zero paired earliness result in the project** — everything
+  before it came back at 0.0h with CI [0.0, 0.0] — and if it survives the
+  five-seed run it says payment format was buying earliness, not only
+  recall. One seed and an edge tau, so neither reading is a result yet.
+
+  *Runtime and memory, now measured rather than estimated:* **215s per
+  booster** at L = 24 (the earlier guess of ~90s was scaled from the sample
+  and wrong) and **~3.5 min per model** to evaluate, with the training
+  matrix peaking at **9.9 GB** against the ~7 GB first written here —
+  `np.vstack` holds the per-window matrices and the pooled copy at once.
+  Scaling the parts that grow (1.36× the rows, 1.97× the evaluation edges)
+  puts L = 48 at ~290s per booster and ~12–13 GB. The full 20-booster run
+  is **~3.5–4 hours**: training ~1.5 h, evaluation ~2 h. Inside a CPU
+  notebook's 30 GB and 12 hours; the L = 48 memory would *not* be
+  comfortable on a GPU notebook's 13–16 GB, which is one more reason this
+  stage is CPU.
+
+  Also fixed `run_on_kaggle.md` §6, which still said `train` and `evaluate`
+  were not implemented.
 
 - **2026-10-18** — **Three decisions taken on stage 3.3 before the
   full-data run, and the sample numbers demoted to development checks.**

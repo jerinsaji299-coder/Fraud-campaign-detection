@@ -139,17 +139,42 @@ def test_budget_selection_is_independent_of_curve_order():
 # --- the model tau grid (frozen 2026-10-17) --------------------------------
 
 
-def test_the_model_grid_is_frozen_and_reaches_the_low_end():
+def test_the_model_grid_is_frozen_and_reaches_both_ends():
     """One grid for every model, so a comparison between models or
     conditions is never a comparison of how far each was allowed to search.
     """
     assert evaluation.MODEL_TAU_GRID == (
         0.05, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.95, 0.99,
+        0.995, 0.999, 0.9995, 0.9999,
     )
-    # the sanity scorers keep theirs: their scores are 0/1, so the low end
-    # would only cost clustering time and change nothing
+    # the sanity scorers keep theirs: their scores are 0/1, so neither end
+    # would change anything and the low end would only cost clustering time
     assert evaluation.DEFAULT_TAU_GRID == (0.5, 0.75, 0.9, 0.95, 0.99)
     assert min(evaluation.MODEL_TAU_GRID) < min(evaluation.DEFAULT_TAU_GRID)
+    assert max(evaluation.MODEL_TAU_GRID) > max(evaluation.DEFAULT_TAU_GRID)
+
+
+def test_the_near_one_tail_resolves_where_the_linear_grid_could_not():
+    """Class-weighted scores pile up against 1. On the full data F1 rose
+    from 0.128 at tau 0.95 to 0.543 at 0.99 and the sweep chose 0.99, the
+    old top: a jump that large across the last interval means the optimum
+    is beyond it, and a linear grid cannot resolve that region.
+    """
+    grid = evaluation.MODEL_TAU_GRID
+    tail = [tau for tau in grid if tau > 0.99]
+    assert tail == [0.995, 0.999, 0.9995, 0.9999]
+
+    # each step takes a bite out of what is left above it, which is the
+    # point: the resolution is in the remaining distance to 1, not in tau
+    remaining = [1 - tau for tau in grid if tau >= 0.99]
+    assert remaining == sorted(remaining, reverse=True)
+    for finer, coarser in zip(remaining[1:], remaining):
+        assert finer <= coarser / 2
+
+    # 0.99 is no longer a boundary, so the full-data choice can be read as a
+    # maximum rather than an edge
+    assert not evaluation.tau_is_at_grid_edge(0.99, grid)
+    assert evaluation.tau_is_at_grid_edge(0.9999, grid)
 
 
 def test_a_tau_at_either_end_of_the_grid_is_reported_as_an_edge():
@@ -157,9 +182,9 @@ def test_a_tau_at_either_end_of_the_grid_is_reported_as_an_edge():
     rather than extending the grid silently."""
     grid = evaluation.MODEL_TAU_GRID
     assert evaluation.tau_is_at_grid_edge(0.05, grid)
-    assert evaluation.tau_is_at_grid_edge(0.99, grid)
+    assert evaluation.tau_is_at_grid_edge(0.9999, grid)
     assert not evaluation.tau_is_at_grid_edge(0.3, grid)
-    assert not evaluation.tau_is_at_grid_edge(0.95, grid)
+    assert not evaluation.tau_is_at_grid_edge(0.99, grid)
     # a single-point grid is both ends at once
     assert evaluation.tau_is_at_grid_edge(0.5, (0.5,))
 
