@@ -79,11 +79,12 @@ bank).
 (extraction, matching with other-split hits, horizons, lead time, metrics,
 bootstrap CIs) and the oracle/random sanity scorers are in place and
 validated.
-**Next step:** re-run `train` and `evaluate` on Kaggle (§5g of
-`backend/scripts/kaggle/run_on_kaggle.md`) with the extended tau grid —
-both variants, both lookbacks, five seeds, on CPU, about 3.5-4 hours. The
-quick check at L = 24, seed 0 ran cleanly but chose tau at the old grid's
-top edge, so its numbers are provisional. The baseline, the model tau grid, the payment-format ablation and the
+**Next step:** run `train` and `evaluate` on Kaggle (§5g of
+`backend/scripts/kaggle/run_on_kaggle.md`) over the full matrix — both
+variants, both lookbacks, five seeds, on CPU, about 3.5-4 hours. The tau
+grid is settled: the second quick check (L = 24, seed 0, commit `6a6d1be`)
+exited 0 with both taus interior. Its numbers are provisional on one seed
+and one lookback. The baseline, the model tau grid, the payment-format ablation and the
 seed sweep are all implemented and pass development checks on the 1% sample;
 **none of those sample numbers is a result.** The evaluation, the oracle
 ceiling and the miss diagnosis are measured on the full data. The training
@@ -113,7 +114,7 @@ no visibility reassignment is used in this phase.
 | 3.0 | Kaggle runner + Phase 2 full-data verification | done — all 24 numbers PASS, determinism confirmed |
 | 3.1 | Window builder + features + leakage tests | done |
 | 3.2 | Evaluation module (extraction, matching, lead time, bootstrap CIs) + oracle and random scorers | done, **validated on full data**; ceiling, miss diagnosis and the paired lookback comparison all measured and recorded |
-| 3.3 | XGBoost baseline: train, select tau on validation, evaluate on test | **code complete**, two variants x two lookbacks x five seeds. A full-data quick check (L = 24, seed 0) ran cleanly but chose a tau at the grid's edge, so the grid was extended; **provisional numbers only** — awaiting the five-seed run |
+| 3.3 | XGBoost baseline: train, select tau on validation, evaluate on test | **code complete**, two variants x two lookbacks x five seeds. Two full-data quick checks at L = 24, seed 0: the first hit the grid's edge, the second (commit `6a6d1be`) exited 0 with both taus interior. **Provisional numbers only** — awaiting the five-seed run over both lookbacks |
 | 3.4 | GNN centralized (GINEConv edge classification) | not started |
 | 3.5 | Gate report + results files + frontend Results page wired to real baseline results | not started |
 
@@ -458,6 +459,13 @@ separate things, and neither is allowed to stand in for the other.
 2. **Coverage, separately.** Report how many campaigns each configuration
    detects that the other misses, **by campaign id**, so the discordant sets
    can be inspected rather than assumed to be random.
+3. **Directly, against each other.** To compare A and B, pair **A against
+   B**. Never infer an A-versus-B difference from `A vs C` and `B vs C`,
+   however natural the common reference C is — the oracle ceiling, the
+   centralized condition, anything. Each of those comparisons is taken over
+   *its own* shared set, so the two numbers are not on a common scale and
+   their difference means nothing. Pairing fixes the denominator for one
+   comparison; it does not make two comparisons subtractable.
 
 Comparing two medians of `median_lead_time_h` is invalid and is not done
 anywhere in this project. Each median is over a different set of campaigns,
@@ -470,9 +478,19 @@ Implemented once, in `evaluation.paired_lead_time_comparison`, and reported
 by `oracle-diagnose` as `oracle_diagnose_paired.csv` plus a section in
 `oracle_diagnose.{md,json}`. `evaluation.describe_paired_comparison` writes
 the sentence, and refuses to state a direction when the CI includes zero.
-`tests/test_paired_comparison.py` pins it, including the case where the
-unpaired medians say the better detector got worse by 45 hours while the
-paired difference is zero with one extra campaign detected.
+`tests/test_paired_comparison.py` pins it, including the two cases where
+the shortcuts mislead: unpaired medians saying the better detector got
+worse by 45 hours while the paired difference is zero with one extra
+campaign detected, and two comparisons against a common reference implying
+a 25-hour difference where the direct comparison is a tie with one side
+simply covering more.
+
+Both failures have happened here, which is why rule 3 is written down. The
+first produced the withdrawn claim that L = 48 lost earliness
+(2026-10-17); the second produced the withdrawn claim that dropping payment
+format cost 15 hours of earliness (2026-10-18, corrected 2026-10-19). The
+same shape twice: a difference read off two numbers that were never on the
+same scale.
 
 ### Stage 3.3: the XGBoost baseline
 
@@ -595,33 +613,46 @@ design decision, not a grid detail.
 
 #### Full-data quick check (L = 24, seed 0) — provisional
 
-The first real numbers, from a single-seed run of both variants at L = 24
-on the full dataset. **Provisional, and not to be quoted as results**, for
-two reasons: one seed says nothing about seed spread, and the sweep chose
-**tau = 0.99, the top of the grid as it then stood**, so both models were
-thresholded at a boundary rather than at an optimum. That is what prompted
-the near-1 tail above; the numbers will move when the sweep can reach past
-0.99.
+A single-seed run of both variants at L = 24 on the full dataset.
+**Provisional, and not to be quoted as results:** one seed says nothing
+about seed spread, and L = 24 is only one of the two lookbacks. The
+five-seed run over both lookbacks is what decides anything here.
 
-| Variant | Test recall | vs ceiling | FA/day | Earliness vs the oracle (paired) |
-|---|---:|---:|---:|---|
-| `xgboost_centralized` | 0.661 | 0.804 | 3.4 | 0.0h — as early as the oracle on campaigns both detect |
-| `xgboost_centralized_no_format` | 0.500 | 0.609 | — | **−15h**, 95% CI [−27, −6] |
+Quick check 2, at commit `6a6d1be` with the extended grid, **exited 0** —
+both taus are interior optima now, which is what the near-1 tail was added
+for:
 
-Two things are worth noting even provisionally:
+| Variant | Chosen tau | Validation F1 | Next tau up | Test recall | vs ceiling | FA/day |
+|---|---:|---:|---:|---:|---:|---:|
+| `xgboost_centralized` | 0.99 | 0.543 | 0.490 at 0.995 | 0.661 | 0.804 | 3.4 |
+| `xgboost_centralized_no_format` | 0.995 | 0.343 | 0.205 at 0.999 | 0.464 | 0.565 | 1.7 |
 
-- **The ablation gap is large**, 0.804 of the ceiling against 0.609. On
-  this evidence payment format is doing a substantial share of the work,
-  which is exactly the concern the ablation was frozen to expose.
-- **The no-format model is genuinely later**, by 15 hours, with a CI that
-  excludes zero. This is the **first non-zero paired earliness result in
-  the project** — every comparison so far has come back at 0.0h with CI
-  [0.0, 0.0]. If it survives the full run, it says format was buying
-  earliness and not only recall, which is a stronger statement than the
-  recall gap alone.
+(Quick check 1, at commit `5664a6b`, chose tau = 0.99 for both — the top of
+the grid as it then stood — and exited 3. Its numbers are superseded: the
+ablated model's tau moved to 0.995 here, taking its recall from 0.500 to
+0.464. The full model's tau did not move, so its row is unchanged.)
 
-Both readings need the five-seed run with the extended grid before they
-mean anything.
+**What the ablation shows, and what it does not.** Dropping payment format
+costs **coverage**: 0.661 against 0.464 on test, which is 37 campaigns
+against 26 — **11 fewer**, and 0.804 of the ceiling against 0.565. That
+gap is large and is exactly the concern the ablation was frozen to expose.
+
+On **earliness** the direct paired ablation — no-format against the full
+model, on the campaigns both detect — is **−3.0h with a 95% CI of
+[−12, 0]**. The interval includes zero, so **no earliness difference is
+demonstrated.** What format buys, on this evidence, is coverage.
+
+An earlier version of this section claimed format bought 15 hours of
+earliness. That was wrong, and wrong in a specific way worth recording: it
+came from comparing each variant against the **oracle** separately (0.0h
+for the full model, −15h for the ablated one) and treating the gap between
+those two numbers as the ablation's effect. Those two comparisons are taken
+over different shared sets, so their difference is not a quantity — see
+rule 3 under §[the paired method](#comparing-two-configurations-the-paired-method).
+The direct comparison is the criterion, and it says there is nothing to
+claim yet.
+
+The five-seed run over both lookbacks decides both readings.
 
 #### Development checks on the 1% sample
 
@@ -934,6 +965,7 @@ transactions.
 | 2026-10-17 | **Fourth test subset `oracle_reachable`** (the campaigns the oracle detects at that lookback and split) and **`recall_relative_to_ceiling`** reported for every scorer and model. Phase 5 reports the visibility analysis on both `all` and `oracle_reachable` | The oracle reaches 0.821/0.893 on test, so recall against 1.0 counts campaigns no detector could find. For Phase 5 specifically: the structurally undetectable campaigns are concentrated in the fragmentable group and are undetectable in every condition at every visibility level, so leaving them in the denominator adds the same dead weight to all four conditions and compresses the very differences the experiment measures. `all` is still reported, because that is what an institution would experience | user decision, 2026-10-17; `tests/test_evaluation.py` |
 | 2026-10-17 | **Stage 3.3 hyperparameters frozen and identical for every variant, lookback and seed**: 300 trees, depth 6, eta 0.1, subsample 0.8, colsample 0.8, `hist`, `binary:logistic` with `aucpr`, seed 0. The class weight `n_negative / n_positive` is applied **per window** as a per-row weight (positives carry their own window's weight, negatives 1.0) | Tuning per lookback would make the L comparison a comparison of tuning effort rather than of lookback length, and the same applies to the four conditions in Phase 4-5. The values are deliberately unremarkable: this is a baseline, not a contender. Per-window weighting rather than pooled because the windows differ by an order of magnitude in size, and a pooled weight would let a busy window set the balance for a quiet one | implementation, stage 3.3; `tests/test_xgb_baseline.py` |
 | 2026-10-17 | `xgboost>=2.1` added to requirements.txt; torch and torch_geometric still wait for 3.4 | Each dependency lands with the stage that uses it, so a baseline session does not pay for the CUDA stack. Local development used xgboost 3.4.1; the Kaggle image ships its own, hence the loose pin | implementation, stage 3.3 |
+| 2026-10-19 | **Rule 3 of the paired method, frozen: two configurations are compared DIRECTLY against each other.** An A-versus-B difference is never inferred from `A vs C` and `B vs C`, whatever the shared reference C — the oracle ceiling, the centralized condition, anything | Each of those comparisons is taken over its own shared set of campaigns, so the two numbers are not on a common scale and their difference is not a quantity. Pairing fixes the denominator for one comparison; it does not make two comparisons subtractable. **Evidence:** this produced the withdrawn claim that dropping payment format cost 15h of earliness — 0.0h for the full model against the oracle, -15h for the ablated one, read as a 15h ablation effect. The direct ablation is -3.0h with CI [-12, 0], so nothing is demonstrated. Structurally the same error as subtracting two medians (2026-10-17), one level up, which is why it is now written down rather than assumed | user-reported, 2026-10-19; `tests/test_paired_comparison.py` |
 | 2026-10-18 | **`MODEL_TAU_GRID` extended upward with a near-1 tail**: `0.05, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.95, 0.99, 0.995, 0.999, 0.9995, 0.9999`, the same grid for every model and condition from now on. The edge check stays: a chosen tau of 0.9999 exits 3 and stops | The full-data quick check (L = 24, seed 0) chose **0.99, the top of the grid**, for both variants, with F1 rising **0.128 at tau 0.95 to 0.543 at 0.99** - a jump that large across the final interval means the optimum lies beyond it. Per-window class weights of **495-3,461** push scores so close to 1 that a linear grid cannot resolve the region where the decision happens; the tail halves the remaining distance to 1 at each step, putting the resolution in `1 - tau`. The extra thresholds are nearly free, since almost no edges survive 0.999. If a tau ever reaches 0.9999 the answer is not more nines but the class weighting itself | user decision, 2026-10-18; `docs/reference` quick check, `tests/test_tau_and_budgets.py` |
 | 2026-10-17 | **A separate tau grid for model scorers** (extended 2026-10-18, above): `0.05, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.95, 0.99`, used by every model — XGBoost, the GNN, and the federated conditions. The oracle and random scorers keep `DEFAULT_TAU_GRID`. The edge warning stays, and if a model's chosen tau is still at an edge on full data the run reports it and **stops** rather than extending silently. `select_tau` records the seconds each tau cost | The two kinds of scorer are genuinely different: a sanity scorer's scores are 0 or 1, so every threshold keeps the same edges and the low end would only cost clustering time, while a class-weighted model spreads its scores across the unit interval and the old floor of 0.5 truncated its optimum (validation F1 0.821 at tau 0.3 against 0.803 at 0.5 on the sample). One grid for every model means a comparison between models or conditions is never a comparison of how far each was allowed to search. Per-tau timing is recorded because clustering cost scales with the edges kept, so the low thresholds are the expensive ones and that cost should be visible rather than inferred | user decision, 2026-10-17; `tests/test_tau_and_budgets.py` |
 | 2026-10-17 | **Payment-format ablation, frozen**: alongside `xgboost_centralized`, a variant `xgboost_centralized_no_format` trained without every `fmt_*` column (including `fmt___other__`), identical in all else. Every later model, the GNN and the federated conditions included, is reported **with and without** payment format | In the IBM synthetic data laundering is strongly linked to format: on the sample `fmt_ACH` alone carries 46% of the model's gain and the format columns ~87%. Format is an allowed input — a property of the transaction, not an identity or a label — but a feature that dominant in synthetic data is a shortcut a model can take instead of learning transactional structure, and a result resting on it would say more about the generator than about campaign discovery. The two variants are built from one matrix (the ablated one is a column slice), so they see byte-identical windows, labels and weights | user decision, 2026-10-17; `tests/test_xgb_baseline.py` |
@@ -1936,8 +1968,14 @@ campaign_id)`:
   are not the four federated conditions. **Proven able to fail:** dropping
   the rule-3 filter fails the training-times test, and permuting the
   scorer's output fails the alignment test.
-- **Backend paired-comparison tests** (`test_paired_comparison.py`, 14
-  tests): the decisive one is constructed so that the *unpaired* medians give
+- **Backend paired-comparison tests** (`test_paired_comparison.py`, 15
+  tests): two are constructed so that a shortcut gives the wrong answer.
+  The second pins rule 3: C is a reference both detectors are scored
+  against, A ties with C on two campaigns and is 50h later on two more that
+  only it reaches, B ties with C on the same two and misses the rest — so
+  `A vs C` is −25h and `B vs C` is 0h, and subtracting them says B is 25h
+  earlier, while the direct comparison is a tie with A simply covering more.
+  The first is constructed so that the *unpaired* medians give
   the wrong answer — B detects everything A detects at exactly the same time,
   plus one campaign only detectable late, so medians make B look 45 hours
   worse while the paired difference is 0.0h with one extra detection. Then
@@ -2088,7 +2126,7 @@ campaign_id)`:
     stubbed in these tests.
 
 **Current pass status (2026-10-17):**
-- Backend: `python -m pytest tests/` from `backend/` → 281 passed, 25
+- Backend: `python -m pytest tests/` from `backend/` → 283 passed, 25
   skipped, 0 failed. The skips are the full-data suite, which needs the
   dataset that only exists on Kaggle; all 24 of its numbers passed there on
   2026-10-08/09.
@@ -2119,10 +2157,11 @@ is the one piece that most warrants a look in a browser before the demo.
   three splits needs the next Kaggle run; only the pooled totals (36/30) are
   measured on the full data so far.
 - **The baseline's full-data numbers are provisional.** One seed, at
-  L = 24 only, with tau at the edge of the grid as it then stood — so the
-  0.661 recall, the 0.804-of-ceiling figure and the 15-hour earliness gap
-  for the no-format variant are all subject to change under the extended
-  grid and five seeds.
+  L = 24 only — so the 0.661 recall, the 0.804-of-ceiling figure and the
+  ablation's 11-campaign coverage gap are all subject to change under five
+  seeds and the second lookback. Nothing about earliness is established at
+  all: the direct paired ablation is −3.0h with a CI of [−12, 0], which
+  includes zero.
 - **Everything else reported for stage 3.3 comes from the 1% sample** and is
   a **development check, not a result**: the thinned background makes separation artificially easy and
   false alarms artificially scarce, so neither the recall, the
@@ -2218,6 +2257,46 @@ Tagged points in the repository, newest first. Check one out with
 
 ## Changelog
 
+- **2026-10-19** — **Quick check 2 recorded, and the earliness framing
+  corrected.**
+
+  At commit `6a6d1be` the extended grid did its job: the run **exited 0**
+  with both taus interior. The full model chose **0.99** (validation F1
+  0.543, falling to 0.490 at 0.995) and the no-format variant **0.995**
+  (F1 0.343, falling to 0.205 at 0.999) — maxima rather than boundaries, so
+  the near-1 tail reaches past where the decision happens and the grid
+  question is settled.
+
+  *Provisional, one seed, L = 24 only:* the full model reaches test recall
+  **0.661 (0.804 of the ceiling)** at 3.4 false alarms a day; the no-format
+  variant **0.464 (0.565 of the ceiling)** at 1.7. The ablated model's
+  recall moved from quick check 1's 0.500 because its tau moved from 0.99
+  to 0.995; the full model's tau did not move, so its row is unchanged.
+
+  **The earliness claim is withdrawn.** The previous entry said dropping
+  payment format cost 15 hours of earliness. That came from comparing each
+  variant against the **oracle** separately — 0.0h for the full model,
+  −15h for the ablated one — and treating the gap between those two numbers
+  as the ablation's effect. They are taken over different shared sets of
+  campaigns, so their difference is not a quantity. The criterion is the
+  **direct** paired ablation, no-format against the full model, and it is
+  **−3.0h with a 95% CI of [−12, 0]**: the interval includes zero, so no
+  earliness difference is demonstrated. What the ablation clearly costs is
+  **coverage** — 37 test campaigns against 26, eleven fewer. The five-seed
+  run over both lookbacks decides it.
+
+  *Rule 3 of the paired method, now frozen:* compare two configurations
+  **directly against each other**; never infer an A-versus-B difference
+  from `A vs C` and `B vs C`. Pairing fixes the denominator for one
+  comparison; it does not make two comparisons subtractable. This is the
+  same error as subtracting two medians (2026-10-17) one level up — the
+  second time the project has produced a claim by putting two numbers on
+  different scales side by side — so it is written into the method with a
+  test that fails on the shortcut: two reference comparisons implying a
+  25-hour difference where the direct one is a tie.
+
+  *Tests:* backend 283 passed, 25 skipped.
+
 - **2026-10-18 (later)** — **The model tau grid gets a near-1 tail, and the
   first full-data numbers are in — provisionally.**
 
@@ -2236,12 +2315,16 @@ Tagged points in the repository, newest first. Check one out with
   *Provisional results, recorded as such:* the full model reaches test
   recall **0.661 (0.804 of the ceiling)** at 3.4 false alarms a day and is
   exactly as early as the oracle on the campaigns both detect; the
-  no-format variant reaches **0.500 (0.609 of the ceiling)** and is **15
-  hours later** than the oracle, 95% CI [−27, −6]. That last figure is the
-  **first non-zero paired earliness result in the project** — everything
-  before it came back at 0.0h with CI [0.0, 0.0] — and if it survives the
-  five-seed run it says payment format was buying earliness, not only
-  recall. One seed and an edge tau, so neither reading is a result yet.
+  no-format variant reaches **0.500 (0.609 of the ceiling)** and is 15
+  hours later than the oracle, 95% CI [−27, −6]. *(Corrected 2026-10-19:
+  this entry went on to call that the first non-zero paired earliness
+  result and to read it as the ablation's effect. It is neither. The
+  ablation's effect is the **direct** comparison between the two variants,
+  which is −3.0h with CI [−12, 0] — nothing demonstrated. Comparing each
+  variant against the oracle separately and subtracting is invalid, because
+  the two comparisons are over different shared sets; see rule 3 of the
+  paired method and the 2026-10-19 entry.)* One seed and an edge tau, so
+  neither reading is a result.
 
   *Runtime and memory, now measured rather than estimated:* **215s per
   booster** at L = 24 (the earlier guess of ~90s was scaled from the sample

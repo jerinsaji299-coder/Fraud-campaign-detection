@@ -276,3 +276,45 @@ def test_against_real_oracle_outcomes_for_two_lookbacks():
     assert paired.median_difference_h == 0.0
     assert paired.only_b_campaigns == [1]
     assert paired.n_only_a == 0
+
+
+def test_two_comparisons_against_a_reference_do_not_give_the_third():
+    """A and B must be compared to each other DIRECTLY.
+
+    Pairing fixes the denominator for one comparison; it does not make two
+    comparisons subtractable. `A vs C` and `B vs C` are each taken over
+    their own shared set, and if those sets differ the two numbers are not
+    on a common scale — the difference between them says nothing about
+    `A vs B`. This is the same error as subtracting two medians, one level
+    up, and it is how the README briefly came to claim that dropping
+    payment format cost 15 hours of earliness (2026-10-18, corrected
+    2026-10-19).
+
+    Here C is a reference every detector is scored against. A matches C on
+    two campaigns and is 50h later on two more that only it and C reach. B
+    matches C on the same two and misses the rest.
+    """
+    reference = [outcome(i, 100.0) for i in (1, 2, 3, 4)]
+    a = [
+        outcome(1, 100.0), outcome(2, 100.0),
+        outcome(3, 50.0), outcome(4, 50.0),
+    ]
+    b = [
+        outcome(1, 100.0), outcome(2, 100.0),
+        outcome(3, None, detected=False), outcome(4, None, detected=False),
+    ]
+
+    a_vs_reference = paired_lead_time_comparison(reference, a, "C", "A")
+    b_vs_reference = paired_lead_time_comparison(reference, b, "C", "B")
+    assert a_vs_reference.median_difference_h == -25.0  # over 4 campaigns
+    assert b_vs_reference.median_difference_h == 0.0  # over 2 campaigns
+
+    # the invalid step: -25 - 0 would say B is 25h EARLIER than A
+    direct = paired_lead_time_comparison(a, b, "A", "B")
+    assert direct.n_both == 2
+    assert direct.median_difference_h == 0.0  # they tie where both detect
+    assert direct.n_only_a == 2  # and A simply covers more
+    assert direct.n_only_b == 0
+
+    # the two shared sets differ, which is exactly why the subtraction fails
+    assert a_vs_reference.n_both != b_vs_reference.n_both
