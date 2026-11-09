@@ -37,6 +37,7 @@ git clone https://github.com/jerinsaji299-coder/Fraud-campaign-detection.git
 18. [Phase 3 definitions](#phase-3-definitions-centralized-baselines)
     - [Oracle ceiling](#oracle-ceiling)
     - [Stage 3.3: the XGBoost baseline](#stage-33-the-xgboost-baseline)
+    - [Stage 3.4: the centralized GNN](#stage-34-the-centralized-gnn)
     - [Comparing two configurations: the paired method](#comparing-two-configurations-the-paired-method)
     - [Recall against the ceiling](#recall-against-the-ceiling)
 19. [Version history](#version-history)
@@ -79,13 +80,16 @@ bank).
 (extraction, matching with other-split hits, horizons, lead time, metrics,
 bootstrap CIs) and the oracle/random sanity scorers are in place and
 validated.
-**Next step:** stage 3.4, the centralized GNN — not started, and the
-first step here that needs a GPU. Stage 3.3 is complete: the non-graph
-baseline reaches **0.679 test recall at L = 48, 0.760 of the oracle**, and
-that is the number the GNN has to beat. Two things it must carry: both
-lookbacks (L = 48's validation margin mostly did not survive to test), and
-both format variants (payment format buys coverage, and it is a generator
-artefact). See §[stage 3.3 results](#stage-33-results-full-data-five-seeds--complete). The baseline, the model tau grid, the payment-format ablation and the
+**Next step:** run `gpu-check` on a Kaggle **GPU** notebook (§5h of
+`backend/scripts/kaggle/run_on_kaggle.md`) — stage 3.4.0, no model and no
+data, just what the accelerator and the PyG install actually are. Stage 3.3
+is complete: the non-graph baseline reaches **0.679 test recall at L = 48,
+0.760 of the oracle**, and that is the number the GNN has to beat. Two
+things 3.4 must carry: both lookbacks (L = 48's validation margin mostly
+did not survive to test), and both format variants (payment format buys
+coverage, and it is a generator artefact). See
+§[stage 3.3 results](#stage-33-results-full-data-five-seeds--complete) and
+§[stage 3.4](#stage-34-the-centralized-gnn). The baseline, the model tau grid, the payment-format ablation and the
 seed sweep are all implemented and pass development checks on the 1% sample;
 **none of those sample numbers is a result.** The evaluation, the oracle
 ceiling and the miss diagnosis are measured on the full data. The training
@@ -116,7 +120,7 @@ no visibility reassignment is used in this phase.
 | 3.1 | Window builder + features + leakage tests | done |
 | 3.2 | Evaluation module (extraction, matching, lead time, bootstrap CIs) + oracle and random scorers | done, **validated on full data**; ceiling, miss diagnosis and the paired lookback comparison all measured and recorded |
 | 3.3 | XGBoost baseline: train, select tau on validation, evaluate on test | **done** — 20 boosters on the full data at commit `de48b35`, exit 0, no edge taus. Selected: the full model at L = 48 (validation recall 0.531 vs 0.385); test recall 0.679 [0.661, 0.696], 0.760 of the ceiling. Format ablation settled; one campaign beats the ceiling |
-| 3.4 | GNN centralized (GINEConv edge classification) | not started |
+| 3.4 | GNN centralized (GINEConv edge classification) | **in progress**, in sub-stages. 3.4.0 (GPU environment check) implemented, awaiting a Kaggle GPU run; 3.4.1-3.4.5 not started |
 | 3.5 | Gate report + results files + frontend Results page wired to real baseline results | not started |
 
 **Later phases (not started)**
@@ -739,6 +743,74 @@ which is what prompted the near-1 tail; the second, at `6a6d1be`, exited 0
 with interior taus. Their numbers — 0.661 and 0.464 test recall at L = 24,
 seed 0 — are consistent with the five-seed means above.)*
 
+### Stage 3.4: the centralized GNN
+
+Not trained yet. The design was frozen on 2026-10-10 and nothing here
+changes it: GINEConv edge classification, 2–3 layers, hidden 64, message
+passing **in both directions** (every edge also inserted reversed, with a
+direction flag), and an edge readout MLP on `[h_src, h_dst, edge_features]`.
+Neighbour sampling at **both** lookbacks so the L comparison is not
+confounded by the training method; inference scores full windows, chunked
+if needed.
+
+Everything around the model is shared with stage 3.3 rather than
+reimplemented — the same window features, labels, rule-3 training times,
+class-weighting principle, campaign extraction, matching rule, model tau
+grid, alert budgets, subsets and paired comparisons. **No account identity
+and no learned per-account embeddings**: a node's only inputs are its six
+window features. Graphs are built per window `[t − L, t)` and nothing
+else. Seeds 0–4, both variants (full and no-format), both lookbacks.
+
+It runs in sub-stages, each stopping for approval:
+
+| | Sub-stage | Status |
+|---|---|---|
+| 3.4.0 | GPU environment check — no model, no data | **implemented**, awaiting a Kaggle GPU run |
+| 3.4.1 | Design proposal: fanouts, batch size, positives, epochs, early stopping, optimizer, chunked inference — sized against 3.4.0's measurements | not started |
+| 3.4.2 | Implementation, tests, resumability, local CPU smoke run | not started |
+| 3.4.3 | Kaggle quick check: 1 seed, L = 24, full variant | not started |
+| 3.4.4 | Full-run plan against the 9-hour session and weekly GPU quota | not started |
+| 3.4.5 | Phase 3 gate report: GNN vs XGBoost, paired comparisons only | not started |
+
+#### 3.4.0: the GPU environment check
+
+`kaggle_runner.py gpu-check` reports what a GPU notebook actually is,
+before any design is sized against guesses. It reports the accelerator
+(name, total and free memory, compute capability, count), the host (Python
+version, CPU count, total and available RAM), and the torch / CUDA / cuDNN
+/ PyG versions.
+
+It then installs `torch_geometric` and attempts each optional extension —
+`pyg-lib`, `torch-scatter`, `torch-sparse`, `torch-cluster` — from the PyG
+wheel index matching the image's torch and CUDA, reporting each as
+installed or failed **without aborting**. None is required: GINEConv and
+neighbour sampling work without them, they are only faster, and their
+wheels often lag the newest Python. Which of them lands is worth knowing
+before a training session rather than during one.
+
+Finally it runs a GINEConv forward and backward **at the real feature
+widths** — 3 layers, hidden 64, 54 edge features plus the direction flag,
+6 node features, every edge also reversed — at 50k, 200k and 500k edges,
+reporting seconds and peak GPU memory for each. An out-of-memory is caught
+and reported as a result rather than a crash, and the probe stops at the
+first size that fails. Those numbers are the input to 3.4.1.
+
+Writes `gpu_check.{md,json}`; **exits 2** if there is no usable CUDA device
+or the smoke test fails, after reporting everything it could still
+determine. `--no-install` skips the pip steps and `--probe-edges` changes
+the sizes.
+
+**Stage 3.3's 15.9 GB does not constrain the GNN.** That figure is
+XGBoost's pooled training matrix — 9.1M rows × 66 features held at once. A
+neighbour-sampled GNN processes one window at a time and never
+materialises that pool, so its memory is a different quantity entirely,
+measured in 3.4.0 and 3.4.3 rather than inherited from 3.3.
+
+**torch and torch_geometric are still not in `requirements.txt`.** The
+check installs PyG itself on Kaggle, and local development does not need
+the CUDA stack until the model exists in 3.4.2. They land with that
+sub-stage, the same rule every other dependency has followed.
+
 #### Development checks on the 1% sample
 
 **These are development checks, not results.** They exist to show the code
@@ -1055,6 +1127,7 @@ transactions.
 | 2026-10-17 | **Fourth test subset `oracle_reachable`** (the campaigns the oracle detects at that lookback and split) and **`recall_relative_to_ceiling`** reported for every scorer and model. Phase 5 reports the visibility analysis on both `all` and `oracle_reachable` | The oracle reaches 0.821/0.893 on test, so recall against 1.0 counts campaigns no detector could find. For Phase 5 specifically: the structurally undetectable campaigns are concentrated in the fragmentable group and are undetectable in every condition at every visibility level, so leaving them in the denominator adds the same dead weight to all four conditions and compresses the very differences the experiment measures. `all` is still reported, because that is what an institution would experience | user decision, 2026-10-17; `tests/test_evaluation.py` |
 | 2026-10-17 | **Stage 3.3 hyperparameters frozen and identical for every variant, lookback and seed**: 300 trees, depth 6, eta 0.1, subsample 0.8, colsample 0.8, `hist`, `binary:logistic` with `aucpr`, seed 0. The class weight `n_negative / n_positive` is applied **per window** as a per-row weight (positives carry their own window's weight, negatives 1.0) | Tuning per lookback would make the L comparison a comparison of tuning effort rather than of lookback length, and the same applies to the four conditions in Phase 4-5. The values are deliberately unremarkable: this is a baseline, not a contender. Per-window weighting rather than pooled because the windows differ by an order of magnitude in size, and a pooled weight would let a busy window set the balance for a quiet one | implementation, stage 3.3; `tests/test_xgb_baseline.py` |
 | 2026-10-17 | `xgboost>=2.1` added to requirements.txt; torch and torch_geometric still wait for 3.4 | Each dependency lands with the stage that uses it, so a baseline session does not pay for the CUDA stack. Local development used xgboost 3.4.1; the Kaggle image ships its own, hence the loose pin | implementation, stage 3.3 |
+| 2026-11-09 | **Stage 3.3's 15.9 GB peak does not constrain the GNN**, and stage 3.4 runs in six sub-stages (3.4.0-3.4.5), each stopping for approval. torch and torch_geometric still stay out of requirements.txt until 3.4.2 | The 15.9 GB is XGBoost's pooled training matrix, 9.1M rows x 66 features held at once. A neighbour-sampled GNN processes one window at a time and never materialises that pool, so carrying the figure over would size the design against the wrong quantity. The GNN's memory is measured in 3.4.0 and 3.4.3 instead. Sub-staging keeps a GPU session from being spent discovering what an environment check answers in minutes | user decision, 2026-11-09 |
 | 2026-11-09 | **The oracle ceiling is a reference, not a strict upper bound.** Every "no detector can beat these" claim is corrected: the oracle is the best achievable **using only the laundering edges**, and `recall_relative_to_ceiling` can exceed 1 and is never clamped | The oracle keeps exactly the laundering edges; a model keeps whatever scores above tau, which is neither a subset nor a superset of them. Keeping *every* laundering edge is not always best: at L = 48 on stress it merges campaign 295 with 9 other campaigns into a 13-account cluster at purity 0.4615, just under the 0.5 the rule needs, while a model at tau ~ 0.99 keeps a sparser set and matches it. **Measured in all five seeds**, and 295 is the single `purity_failure` in the whole full-data diagnosis | user-reported, 2026-11-09; `tests/test_evaluation.py` |
 | 2026-11-09 | **Stage 3.3 selected configuration: the full model at L = 48**, by the frozen protocol (validation recall 0.531 against 0.385). Both lookbacks are carried into 3.4 rather than treating L = 48 as settled | The protocol selects on validation and that is what was done, but the margin did not survive: ~3.8 of 26 campaigns on validation against ~1.4 of 56 on test, for ~3x the false alarms (10.5/day against 3.8). Paired per seed, L = 48 adds 1-3 test campaigns and loses 0-1 at 0.0h earliness. A one-campaign edge bought with triple the alarm load is not a settled answer | implementation, stage 3.3 |
 | 2026-11-09 | **The payment-format ablation is settled: format buys coverage, not earliness.** Every later model still reports both variants | The direct paired earliness CI includes zero in **all ten** test cells (2 lookbacks x 5 seeds), so no earliness effect is demonstrated. Coverage is unambiguous: the full model finds 6-14 test campaigns per seed that no-format misses, against 0-1 the other way, and 0.76-0.80 of the ceiling against 0.58-0.60. No-format is also five times noisier across seeds (sd 0.052 against 0.009), which says it is leaning on weaker signal. Since the format-laundering link is a generator artefact, the no-format column is the one expected to transfer | implementation, stage 3.3 |
@@ -1214,7 +1287,8 @@ project-root/
       kaggle/
         run_on_kaggle.md          the exact notebook cells for running this repo on Kaggle
         kaggle_runner.py          verify / pipeline / features-smoke / evaluate-scorers /
-                                  oracle-diagnose / make-sample / train / evaluate
+                                  oracle-diagnose / make-sample / train / evaluate /
+                                  gpu-check
     tests/
       conftest.py                 src/ on sys.path + the `mini_dataset` synthetic-dataset fixture
       test_load_data.py           leading-zero banks, account IDs, timestamp parsing, cutoff
@@ -1366,6 +1440,16 @@ project-root/
   L = 48. `evaluate` exits 2 if no model is there and **exits 3 if a chosen
   tau lands on an edge of the model grid**, after writing every report. Full
   details in §5g of `run_on_kaggle.md`.
+- **Check a GPU notebook before stage 3.4 (on Kaggle, Accelerator: GPU):**
+  ```
+  cd backend
+  python scripts/kaggle/kaggle_runner.py gpu-check
+  ```
+  Reports the GPU, the host RAM, the torch/CUDA/PyG versions and which PyG
+  extensions install, then runs a GINEConv forward+backward at the real
+  feature widths. Writes `gpu_check.{md,json}` and exits 2 if there is no
+  usable GPU. This is the **only** command here that needs a GPU; §5h of
+  `run_on_kaggle.md` has the detail.
 - **Verify Phase 2 against the full data (on Kaggle):**
   ```
   cd backend
@@ -2358,6 +2442,41 @@ Tagged points in the repository, newest first. Check one out with
 | `v0.1-data-pipeline` | 2026-10-08 | Phase 2 complete, plus the stage 3.0 Kaggle runner. The research pipeline (campaign ground truth, splits, topology groups, institutions, visibility), the artifact export, the read-only FastAPI server, and the full React frontend — 69 backend tests and 48 frontend tests passing. **No models and no experiment results**: the four conditions are defined and the result schema is fixed, but nothing has been trained or run, and the full-data regression numbers are still unverified (that is what stage 3.0's Kaggle run is for). |
 
 ## Changelog
+
+- **2026-11-09 (stage 3.4.0)** — **The GPU environment check**, the first
+  piece of stage 3.4. No model, no data, no training.
+
+  `kaggle_runner.py gpu-check` reports the accelerator (name, memory, compute
+  capability, count), the host (Python, CPUs, total and available RAM) and
+  the torch / CUDA / cuDNN / PyG versions; installs `torch_geometric` and
+  attempts `pyg-lib`, `torch-scatter`, `torch-sparse` and `torch-cluster`
+  from the wheel index matching the image, reporting each as installed or
+  failed **without aborting** since none is required; then runs a GINEConv
+  forward and backward **at the real feature widths** — 3 layers, hidden 64,
+  54 edge features plus the direction flag, 6 node features, every edge also
+  inserted reversed — at 50k, 200k and 500k edges, reporting seconds and
+  peak GPU memory. An OOM is caught and reported as a result. Writes
+  `gpu_check.{md,json}` and exits 2 without a usable GPU.
+
+  Using the project's real widths rather than round numbers means the check
+  exercises the shape 3.4 will actually run, and the probe sizes are what
+  3.4.1 will size fanouts and chunking against — measurements rather than
+  guesses.
+
+  Verified locally on CPU end to end (torch 2.7.1, PyG 2.8.1): the stack
+  builds, forward and backward run at 20k and 50k edges, the report is
+  written, and it exits 2 for want of a GPU, which is the designed
+  behaviour.
+
+  *Carried forward, at the user's correction:* stage 3.3's 15.9 GB peak is
+  **XGBoost's pooled training matrix** and says nothing about the GNN, which
+  processes one window at a time under neighbour sampling. The GNN's memory
+  is measured in 3.4.0 and 3.4.3, not inherited. torch and torch_geometric
+  stay out of `requirements.txt` until 3.4.2, when the model exists.
+
+  Stage 3.4 now has its own README section with the frozen design and the
+  six sub-stages, and `run_on_kaggle.md` has §5h — the only section in that
+  document that needs **Accelerator: GPU**.
 
 - **2026-11-09** — **Stage 3.3 is complete**, and the oracle ceiling turns
   out not to be a ceiling.

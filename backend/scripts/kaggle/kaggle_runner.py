@@ -20,6 +20,8 @@ Subcommands:
                false-alarm clusters actually are
     make-sample
                build the 1% development sample for download
+    gpu-check  (stage 3.4.0) report the GPU, RAM and PyG install, and run a
+               GINEConv forward+backward at the real feature widths
     train      train the XGBoost baseline, one model per lookback
     evaluate   score the trained baseline: tau on validation, then the
                horizons, against the oracle ceiling
@@ -36,6 +38,9 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
+import platform
+import subprocess
 import os
 import shutil
 import subprocess
@@ -2509,6 +2514,486 @@ def command_evaluate(args: argparse.Namespace) -> int:
 
 
 # --------------------------------------------------------------------------
+# stage 3.4.0: does this notebook have what the GNN needs?
+# --------------------------------------------------------------------------
+
+#: The real feature widths, measured on the full data by `features-smoke`.
+#: The smoke test below uses them rather than round numbers, so what it
+#: exercises is the shape stage 3.4 will actually run.
+EDGE_DIMS = 54
+NODE_DIMS = 6
+#: Message passing goes both ways: every edge is also inserted reversed,
+#: with a flag column saying which direction it is. So the graph the model
+#: sees has 2E edges and EDGE_DIMS + 1 edge features.
+DIRECTION_FLAG_DIMS = 1
+HIDDEN = 64
+LAYERS = 3
+
+#: Optional PyG extensions. None of them is required - GINEConv and
+#: neighbour sampling both work without - but `pyg-lib` and `torch-sparse`
+#: make sampling considerably faster, so it is worth knowing which the
+#: image will take. Wheels are published per (torch, CUDA, Python) and
+#: often lag the newest Python, which is the thing this check exists to
+#: find out before a training session is spent discovering it.
+PYG_EXTENSIONS = ("pyg-lib", "torch-scatter", "torch-sparse", "torch-cluster")
+
+
+def _run_pip(packages: list[str], index_url: str | None = None) -> dict:
+    """One pip install attempt, reported rather than raised."""
+    command = [sys.executable, "-m", "pip", "install", "-q", *packages]
+    if index_url:
+        command += ["-f", index_url]
+    started = time.perf_counter()
+    try:
+        done = subprocess.run(
+            command, capture_output=True, text=True, timeout=1800, check=False
+        )
+    except Exception as exc:  # noqa: BLE001 - a failed install is a result
+        return {
+            "packages": packages, "ok": False, "seconds": 0.0,
+            "error": f"{type(exc).__name__}: {exc}",
+        }
+    output = (done.stdout or "") + (done.stderr or "")
+    tail = [line for line in output.strip().splitlines() if line.strip()][-4:]
+    return {
+        "packages": packages,
+        "index_url": index_url,
+        "ok": done.returncode == 0,
+        "returncode": done.returncode,
+        "seconds": round(time.perf_counter() - started, 1),
+        "output_tail": tail,
+    }
+
+
+def _system_memory_mb() -> dict:
+    """Total and available system RAM, by whatever means the image offers."""
+    try:
+        import psutil
+
+        memory = psutil.virtual_memory()
+        return {
+            "total_mb": round(memory.total / 1e6),
+            "available_mb": round(memory.available / 1e6),
+            "source": "psutil",
+        }
+    except Exception:  # noqa: BLE001
+        pass
+    try:  # Linux without psutil
+        values = {}
+        for line in Path("/proc/meminfo").read_text().splitlines():
+            key, _, rest = line.partition(":")
+            values[key] = int(rest.strip().split()[0]) / 1000  # kB -> MB
+        return {
+            "total_mb": round(values.get("MemTotal", 0)),
+            "available_mb": round(values.get("MemAvailable", 0)),
+            "source": "/proc/meminfo",
+        }
+    except Exception:  # noqa: BLE001
+        return {"total_mb": None, "available_mb": None, "source": "unavailable"}
+
+
+def _build_smoke_model(torch, GINEConv):
+    """The stage 3.4 architecture in miniature, at the real feature widths.
+
+    Three GINEConv layers at hidden 64 over a bidirectional graph, then an
+    edge readout MLP on [h_src, h_dst, edge_features]. No account identity
+    and no per-account embedding table: a node's only inputs are its six
+    window features, which is what keeps the model from learning who an
+    account is.
+    """
+    nn = torch.nn
+
+    class SmokeGNN(nn.Module):
+        def __init__(self):
+            super().__init__()
+            edge_dim = EDGE_DIMS + DIRECTION_FLAG_DIMS
+            self.convs = nn.ModuleList()
+            in_dim = NODE_DIMS
+            for _ in range(LAYERS):
+                self.convs.append(
+                    GINEConv(
+                        nn.Sequential(
+                            nn.Linear(in_dim, HIDDEN),
+                            nn.ReLU(),
+                            nn.Linear(HIDDEN, HIDDEN),
+                        ),
+                        edge_dim=edge_dim,
+                    )
+                )
+                in_dim = HIDDEN
+            self.readout = nn.Sequential(
+                nn.Linear(2 * HIDDEN + EDGE_DIMS, HIDDEN),
+                nn.ReLU(),
+                nn.Linear(HIDDEN, 1),
+            )
+
+        def forward(self, x, edge_index, edge_attr, target_edge_index, target_attr):
+            for conv in self.convs:
+                x = conv(x, edge_index, edge_attr).relu()
+            src, dst = target_edge_index
+            return self.readout(
+                torch.cat([x[src], x[dst], target_attr], dim=1)
+            ).squeeze(-1)
+
+    return SmokeGNN()
+
+
+def _smoke_graph(torch, n_nodes: int, n_edges: int, device, seed: int = 0):
+    """A synthetic window: random edges at the real feature widths, with
+    every edge also present reversed and flagged."""
+    generator = torch.Generator(device="cpu").manual_seed(seed)
+    edge_index = torch.randint(
+        0, n_nodes, (2, n_edges), generator=generator, dtype=torch.long
+    )
+    edge_attr = torch.randn(n_edges, EDGE_DIMS, generator=generator)
+    x = torch.randn(n_nodes, NODE_DIMS, generator=generator)
+    labels = (torch.rand(n_edges, generator=generator) < 0.001).float()
+
+    reversed_index = edge_index.flip(0)
+    both_index = torch.cat([edge_index, reversed_index], dim=1)
+    flag = torch.cat(
+        [torch.zeros(n_edges, 1), torch.ones(n_edges, 1)], dim=0
+    )
+    both_attr = torch.cat([torch.cat([edge_attr, edge_attr], dim=0), flag], dim=1)
+
+    return (
+        x.to(device), both_index.to(device), both_attr.to(device),
+        edge_index.to(device), edge_attr.to(device), labels.to(device),
+    )
+
+
+def command_gpu_check(args: argparse.Namespace) -> int:
+    """Stage 3.4.0: can this notebook train the GNN at all?
+
+    No model, no data, no training - this answers the questions that would
+    otherwise be discovered halfway through a GPU session: what the
+    accelerator is, how much memory it and the host have, which of PyG's
+    pieces install on this image's Python, and whether a GINEConv forward
+    and backward actually runs on the device at the widths stage 3.4 uses.
+
+    Exits 2 if there is no usable CUDA GPU, after reporting everything it
+    could still determine.
+    """
+    out = Path(args.out)
+    out.mkdir(parents=True, exist_ok=True)
+    report: dict = {"stage": "3.4.0", "install_attempted": not args.no_install}
+
+    print("=" * 78)
+    print("STAGE 3.4.0 - GPU ENVIRONMENT CHECK")
+    print("=" * 78)
+
+    report["python"] = {
+        "version": sys.version.split()[0],
+        "executable": sys.executable,
+        "platform": platform.platform(),
+        "processor_count": os.cpu_count(),
+    }
+    report["system_memory"] = _system_memory_mb()
+    print(f"\nPython {report['python']['version']} on {report['python']['platform']}")
+    print(f"  CPUs: {report['python']['processor_count']}")
+    memory = report["system_memory"]
+    if memory["total_mb"]:
+        print(
+            f"  System RAM: {memory['total_mb'] / 1000:,.1f} GB total, "
+            f"{memory['available_mb'] / 1000:,.1f} GB available "
+            f"({memory['source']})"
+        )
+    else:
+        print("  System RAM: could not be determined")
+
+    # --- torch ----------------------------------------------------------
+    try:
+        import torch
+    except ImportError as exc:
+        print(f"\ntorch is not installed: {exc}", file=sys.stderr)
+        report["torch"] = {"installed": False, "error": str(exc)}
+        (out / "gpu_check.json").write_text(
+            json.dumps(report, indent=2, default=str), encoding="utf-8"
+        )
+        return 2
+
+    cuda_available = torch.cuda.is_available()
+    report["torch"] = {
+        "installed": True,
+        "version": torch.__version__,
+        "cuda_version": torch.version.cuda,
+        "cudnn_version": (
+            torch.backends.cudnn.version() if torch.backends.cudnn.is_available()
+            else None
+        ),
+        "cuda_available": cuda_available,
+        "device_count": torch.cuda.device_count() if cuda_available else 0,
+    }
+    print(f"\ntorch {torch.__version__}, CUDA {torch.version.cuda}")
+    print(f"  cuda available: {cuda_available}")
+
+    devices = []
+    if cuda_available:
+        for index in range(torch.cuda.device_count()):
+            properties = torch.cuda.get_device_properties(index)
+            free, total = torch.cuda.mem_get_info(index)
+            devices.append(
+                {
+                    "index": index,
+                    "name": properties.name,
+                    "total_mb": round(properties.total_memory / 1e6),
+                    "free_mb": round(free / 1e6),
+                    "capability": f"{properties.major}.{properties.minor}",
+                    "multiprocessors": properties.multi_processor_count,
+                }
+            )
+            print(
+                f"  GPU {index}: {properties.name}, "
+                f"{properties.total_memory / 1e9:,.1f} GB "
+                f"({free / 1e9:,.1f} GB free), "
+                f"capability {properties.major}.{properties.minor}"
+            )
+    else:
+        print("  NO GPU VISIBLE - set the notebook accelerator and re-run.")
+    report["devices"] = devices
+
+    # --- torch_geometric and its optional extensions ---------------------
+    installs: list[dict] = []
+    try:
+        import torch_geometric  # noqa: F401
+
+        print(f"\ntorch_geometric {torch_geometric.__version__} already present")
+    except ImportError:
+        if args.no_install:
+            print("\ntorch_geometric missing and --no-install was passed")
+        else:
+            with step("install torch_geometric"):
+                installs.append(_run_pip(["torch_geometric"]))
+
+    pyg_version = None
+    try:
+        import torch_geometric
+
+        pyg_version = torch_geometric.__version__
+    except ImportError as exc:
+        print(f"torch_geometric is still unavailable: {exc}", file=sys.stderr)
+    report["torch_geometric"] = {"version": pyg_version}
+
+    # The extensions are published per (torch, CUDA, Python). Wheels often
+    # lag the newest Python, so each is attempted separately and a failure
+    # is recorded rather than fatal: none of them is required.
+    extension_status: dict[str, dict] = {}
+    if cuda_available and not args.no_install:
+        torch_tag = torch.__version__.split("+")[0]
+        cuda_tag = "cu" + (torch.version.cuda or "").replace(".", "")
+        index_url = f"https://data.pyg.org/whl/torch-{torch_tag}+{cuda_tag}.html"
+        report["pyg_wheel_index"] = index_url
+        print(f"\noptional PyG extensions, from {index_url}")
+        for package in PYG_EXTENSIONS:
+            with step(f"install {package}"):
+                result = _run_pip([package], index_url=index_url)
+            installs.append(result)
+            print(f"  {package:<16} {'installed' if result['ok'] else 'FAILED'}")
+            if not result["ok"]:
+                for line in result.get("output_tail", [])[-2:]:
+                    print(f"      {line[:110]}")
+
+    for package in PYG_EXTENSIONS:
+        module = package.replace("-", "_")
+        try:
+            imported = __import__(module)
+            extension_status[package] = {
+                "importable": True,
+                "version": getattr(imported, "__version__", "unknown"),
+            }
+        except Exception as exc:  # noqa: BLE001
+            extension_status[package] = {
+                "importable": False, "error": f"{type(exc).__name__}: {exc}"
+            }
+    report["extensions"] = extension_status
+    report["installs"] = installs
+
+    print("\nwhat is importable now:")
+    print(f"  {'torch_geometric':<16} {pyg_version or 'NOT AVAILABLE'}")
+    for package, status in extension_status.items():
+        print(
+            f"  {package:<16} "
+            + (status["version"] if status["importable"] else "not available")
+        )
+    print(
+        "  (none of the extensions is required: GINEConv and neighbour"
+    )
+    print(
+        "  sampling both work without them, they are only faster)"
+    )
+
+    if pyg_version is None:
+        print("\nCannot run the smoke test without torch_geometric.", file=sys.stderr)
+        (out / "gpu_check.json").write_text(
+            json.dumps(report, indent=2, default=str), encoding="utf-8"
+        )
+        return 2
+
+    # --- the smoke test ---------------------------------------------------
+    from torch_geometric.nn import GINEConv
+
+    device = torch.device("cuda" if cuda_available else "cpu")
+    sizes = [int(v) for v in args.probe_edges.split(",") if v.strip()]
+    probes: list[dict] = []
+
+    print(f"\nGINEConv forward+backward on {device}")
+    print(
+        f"  {LAYERS} layers, hidden {HIDDEN}, edge_dim "
+        f"{EDGE_DIMS}+{DIRECTION_FLAG_DIMS} (direction flag), node dim {NODE_DIMS}"
+    )
+    print(
+        f"  {'edges':>10} {'nodes':>10} {'fwd+bwd s':>11} "
+        f"{'peak GPU MB':>13} {'result':>10}"
+    )
+    for n_edges in sizes:
+        n_nodes = max(16, n_edges // 2)
+        try:
+            if cuda_available:
+                torch.cuda.empty_cache()
+                torch.cuda.reset_peak_memory_stats()
+            model = _build_smoke_model(torch, GINEConv).to(device)
+            optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
+            x, both_index, both_attr, target_index, target_attr, labels = _smoke_graph(
+                torch, n_nodes, n_edges, device
+            )
+            if cuda_available:
+                torch.cuda.synchronize()
+            started = time.perf_counter()
+            scores = model(x, both_index, both_attr, target_index, target_attr)
+            loss = torch.nn.functional.binary_cross_entropy_with_logits(
+                scores, labels
+            )
+            loss.backward()
+            optimizer.step()
+            if cuda_available:
+                torch.cuda.synchronize()
+            seconds = time.perf_counter() - started
+            peak = (
+                torch.cuda.max_memory_allocated() / 1e6 if cuda_available else None
+            )
+            probes.append(
+                {
+                    "n_edges": n_edges, "n_nodes": n_nodes,
+                    "seconds": round(seconds, 3),
+                    "peak_gpu_mb": round(peak, 1) if peak else None,
+                    "loss": round(float(loss.detach()), 6),
+                    "ok": True,
+                }
+            )
+            print(
+                f"  {n_edges:>10,} {n_nodes:>10,} {seconds:>11.3f} "
+                f"{(f'{peak:,.0f}' if peak else '-'):>13} {'ok':>10}"
+            )
+        except Exception as exc:  # noqa: BLE001 - OOM is a result, not a crash
+            probes.append(
+                {
+                    "n_edges": n_edges, "n_nodes": n_nodes, "ok": False,
+                    "error": f"{type(exc).__name__}: {str(exc)[:200]}",
+                }
+            )
+            print(f"  {n_edges:>10,} {n_nodes:>10,} {'FAILED':>11} {'':>13}")
+            print(f"      {type(exc).__name__}: {str(exc)[:110]}")
+            break
+    report["smoke"] = {
+        "device": str(device),
+        "layers": LAYERS, "hidden": HIDDEN,
+        "edge_dims": EDGE_DIMS, "node_dims": NODE_DIMS,
+        "probes": probes,
+    }
+
+    passed = bool(probes) and all(p.get("ok") for p in probes)
+    report["ok"] = bool(cuda_available and passed)
+
+    # --- write it out ------------------------------------------------------
+    (out / "gpu_check.json").write_text(
+        json.dumps(report, indent=2, default=str), encoding="utf-8"
+    )
+    lines = [
+        "# Stage 3.4.0: GPU environment check",
+        "",
+        "No model and no data - this records what the notebook is, so stage",
+        "3.4's design is sized against measurements rather than guesses.",
+        "",
+        "## Environment",
+        "",
+        f"- Python {report['python']['version']}, {report['python']['processor_count']} CPUs",
+        f"- System RAM: {memory['total_mb']} MB total, {memory['available_mb']} MB available",
+        f"- torch {report['torch']['version']}, CUDA {report['torch']['cuda_version']}, "
+        f"cuDNN {report['torch']['cudnn_version']}",
+        f"- torch_geometric {pyg_version}",
+        "",
+        "## GPU",
+        "",
+    ]
+    if devices:
+        lines += [
+            "| # | Name | Total MB | Free MB | Capability | SMs |",
+            "|---|---|---:|---:|---|---:|",
+        ] + [
+            f"| {d['index']} | {d['name']} | {d['total_mb']:,} | {d['free_mb']:,} "
+            f"| {d['capability']} | {d['multiprocessors']} |"
+            for d in devices
+        ]
+    else:
+        lines.append("**No CUDA device visible.**")
+    lines += [
+        "",
+        "## PyG extensions",
+        "",
+        "None is required - GINEConv and neighbour sampling work without",
+        "them; they are faster when present.",
+        "",
+        "| Package | Importable | Version / error |",
+        "|---|---|---|",
+    ] + [
+        f"| `{package}` | {'yes' if st['importable'] else 'no'} | "
+        f"{st.get('version', st.get('error', ''))[:90]} |"
+        for package, st in extension_status.items()
+    ] + [
+        "",
+        "## GINEConv smoke test",
+        "",
+        f"{LAYERS} layers, hidden {HIDDEN}, edge_dim {EDGE_DIMS}+"
+        f"{DIRECTION_FLAG_DIMS}, node dim {NODE_DIMS}, on {device}. Every edge",
+        "is also inserted reversed with a direction flag, so the graph has 2E",
+        "edges - the same construction stage 3.4 will use.",
+        "",
+        "| Edges | Nodes | fwd+bwd s | Peak GPU MB | Result |",
+        "|---:|---:|---:|---:|---|",
+    ] + [
+        f"| {p['n_edges']:,} | {p['n_nodes']:,} | "
+        f"{p.get('seconds', '-')} | {p.get('peak_gpu_mb') or '-'} | "
+        f"{'ok' if p.get('ok') else p.get('error', 'failed')[:60]} |"
+        for p in probes
+    ] + [
+        "",
+        "## Timing",
+        "",
+        steps_markdown(),
+        "",
+    ]
+    (out / "gpu_check.md").write_text(_NEWLINE.join(lines), encoding="utf-8")
+    print(f"\nWrote {out / 'gpu_check.md'} (+ .json)")
+
+    if not cuda_available:
+        print(
+            "\nNO USABLE GPU: set Accelerator to a GPU in the notebook settings "
+            "and re-run.",
+            file=sys.stderr,
+        )
+        return 2
+    if not passed:
+        print(
+            "\nThe smoke test did not pass; stage 3.4 cannot proceed on this "
+            "image.",
+            file=sys.stderr,
+        )
+        return 2
+    print("\nReady for stage 3.4.")
+    return 0
+
+
+# --------------------------------------------------------------------------
 # not yet implemented
 # --------------------------------------------------------------------------
 
@@ -2532,6 +3017,7 @@ def main() -> int:
         choices=[
             "verify", "pipeline", "features-smoke", "evaluate-scorers",
             "oracle-diagnose", "make-sample", "train", "evaluate",
+            "gpu-check",
         ],
     )
     parser.add_argument(
@@ -2558,6 +3044,17 @@ def main() -> int:
             "comma-separated taus to sweep on validation (default: "
             "DEFAULT_TAU_GRID for the sanity scorers, MODEL_TAU_GRID for "
             "models)"
+        ),
+    )
+    parser.add_argument(
+        "--no-install", action="store_true",
+        help="gpu-check: report the environment without pip installing anything",
+    )
+    parser.add_argument(
+        "--probe-edges", default="50000,200000,500000",
+        help=(
+            "gpu-check: edge counts to run the GINEConv smoke test at "
+            "(default: 50000,200000,500000)"
         ),
     )
     parser.add_argument(
@@ -2590,6 +3087,7 @@ def main() -> int:
         "evaluate-scorers": command_evaluate_scorers,
         "oracle-diagnose": command_oracle_diagnose,
         "make-sample": command_make_sample,
+        "gpu-check": command_gpu_check,
         "train": command_train,
         "evaluate": command_evaluate,
     }

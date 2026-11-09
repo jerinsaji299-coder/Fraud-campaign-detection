@@ -543,15 +543,74 @@ from a saved notebook output instead of repeating `train`.
 `evaluate_baseline_tau_curve.csv` (which carries the per-tau cost). Also
 say whether `evaluate` exited 0 or 3.
 
+## 5h. Stage 3.4.0: GPU environment check
+
+**This is the first step that needs a GPU.** In the notebook settings set
+**Accelerator: GPU** (T4 x2 or P100 - either is fine for this check) before
+running anything below. Everything in 5a-5g runs on CPU and should stay
+there; GPU quota is weekly and limited.
+
+```python
+!cd /kaggle/temp/repo/backend && python scripts/kaggle/kaggle_runner.py gpu-check
+```
+
+No model, no data, no training. It answers the questions that would
+otherwise be discovered halfway through a training session:
+
+- **What the accelerator is**: name, total and free memory, compute
+  capability, and how many there are.
+- **What the host is**: Python version, CPU count, total and available
+  system RAM.
+- **What installs**: `torch_geometric` first, then each optional extension
+  (`pyg-lib`, `torch-scatter`, `torch-sparse`, `torch-cluster`) from the
+  PyG wheel index matching this image's torch and CUDA. Each is attempted
+  separately and reported as installed or failed **without aborting the
+  run** - none of them is required, since GINEConv and neighbour sampling
+  both work without them. They are faster when present, and their wheels
+  often lag the newest Python, which is exactly what this check is for.
+- **Whether it actually runs**: a GINEConv forward and backward at the real
+  feature widths - 3 layers, hidden 64, 54 edge features plus a direction
+  flag, 6 node features, every edge also inserted reversed - at 50k, 200k
+  and 500k edges, reporting seconds and peak GPU memory for each. An
+  out-of-memory error is caught and reported as a result rather than a
+  crash, and the probe stops at the first size that fails.
+
+It writes `gpu_check.{md,json}` and **exits 2** if there is no usable CUDA
+device or the smoke test does not pass - after reporting everything it
+could still determine, so a failed check is still informative.
+
+`--no-install` reports the environment without pip installing anything.
+`--probe-edges` changes the smoke-test sizes, e.g. `--probe-edges
+50000,200000,500000,1000000` to push further up.
+
+**What to send back:** `gpu_check.md`, and whether the command exited 0.
+The numbers feed stage 3.4.1, where the fanouts, batch size and chunking
+are sized against them rather than guessed.
+
+**A note on memory.** Stage 3.3's 15.9 GB peak is XGBoost's pooled
+*training matrix* - 9.1M rows x 66 features held at once. It says nothing
+about the GNN, which processes one window at a time under neighbour
+sampling and never materialises that pool. The GNN's memory is measured
+here and in 3.4.3, not inferred from 3.3.
+
 ## 6. Later stages
 
 `train` and `evaluate` are implemented and are section 5g above: the stage
 3.3 XGBoost baseline, which runs on **CPU** - see 5g for why, and for the
 measured runtime and memory.
 
-Stage 3.4's GNN is the first thing here that will genuinely need
-**Accelerator: GPU**, and the first command not yet written. Its training
-regime is already frozen (neighbour sampling at both candidate lookbacks,
-so the lookback comparison is not confounded by the training method; see
-the README decision log), and `features_smoke` has measured the window
-sizes it has to fit. Everything in this document until then runs on CPU.
+Stage 3.4's GNN needs **Accelerator: GPU**. Its environment check is
+section 5h above and is runnable now; the model itself is not yet written.
+The training regime is frozen (neighbour sampling at both candidate
+lookbacks, so the lookback comparison is not confounded by the training
+method; see the README decision log), and `features_smoke` has measured
+the window sizes it has to fit.
+
+Stage 3.4 runs in sub-stages, each stopping for approval: **3.4.0** this
+environment check, **3.4.1** the design proposal sized against it,
+**3.4.2** implementation with tests and a local CPU smoke run, **3.4.3** a
+one-seed Kaggle quick check, **3.4.4** the full-run plan against the
+9-hour session and weekly GPU quota, and **3.4.5** the Phase 3 gate report
+comparing the GNN with XGBoost by paired comparisons only.
+
+Everything in this document other than 5h runs on CPU.
