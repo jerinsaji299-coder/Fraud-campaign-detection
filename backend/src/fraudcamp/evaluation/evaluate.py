@@ -251,12 +251,24 @@ def recall_relative_to_ceiling(
 ) -> float | None:
     """A model's recall as a fraction of the oracle's.
 
-    The oracle is the best any detector can do under the frozen matching
-    rule, and on the full data it reaches 0.821 (L = 24) / 0.893 (L = 48) on
-    test — not 1.0. Reporting a model's recall against 1.0 therefore
-    understates it by counting campaigns no detector could have found. This
+    On the full data the oracle reaches 0.821 (L = 24) / 0.893 (L = 48) on
+    test — not 1.0 — so reporting a model's recall against 1.0 understates
+    it by counting campaigns the laundering edges alone cannot yield. This
     is the honest denominator; `campaign_recall` against `all` is kept
     beside it so the absolute number stays visible.
+
+    **The ratio can exceed 1, and the measure must not assume otherwise.**
+    The oracle keeps exactly the laundering edges, so it is the best
+    achievable *from those edges*, not the best achievable. A model keeps
+    whatever scores above tau — neither a subset nor a superset — so it can
+    detect a campaign the oracle misses. Measured: at L = 48 on stress,
+    `xgboost_centralized` detects campaign 295 in all five seeds, which the
+    oracle declines there because keeping *every* laundering edge merges it
+    into a 13-account cluster at purity 0.46.
+
+    On the `oracle_reachable` subset the ratio is bounded by 1 by
+    construction, since only reachable campaigns are counted. On `all`,
+    `fully_observed` and `no_shared_accounts` it is not bounded.
     """
     if recall is None or oracle_recall is None or oracle_recall == 0:
         return None

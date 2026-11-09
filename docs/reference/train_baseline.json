@@ -1,0 +1,1391 @@
+{
+  "params": {
+    "n_estimators": 300,
+    "max_depth": 6,
+    "learning_rate": 0.1,
+    "subsample": 0.8,
+    "colsample_bytree": 0.8,
+    "min_child_weight": 1.0,
+    "reg_lambda": 1.0,
+    "tree_method": "hist",
+    "max_bin": 256,
+    "seed": 0
+  },
+  "variants": [
+    "xgboost_centralized",
+    "xgboost_centralized_no_format"
+  ],
+  "lookbacks": [
+    24,
+    48
+  ],
+  "seeds": [
+    0,
+    1,
+    2,
+    3,
+    4
+  ],
+  "models": [
+    {
+      "variant": "xgboost_centralized",
+      "lookback_h": 24,
+      "seed": 0,
+      "model_dir": "/kaggle/working/models/xgboost_centralized_L24_s0",
+      "n_features": 66,
+      "n_windows": 13,
+      "detection_times": [
+        "2022-09-02 00:00:00",
+        "2022-09-02 06:00:00",
+        "2022-09-02 12:00:00",
+        "2022-09-02 18:00:00",
+        "2022-09-03 00:00:00",
+        "2022-09-03 06:00:00",
+        "2022-09-03 12:00:00",
+        "2022-09-03 18:00:00",
+        "2022-09-04 00:00:00",
+        "2022-09-04 06:00:00",
+        "2022-09-04 12:00:00",
+        "2022-09-04 18:00:00",
+        "2022-09-05 00:00:00"
+      ],
+      "n_rows": 6710488,
+      "n_positive": 5033,
+      "positive_rate": 0.00075,
+      "matrix_memory_mb": 1852.1,
+      "xgboost_version": "3.4.1",
+      "n_dropped_columns": 0
+    },
+    {
+      "variant": "xgboost_centralized",
+      "lookback_h": 24,
+      "seed": 1,
+      "model_dir": "/kaggle/working/models/xgboost_centralized_L24_s1",
+      "n_features": 66,
+      "n_windows": 13,
+      "detection_times": [
+        "2022-09-02 00:00:00",
+        "2022-09-02 06:00:00",
+        "2022-09-02 12:00:00",
+        "2022-09-02 18:00:00",
+        "2022-09-03 00:00:00",
+        "2022-09-03 06:00:00",
+        "2022-09-03 12:00:00",
+        "2022-09-03 18:00:00",
+        "2022-09-04 00:00:00",
+        "2022-09-04 06:00:00",
+        "2022-09-04 12:00:00",
+        "2022-09-04 18:00:00",
+        "2022-09-05 00:00:00"
+      ],
+      "n_rows": 6710488,
+      "n_positive": 5033,
+      "positive_rate": 0.00075,
+      "matrix_memory_mb": 1852.1,
+      "xgboost_version": "3.4.1",
+      "n_dropped_columns": 0
+    },
+    {
+      "variant": "xgboost_centralized",
+      "lookback_h": 24,
+      "seed": 2,
+      "model_dir": "/kaggle/working/models/xgboost_centralized_L24_s2",
+      "n_features": 66,
+      "n_windows": 13,
+      "detection_times": [
+        "2022-09-02 00:00:00",
+        "2022-09-02 06:00:00",
+        "2022-09-02 12:00:00",
+        "2022-09-02 18:00:00",
+        "2022-09-03 00:00:00",
+        "2022-09-03 06:00:00",
+        "2022-09-03 12:00:00",
+        "2022-09-03 18:00:00",
+        "2022-09-04 00:00:00",
+        "2022-09-04 06:00:00",
+        "2022-09-04 12:00:00",
+        "2022-09-04 18:00:00",
+        "2022-09-05 00:00:00"
+      ],
+      "n_rows": 6710488,
+      "n_positive": 5033,
+      "positive_rate": 0.00075,
+      "matrix_memory_mb": 1852.1,
+      "xgboost_version": "3.4.1",
+      "n_dropped_columns": 0
+    },
+    {
+      "variant": "xgboost_centralized",
+      "lookback_h": 24,
+      "seed": 3,
+      "model_dir": "/kaggle/working/models/xgboost_centralized_L24_s3",
+      "n_features": 66,
+      "n_windows": 13,
+      "detection_times": [
+        "2022-09-02 00:00:00",
+        "2022-09-02 06:00:00",
+        "2022-09-02 12:00:00",
+        "2022-09-02 18:00:00",
+        "2022-09-03 00:00:00",
+        "2022-09-03 06:00:00",
+        "2022-09-03 12:00:00",
+        "2022-09-03 18:00:00",
+        "2022-09-04 00:00:00",
+        "2022-09-04 06:00:00",
+        "2022-09-04 12:00:00",
+        "2022-09-04 18:00:00",
+        "2022-09-05 00:00:00"
+      ],
+      "n_rows": 6710488,
+      "n_positive": 5033,
+      "positive_rate": 0.00075,
+      "matrix_memory_mb": 1852.1,
+      "xgboost_version": "3.4.1",
+      "n_dropped_columns": 0
+    },
+    {
+      "variant": "xgboost_centralized",
+      "lookback_h": 24,
+      "seed": 4,
+      "model_dir": "/kaggle/working/models/xgboost_centralized_L24_s4",
+      "n_features": 66,
+      "n_windows": 13,
+      "detection_times": [
+        "2022-09-02 00:00:00",
+        "2022-09-02 06:00:00",
+        "2022-09-02 12:00:00",
+        "2022-09-02 18:00:00",
+        "2022-09-03 00:00:00",
+        "2022-09-03 06:00:00",
+        "2022-09-03 12:00:00",
+        "2022-09-03 18:00:00",
+        "2022-09-04 00:00:00",
+        "2022-09-04 06:00:00",
+        "2022-09-04 12:00:00",
+        "2022-09-04 18:00:00",
+        "2022-09-05 00:00:00"
+      ],
+      "n_rows": 6710488,
+      "n_positive": 5033,
+      "positive_rate": 0.00075,
+      "matrix_memory_mb": 1852.1,
+      "xgboost_version": "3.4.1",
+      "n_dropped_columns": 0
+    },
+    {
+      "variant": "xgboost_centralized_no_format",
+      "lookback_h": 24,
+      "seed": 0,
+      "model_dir": "/kaggle/working/models/xgboost_centralized_no_format_L24_s0",
+      "n_features": 58,
+      "n_windows": 13,
+      "detection_times": [
+        "2022-09-02 00:00:00",
+        "2022-09-02 06:00:00",
+        "2022-09-02 12:00:00",
+        "2022-09-02 18:00:00",
+        "2022-09-03 00:00:00",
+        "2022-09-03 06:00:00",
+        "2022-09-03 12:00:00",
+        "2022-09-03 18:00:00",
+        "2022-09-04 00:00:00",
+        "2022-09-04 06:00:00",
+        "2022-09-04 12:00:00",
+        "2022-09-04 18:00:00",
+        "2022-09-05 00:00:00"
+      ],
+      "n_rows": 6710488,
+      "n_positive": 5033,
+      "positive_rate": 0.00075,
+      "matrix_memory_mb": 1637.4,
+      "xgboost_version": "3.4.1",
+      "n_dropped_columns": 8
+    },
+    {
+      "variant": "xgboost_centralized_no_format",
+      "lookback_h": 24,
+      "seed": 1,
+      "model_dir": "/kaggle/working/models/xgboost_centralized_no_format_L24_s1",
+      "n_features": 58,
+      "n_windows": 13,
+      "detection_times": [
+        "2022-09-02 00:00:00",
+        "2022-09-02 06:00:00",
+        "2022-09-02 12:00:00",
+        "2022-09-02 18:00:00",
+        "2022-09-03 00:00:00",
+        "2022-09-03 06:00:00",
+        "2022-09-03 12:00:00",
+        "2022-09-03 18:00:00",
+        "2022-09-04 00:00:00",
+        "2022-09-04 06:00:00",
+        "2022-09-04 12:00:00",
+        "2022-09-04 18:00:00",
+        "2022-09-05 00:00:00"
+      ],
+      "n_rows": 6710488,
+      "n_positive": 5033,
+      "positive_rate": 0.00075,
+      "matrix_memory_mb": 1637.4,
+      "xgboost_version": "3.4.1",
+      "n_dropped_columns": 8
+    },
+    {
+      "variant": "xgboost_centralized_no_format",
+      "lookback_h": 24,
+      "seed": 2,
+      "model_dir": "/kaggle/working/models/xgboost_centralized_no_format_L24_s2",
+      "n_features": 58,
+      "n_windows": 13,
+      "detection_times": [
+        "2022-09-02 00:00:00",
+        "2022-09-02 06:00:00",
+        "2022-09-02 12:00:00",
+        "2022-09-02 18:00:00",
+        "2022-09-03 00:00:00",
+        "2022-09-03 06:00:00",
+        "2022-09-03 12:00:00",
+        "2022-09-03 18:00:00",
+        "2022-09-04 00:00:00",
+        "2022-09-04 06:00:00",
+        "2022-09-04 12:00:00",
+        "2022-09-04 18:00:00",
+        "2022-09-05 00:00:00"
+      ],
+      "n_rows": 6710488,
+      "n_positive": 5033,
+      "positive_rate": 0.00075,
+      "matrix_memory_mb": 1637.4,
+      "xgboost_version": "3.4.1",
+      "n_dropped_columns": 8
+    },
+    {
+      "variant": "xgboost_centralized_no_format",
+      "lookback_h": 24,
+      "seed": 3,
+      "model_dir": "/kaggle/working/models/xgboost_centralized_no_format_L24_s3",
+      "n_features": 58,
+      "n_windows": 13,
+      "detection_times": [
+        "2022-09-02 00:00:00",
+        "2022-09-02 06:00:00",
+        "2022-09-02 12:00:00",
+        "2022-09-02 18:00:00",
+        "2022-09-03 00:00:00",
+        "2022-09-03 06:00:00",
+        "2022-09-03 12:00:00",
+        "2022-09-03 18:00:00",
+        "2022-09-04 00:00:00",
+        "2022-09-04 06:00:00",
+        "2022-09-04 12:00:00",
+        "2022-09-04 18:00:00",
+        "2022-09-05 00:00:00"
+      ],
+      "n_rows": 6710488,
+      "n_positive": 5033,
+      "positive_rate": 0.00075,
+      "matrix_memory_mb": 1637.4,
+      "xgboost_version": "3.4.1",
+      "n_dropped_columns": 8
+    },
+    {
+      "variant": "xgboost_centralized_no_format",
+      "lookback_h": 24,
+      "seed": 4,
+      "model_dir": "/kaggle/working/models/xgboost_centralized_no_format_L24_s4",
+      "n_features": 58,
+      "n_windows": 13,
+      "detection_times": [
+        "2022-09-02 00:00:00",
+        "2022-09-02 06:00:00",
+        "2022-09-02 12:00:00",
+        "2022-09-02 18:00:00",
+        "2022-09-03 00:00:00",
+        "2022-09-03 06:00:00",
+        "2022-09-03 12:00:00",
+        "2022-09-03 18:00:00",
+        "2022-09-04 00:00:00",
+        "2022-09-04 06:00:00",
+        "2022-09-04 12:00:00",
+        "2022-09-04 18:00:00",
+        "2022-09-05 00:00:00"
+      ],
+      "n_rows": 6710488,
+      "n_positive": 5033,
+      "positive_rate": 0.00075,
+      "matrix_memory_mb": 1637.4,
+      "xgboost_version": "3.4.1",
+      "n_dropped_columns": 8
+    },
+    {
+      "variant": "xgboost_centralized",
+      "lookback_h": 48,
+      "seed": 0,
+      "model_dir": "/kaggle/working/models/xgboost_centralized_L48_s0",
+      "n_features": 66,
+      "n_windows": 9,
+      "detection_times": [
+        "2022-09-03 00:00:00",
+        "2022-09-03 06:00:00",
+        "2022-09-03 12:00:00",
+        "2022-09-03 18:00:00",
+        "2022-09-04 00:00:00",
+        "2022-09-04 06:00:00",
+        "2022-09-04 12:00:00",
+        "2022-09-04 18:00:00",
+        "2022-09-05 00:00:00"
+      ],
+      "n_rows": 9111385,
+      "n_positive": 7070,
+      "positive_rate": 0.000776,
+      "matrix_memory_mb": 2514.7,
+      "xgboost_version": "3.4.1",
+      "n_dropped_columns": 0
+    },
+    {
+      "variant": "xgboost_centralized",
+      "lookback_h": 48,
+      "seed": 1,
+      "model_dir": "/kaggle/working/models/xgboost_centralized_L48_s1",
+      "n_features": 66,
+      "n_windows": 9,
+      "detection_times": [
+        "2022-09-03 00:00:00",
+        "2022-09-03 06:00:00",
+        "2022-09-03 12:00:00",
+        "2022-09-03 18:00:00",
+        "2022-09-04 00:00:00",
+        "2022-09-04 06:00:00",
+        "2022-09-04 12:00:00",
+        "2022-09-04 18:00:00",
+        "2022-09-05 00:00:00"
+      ],
+      "n_rows": 9111385,
+      "n_positive": 7070,
+      "positive_rate": 0.000776,
+      "matrix_memory_mb": 2514.7,
+      "xgboost_version": "3.4.1",
+      "n_dropped_columns": 0
+    },
+    {
+      "variant": "xgboost_centralized",
+      "lookback_h": 48,
+      "seed": 2,
+      "model_dir": "/kaggle/working/models/xgboost_centralized_L48_s2",
+      "n_features": 66,
+      "n_windows": 9,
+      "detection_times": [
+        "2022-09-03 00:00:00",
+        "2022-09-03 06:00:00",
+        "2022-09-03 12:00:00",
+        "2022-09-03 18:00:00",
+        "2022-09-04 00:00:00",
+        "2022-09-04 06:00:00",
+        "2022-09-04 12:00:00",
+        "2022-09-04 18:00:00",
+        "2022-09-05 00:00:00"
+      ],
+      "n_rows": 9111385,
+      "n_positive": 7070,
+      "positive_rate": 0.000776,
+      "matrix_memory_mb": 2514.7,
+      "xgboost_version": "3.4.1",
+      "n_dropped_columns": 0
+    },
+    {
+      "variant": "xgboost_centralized",
+      "lookback_h": 48,
+      "seed": 3,
+      "model_dir": "/kaggle/working/models/xgboost_centralized_L48_s3",
+      "n_features": 66,
+      "n_windows": 9,
+      "detection_times": [
+        "2022-09-03 00:00:00",
+        "2022-09-03 06:00:00",
+        "2022-09-03 12:00:00",
+        "2022-09-03 18:00:00",
+        "2022-09-04 00:00:00",
+        "2022-09-04 06:00:00",
+        "2022-09-04 12:00:00",
+        "2022-09-04 18:00:00",
+        "2022-09-05 00:00:00"
+      ],
+      "n_rows": 9111385,
+      "n_positive": 7070,
+      "positive_rate": 0.000776,
+      "matrix_memory_mb": 2514.7,
+      "xgboost_version": "3.4.1",
+      "n_dropped_columns": 0
+    },
+    {
+      "variant": "xgboost_centralized",
+      "lookback_h": 48,
+      "seed": 4,
+      "model_dir": "/kaggle/working/models/xgboost_centralized_L48_s4",
+      "n_features": 66,
+      "n_windows": 9,
+      "detection_times": [
+        "2022-09-03 00:00:00",
+        "2022-09-03 06:00:00",
+        "2022-09-03 12:00:00",
+        "2022-09-03 18:00:00",
+        "2022-09-04 00:00:00",
+        "2022-09-04 06:00:00",
+        "2022-09-04 12:00:00",
+        "2022-09-04 18:00:00",
+        "2022-09-05 00:00:00"
+      ],
+      "n_rows": 9111385,
+      "n_positive": 7070,
+      "positive_rate": 0.000776,
+      "matrix_memory_mb": 2514.7,
+      "xgboost_version": "3.4.1",
+      "n_dropped_columns": 0
+    },
+    {
+      "variant": "xgboost_centralized_no_format",
+      "lookback_h": 48,
+      "seed": 0,
+      "model_dir": "/kaggle/working/models/xgboost_centralized_no_format_L48_s0",
+      "n_features": 58,
+      "n_windows": 9,
+      "detection_times": [
+        "2022-09-03 00:00:00",
+        "2022-09-03 06:00:00",
+        "2022-09-03 12:00:00",
+        "2022-09-03 18:00:00",
+        "2022-09-04 00:00:00",
+        "2022-09-04 06:00:00",
+        "2022-09-04 12:00:00",
+        "2022-09-04 18:00:00",
+        "2022-09-05 00:00:00"
+      ],
+      "n_rows": 9111385,
+      "n_positive": 7070,
+      "positive_rate": 0.000776,
+      "matrix_memory_mb": 2223.2,
+      "xgboost_version": "3.4.1",
+      "n_dropped_columns": 8
+    },
+    {
+      "variant": "xgboost_centralized_no_format",
+      "lookback_h": 48,
+      "seed": 1,
+      "model_dir": "/kaggle/working/models/xgboost_centralized_no_format_L48_s1",
+      "n_features": 58,
+      "n_windows": 9,
+      "detection_times": [
+        "2022-09-03 00:00:00",
+        "2022-09-03 06:00:00",
+        "2022-09-03 12:00:00",
+        "2022-09-03 18:00:00",
+        "2022-09-04 00:00:00",
+        "2022-09-04 06:00:00",
+        "2022-09-04 12:00:00",
+        "2022-09-04 18:00:00",
+        "2022-09-05 00:00:00"
+      ],
+      "n_rows": 9111385,
+      "n_positive": 7070,
+      "positive_rate": 0.000776,
+      "matrix_memory_mb": 2223.2,
+      "xgboost_version": "3.4.1",
+      "n_dropped_columns": 8
+    },
+    {
+      "variant": "xgboost_centralized_no_format",
+      "lookback_h": 48,
+      "seed": 2,
+      "model_dir": "/kaggle/working/models/xgboost_centralized_no_format_L48_s2",
+      "n_features": 58,
+      "n_windows": 9,
+      "detection_times": [
+        "2022-09-03 00:00:00",
+        "2022-09-03 06:00:00",
+        "2022-09-03 12:00:00",
+        "2022-09-03 18:00:00",
+        "2022-09-04 00:00:00",
+        "2022-09-04 06:00:00",
+        "2022-09-04 12:00:00",
+        "2022-09-04 18:00:00",
+        "2022-09-05 00:00:00"
+      ],
+      "n_rows": 9111385,
+      "n_positive": 7070,
+      "positive_rate": 0.000776,
+      "matrix_memory_mb": 2223.2,
+      "xgboost_version": "3.4.1",
+      "n_dropped_columns": 8
+    },
+    {
+      "variant": "xgboost_centralized_no_format",
+      "lookback_h": 48,
+      "seed": 3,
+      "model_dir": "/kaggle/working/models/xgboost_centralized_no_format_L48_s3",
+      "n_features": 58,
+      "n_windows": 9,
+      "detection_times": [
+        "2022-09-03 00:00:00",
+        "2022-09-03 06:00:00",
+        "2022-09-03 12:00:00",
+        "2022-09-03 18:00:00",
+        "2022-09-04 00:00:00",
+        "2022-09-04 06:00:00",
+        "2022-09-04 12:00:00",
+        "2022-09-04 18:00:00",
+        "2022-09-05 00:00:00"
+      ],
+      "n_rows": 9111385,
+      "n_positive": 7070,
+      "positive_rate": 0.000776,
+      "matrix_memory_mb": 2223.2,
+      "xgboost_version": "3.4.1",
+      "n_dropped_columns": 8
+    },
+    {
+      "variant": "xgboost_centralized_no_format",
+      "lookback_h": 48,
+      "seed": 4,
+      "model_dir": "/kaggle/working/models/xgboost_centralized_no_format_L48_s4",
+      "n_features": 58,
+      "n_windows": 9,
+      "detection_times": [
+        "2022-09-03 00:00:00",
+        "2022-09-03 06:00:00",
+        "2022-09-03 12:00:00",
+        "2022-09-03 18:00:00",
+        "2022-09-04 00:00:00",
+        "2022-09-04 06:00:00",
+        "2022-09-04 12:00:00",
+        "2022-09-04 18:00:00",
+        "2022-09-05 00:00:00"
+      ],
+      "n_rows": 9111385,
+      "n_positive": 7070,
+      "positive_rate": 0.000776,
+      "matrix_memory_mb": 2223.2,
+      "xgboost_version": "3.4.1",
+      "n_dropped_columns": 8
+    }
+  ],
+  "windows": [
+    {
+      "lookback_h": 24,
+      "t": "2022-09-02 00:00:00",
+      "n_edges": 1114921,
+      "n_positive": 322,
+      "positive_rate": 0.000289,
+      "class_weight": 3461.49
+    },
+    {
+      "lookback_h": 24,
+      "t": "2022-09-02 06:00:00",
+      "n_edges": 803684,
+      "n_positive": 323,
+      "positive_rate": 0.000402,
+      "class_weight": 2487.19
+    },
+    {
+      "lookback_h": 24,
+      "t": "2022-09-02 12:00:00",
+      "n_edges": 787448,
+      "n_positive": 341,
+      "positive_rate": 0.000433,
+      "class_weight": 2308.23
+    },
+    {
+      "lookback_h": 24,
+      "t": "2022-09-02 18:00:00",
+      "n_edges": 772119,
+      "n_positive": 395,
+      "positive_rate": 0.000512,
+      "class_weight": 1953.73
+    },
+    {
+      "lookback_h": 24,
+      "t": "2022-09-03 00:00:00",
+      "n_edges": 754449,
+      "n_positive": 408,
+      "positive_rate": 0.000541,
+      "class_weight": 1848.14
+    },
+    {
+      "lookback_h": 24,
+      "t": "2022-09-03 06:00:00",
+      "n_edges": 616514,
+      "n_positive": 412,
+      "positive_rate": 0.000668,
+      "class_weight": 1495.39
+    },
+    {
+      "lookback_h": 24,
+      "t": "2022-09-03 12:00:00",
+      "n_edges": 479911,
+      "n_positive": 423,
+      "positive_rate": 0.000881,
+      "class_weight": 1133.54
+    },
+    {
+      "lookback_h": 24,
+      "t": "2022-09-03 18:00:00",
+      "n_edges": 342641,
+      "n_positive": 403,
+      "positive_rate": 0.001176,
+      "class_weight": 849.23
+    },
+    {
+      "lookback_h": 24,
+      "t": "2022-09-04 00:00:00",
+      "n_edges": 207382,
+      "n_positive": 391,
+      "positive_rate": 0.001885,
+      "class_weight": 529.39
+    },
+    {
+      "lookback_h": 24,
+      "t": "2022-09-04 06:00:00",
+      "n_edges": 208240,
+      "n_positive": 394,
+      "positive_rate": 0.001892,
+      "class_weight": 527.53
+    },
+    {
+      "lookback_h": 24,
+      "t": "2022-09-04 12:00:00",
+      "n_edges": 207655,
+      "n_positive": 395,
+      "positive_rate": 0.001902,
+      "class_weight": 524.71
+    },
+    {
+      "lookback_h": 24,
+      "t": "2022-09-04 18:00:00",
+      "n_edges": 208094,
+      "n_positive": 419,
+      "positive_rate": 0.002014,
+      "class_weight": 495.64
+    },
+    {
+      "lookback_h": 24,
+      "t": "2022-09-05 00:00:00",
+      "n_edges": 207430,
+      "n_positive": 407,
+      "positive_rate": 0.001962,
+      "class_weight": 508.66
+    },
+    {
+      "lookback_h": 48,
+      "t": "2022-09-03 00:00:00",
+      "n_edges": 1869370,
+      "n_positive": 730,
+      "positive_rate": 0.000391,
+      "class_weight": 2559.78
+    },
+    {
+      "lookback_h": 48,
+      "t": "2022-09-03 06:00:00",
+      "n_edges": 1420198,
+      "n_positive": 735,
+      "positive_rate": 0.000518,
+      "class_weight": 1931.24
+    },
+    {
+      "lookback_h": 48,
+      "t": "2022-09-03 12:00:00",
+      "n_edges": 1267359,
+      "n_positive": 764,
+      "positive_rate": 0.000603,
+      "class_weight": 1657.85
+    },
+    {
+      "lookback_h": 48,
+      "t": "2022-09-03 18:00:00",
+      "n_edges": 1114760,
+      "n_positive": 798,
+      "positive_rate": 0.000716,
+      "class_weight": 1395.94
+    },
+    {
+      "lookback_h": 48,
+      "t": "2022-09-04 00:00:00",
+      "n_edges": 961831,
+      "n_positive": 799,
+      "positive_rate": 0.000831,
+      "class_weight": 1202.79
+    },
+    {
+      "lookback_h": 48,
+      "t": "2022-09-04 06:00:00",
+      "n_edges": 824754,
+      "n_positive": 806,
+      "positive_rate": 0.000977,
+      "class_weight": 1022.27
+    },
+    {
+      "lookback_h": 48,
+      "t": "2022-09-04 12:00:00",
+      "n_edges": 687566,
+      "n_positive": 818,
+      "positive_rate": 0.00119,
+      "class_weight": 839.55
+    },
+    {
+      "lookback_h": 48,
+      "t": "2022-09-04 18:00:00",
+      "n_edges": 550735,
+      "n_positive": 822,
+      "positive_rate": 0.001493,
+      "class_weight": 668.99
+    },
+    {
+      "lookback_h": 48,
+      "t": "2022-09-05 00:00:00",
+      "n_edges": 414812,
+      "n_positive": 798,
+      "positive_rate": 0.001924,
+      "class_weight": 518.81
+    }
+  ],
+  "importance": [
+    {
+      "variant": "xgboost_centralized",
+      "lookback_h": 24,
+      "seed": 0,
+      "feature": "fmt_ACH",
+      "gain": 75106.88,
+      "share": 0.2849
+    },
+    {
+      "variant": "xgboost_centralized",
+      "lookback_h": 24,
+      "seed": 0,
+      "feature": "self_transfer",
+      "gain": 22392.22,
+      "share": 0.085
+    },
+    {
+      "variant": "xgboost_centralized",
+      "lookback_h": 24,
+      "seed": 0,
+      "feature": "same_currency",
+      "gain": 19261.58,
+      "share": 0.0731
+    },
+    {
+      "variant": "xgboost_centralized",
+      "lookback_h": 24,
+      "seed": 0,
+      "feature": "src_out_degree",
+      "gain": 13122.51,
+      "share": 0.0498
+    },
+    {
+      "variant": "xgboost_centralized",
+      "lookback_h": 24,
+      "seed": 0,
+      "feature": "fmt_Credit Card",
+      "gain": 11656.78,
+      "share": 0.0442
+    },
+    {
+      "variant": "xgboost_centralized",
+      "lookback_h": 24,
+      "seed": 0,
+      "feature": "fmt_Wire",
+      "gain": 10009.79,
+      "share": 0.038
+    },
+    {
+      "variant": "xgboost_centralized",
+      "lookback_h": 24,
+      "seed": 0,
+      "feature": "fmt_Cheque",
+      "gain": 7498.96,
+      "share": 0.0285
+    },
+    {
+      "variant": "xgboost_centralized",
+      "lookback_h": 24,
+      "seed": 0,
+      "feature": "src_n_counterparties",
+      "gain": 7006.34,
+      "share": 0.0266
+    },
+    {
+      "variant": "xgboost_centralized",
+      "lookback_h": 24,
+      "seed": 0,
+      "feature": "recv_cur_Bitcoin",
+      "gain": 5250.58,
+      "share": 0.0199
+    },
+    {
+      "variant": "xgboost_centralized",
+      "lookback_h": 24,
+      "seed": 0,
+      "feature": "src_n_currencies",
+      "gain": 4605.08,
+      "share": 0.0175
+    },
+    {
+      "variant": "xgboost_centralized",
+      "lookback_h": 24,
+      "seed": 0,
+      "feature": "pay_cur_Bitcoin",
+      "gain": 3927.44,
+      "share": 0.0149
+    },
+    {
+      "variant": "xgboost_centralized",
+      "lookback_h": 24,
+      "seed": 0,
+      "feature": "pay_cur_Saudi Riyal",
+      "gain": 3404.39,
+      "share": 0.0129
+    },
+    {
+      "variant": "xgboost_centralized",
+      "lookback_h": 24,
+      "seed": 0,
+      "feature": "log_amount_received",
+      "gain": 3312.15,
+      "share": 0.0126
+    },
+    {
+      "variant": "xgboost_centralized",
+      "lookback_h": 24,
+      "seed": 0,
+      "feature": "recv_cur_Saudi Riyal",
+      "gain": 3288.3,
+      "share": 0.0125
+    },
+    {
+      "variant": "xgboost_centralized",
+      "lookback_h": 24,
+      "seed": 0,
+      "feature": "pay_cur_Brazil Real",
+      "gain": 3259.49,
+      "share": 0.0124
+    },
+    {
+      "variant": "xgboost_centralized",
+      "lookback_h": 24,
+      "seed": 0,
+      "feature": "fmt_Cash",
+      "gain": 3132.1,
+      "share": 0.0119
+    },
+    {
+      "variant": "xgboost_centralized",
+      "lookback_h": 24,
+      "seed": 0,
+      "feature": "recv_cur_Brazil Real",
+      "gain": 2902.59,
+      "share": 0.011
+    },
+    {
+      "variant": "xgboost_centralized",
+      "lookback_h": 24,
+      "seed": 0,
+      "feature": "dst_n_counterparties",
+      "gain": 2704.44,
+      "share": 0.0103
+    },
+    {
+      "variant": "xgboost_centralized",
+      "lookback_h": 24,
+      "seed": 0,
+      "feature": "dst_in_degree",
+      "gain": 2679.33,
+      "share": 0.0102
+    },
+    {
+      "variant": "xgboost_centralized",
+      "lookback_h": 24,
+      "seed": 0,
+      "feature": "cross_bank",
+      "gain": 2541.96,
+      "share": 0.0096
+    },
+    {
+      "variant": "xgboost_centralized_no_format",
+      "lookback_h": 24,
+      "seed": 0,
+      "feature": "self_transfer",
+      "gain": 36406.14,
+      "share": 0.1444
+    },
+    {
+      "variant": "xgboost_centralized_no_format",
+      "lookback_h": 24,
+      "seed": 0,
+      "feature": "same_currency",
+      "gain": 27290.56,
+      "share": 0.1082
+    },
+    {
+      "variant": "xgboost_centralized_no_format",
+      "lookback_h": 24,
+      "seed": 0,
+      "feature": "cross_bank",
+      "gain": 27272.59,
+      "share": 0.1081
+    },
+    {
+      "variant": "xgboost_centralized_no_format",
+      "lookback_h": 24,
+      "seed": 0,
+      "feature": "src_n_currencies",
+      "gain": 14145.69,
+      "share": 0.0561
+    },
+    {
+      "variant": "xgboost_centralized_no_format",
+      "lookback_h": 24,
+      "seed": 0,
+      "feature": "src_out_degree",
+      "gain": 9315.66,
+      "share": 0.0369
+    },
+    {
+      "variant": "xgboost_centralized_no_format",
+      "lookback_h": 24,
+      "seed": 0,
+      "feature": "pay_cur_Saudi Riyal",
+      "gain": 8800.49,
+      "share": 0.0349
+    },
+    {
+      "variant": "xgboost_centralized_no_format",
+      "lookback_h": 24,
+      "seed": 0,
+      "feature": "pay_cur_Bitcoin",
+      "gain": 8103.28,
+      "share": 0.0321
+    },
+    {
+      "variant": "xgboost_centralized_no_format",
+      "lookback_h": 24,
+      "seed": 0,
+      "feature": "dst_n_counterparties",
+      "gain": 6488.2,
+      "share": 0.0257
+    },
+    {
+      "variant": "xgboost_centralized_no_format",
+      "lookback_h": 24,
+      "seed": 0,
+      "feature": "dst_in_degree",
+      "gain": 5079.87,
+      "share": 0.0201
+    },
+    {
+      "variant": "xgboost_centralized_no_format",
+      "lookback_h": 24,
+      "seed": 0,
+      "feature": "log_amount_received",
+      "gain": 4617.35,
+      "share": 0.0183
+    },
+    {
+      "variant": "xgboost_centralized_no_format",
+      "lookback_h": 24,
+      "seed": 0,
+      "feature": "recv_cur_Saudi Riyal",
+      "gain": 4346.05,
+      "share": 0.0172
+    },
+    {
+      "variant": "xgboost_centralized_no_format",
+      "lookback_h": 24,
+      "seed": 0,
+      "feature": "recv_cur_Bitcoin",
+      "gain": 4265.73,
+      "share": 0.0169
+    },
+    {
+      "variant": "xgboost_centralized_no_format",
+      "lookback_h": 24,
+      "seed": 0,
+      "feature": "src_n_counterparties",
+      "gain": 4041.0,
+      "share": 0.016
+    },
+    {
+      "variant": "xgboost_centralized_no_format",
+      "lookback_h": 24,
+      "seed": 0,
+      "feature": "log_amount_paid",
+      "gain": 3879.85,
+      "share": 0.0154
+    },
+    {
+      "variant": "xgboost_centralized_no_format",
+      "lookback_h": 24,
+      "seed": 0,
+      "feature": "recv_cur_Yen",
+      "gain": 3622.9,
+      "share": 0.0144
+    },
+    {
+      "variant": "xgboost_centralized_no_format",
+      "lookback_h": 24,
+      "seed": 0,
+      "feature": "pay_cur_Rupee",
+      "gain": 3261.78,
+      "share": 0.0129
+    },
+    {
+      "variant": "xgboost_centralized_no_format",
+      "lookback_h": 24,
+      "seed": 0,
+      "feature": "recv_cur_Shekel",
+      "gain": 3134.26,
+      "share": 0.0124
+    },
+    {
+      "variant": "xgboost_centralized_no_format",
+      "lookback_h": 24,
+      "seed": 0,
+      "feature": "dst_out_degree",
+      "gain": 3032.76,
+      "share": 0.012
+    },
+    {
+      "variant": "xgboost_centralized_no_format",
+      "lookback_h": 24,
+      "seed": 0,
+      "feature": "recv_cur_Ruble",
+      "gain": 2928.4,
+      "share": 0.0116
+    },
+    {
+      "variant": "xgboost_centralized_no_format",
+      "lookback_h": 24,
+      "seed": 0,
+      "feature": "pay_cur_Ruble",
+      "gain": 2906.38,
+      "share": 0.0115
+    },
+    {
+      "variant": "xgboost_centralized",
+      "lookback_h": 48,
+      "seed": 0,
+      "feature": "fmt_ACH",
+      "gain": 122570.98,
+      "share": 0.3258
+    },
+    {
+      "variant": "xgboost_centralized",
+      "lookback_h": 48,
+      "seed": 0,
+      "feature": "same_currency",
+      "gain": 36664.09,
+      "share": 0.0974
+    },
+    {
+      "variant": "xgboost_centralized",
+      "lookback_h": 48,
+      "seed": 0,
+      "feature": "self_transfer",
+      "gain": 19873.39,
+      "share": 0.0528
+    },
+    {
+      "variant": "xgboost_centralized",
+      "lookback_h": 48,
+      "seed": 0,
+      "feature": "src_out_degree",
+      "gain": 16410.17,
+      "share": 0.0436
+    },
+    {
+      "variant": "xgboost_centralized",
+      "lookback_h": 48,
+      "seed": 0,
+      "feature": "fmt_Credit Card",
+      "gain": 14193.63,
+      "share": 0.0377
+    },
+    {
+      "variant": "xgboost_centralized",
+      "lookback_h": 48,
+      "seed": 0,
+      "feature": "fmt_Bitcoin",
+      "gain": 11632.73,
+      "share": 0.0309
+    },
+    {
+      "variant": "xgboost_centralized",
+      "lookback_h": 48,
+      "seed": 0,
+      "feature": "fmt_Cheque",
+      "gain": 11168.08,
+      "share": 0.0297
+    },
+    {
+      "variant": "xgboost_centralized",
+      "lookback_h": 48,
+      "seed": 0,
+      "feature": "recv_cur_Bitcoin",
+      "gain": 10589.21,
+      "share": 0.0281
+    },
+    {
+      "variant": "xgboost_centralized",
+      "lookback_h": 48,
+      "seed": 0,
+      "feature": "src_n_counterparties",
+      "gain": 9148.62,
+      "share": 0.0243
+    },
+    {
+      "variant": "xgboost_centralized",
+      "lookback_h": 48,
+      "seed": 0,
+      "feature": "src_n_currencies",
+      "gain": 6969.81,
+      "share": 0.0185
+    },
+    {
+      "variant": "xgboost_centralized",
+      "lookback_h": 48,
+      "seed": 0,
+      "feature": "fmt_Cash",
+      "gain": 6665.81,
+      "share": 0.0177
+    },
+    {
+      "variant": "xgboost_centralized",
+      "lookback_h": 48,
+      "seed": 0,
+      "feature": "pay_cur_Saudi Riyal",
+      "gain": 6625.61,
+      "share": 0.0176
+    },
+    {
+      "variant": "xgboost_centralized",
+      "lookback_h": 48,
+      "seed": 0,
+      "feature": "recv_cur_Brazil Real",
+      "gain": 5863.92,
+      "share": 0.0156
+    },
+    {
+      "variant": "xgboost_centralized",
+      "lookback_h": 48,
+      "seed": 0,
+      "feature": "src_in_degree",
+      "gain": 4767.99,
+      "share": 0.0127
+    },
+    {
+      "variant": "xgboost_centralized",
+      "lookback_h": 48,
+      "seed": 0,
+      "feature": "log_amount_received",
+      "gain": 4307.36,
+      "share": 0.0114
+    },
+    {
+      "variant": "xgboost_centralized",
+      "lookback_h": 48,
+      "seed": 0,
+      "feature": "dst_n_counterparties",
+      "gain": 3418.45,
+      "share": 0.0091
+    },
+    {
+      "variant": "xgboost_centralized",
+      "lookback_h": 48,
+      "seed": 0,
+      "feature": "pay_cur_Bitcoin",
+      "gain": 3396.97,
+      "share": 0.009
+    },
+    {
+      "variant": "xgboost_centralized",
+      "lookback_h": 48,
+      "seed": 0,
+      "feature": "dst_in_degree",
+      "gain": 3125.21,
+      "share": 0.0083
+    },
+    {
+      "variant": "xgboost_centralized",
+      "lookback_h": 48,
+      "seed": 0,
+      "feature": "fmt_Wire",
+      "gain": 2954.55,
+      "share": 0.0079
+    },
+    {
+      "variant": "xgboost_centralized",
+      "lookback_h": 48,
+      "seed": 0,
+      "feature": "cross_bank",
+      "gain": 2853.51,
+      "share": 0.0076
+    },
+    {
+      "variant": "xgboost_centralized_no_format",
+      "lookback_h": 48,
+      "seed": 0,
+      "feature": "cross_bank",
+      "gain": 34978.99,
+      "share": 0.1107
+    },
+    {
+      "variant": "xgboost_centralized_no_format",
+      "lookback_h": 48,
+      "seed": 0,
+      "feature": "self_transfer",
+      "gain": 33752.02,
+      "share": 0.1068
+    },
+    {
+      "variant": "xgboost_centralized_no_format",
+      "lookback_h": 48,
+      "seed": 0,
+      "feature": "same_currency",
+      "gain": 26449.42,
+      "share": 0.0837
+    },
+    {
+      "variant": "xgboost_centralized_no_format",
+      "lookback_h": 48,
+      "seed": 0,
+      "feature": "src_n_currencies",
+      "gain": 22947.93,
+      "share": 0.0726
+    },
+    {
+      "variant": "xgboost_centralized_no_format",
+      "lookback_h": 48,
+      "seed": 0,
+      "feature": "pay_cur_Saudi Riyal",
+      "gain": 16503.22,
+      "share": 0.0522
+    },
+    {
+      "variant": "xgboost_centralized_no_format",
+      "lookback_h": 48,
+      "seed": 0,
+      "feature": "pay_cur_Bitcoin",
+      "gain": 12669.67,
+      "share": 0.0401
+    },
+    {
+      "variant": "xgboost_centralized_no_format",
+      "lookback_h": 48,
+      "seed": 0,
+      "feature": "src_n_counterparties",
+      "gain": 10293.8,
+      "share": 0.0326
+    },
+    {
+      "variant": "xgboost_centralized_no_format",
+      "lookback_h": 48,
+      "seed": 0,
+      "feature": "src_out_degree",
+      "gain": 8946.79,
+      "share": 0.0283
+    },
+    {
+      "variant": "xgboost_centralized_no_format",
+      "lookback_h": 48,
+      "seed": 0,
+      "feature": "dst_n_counterparties",
+      "gain": 8399.71,
+      "share": 0.0266
+    },
+    {
+      "variant": "xgboost_centralized_no_format",
+      "lookback_h": 48,
+      "seed": 0,
+      "feature": "src_in_degree",
+      "gain": 8059.06,
+      "share": 0.0255
+    },
+    {
+      "variant": "xgboost_centralized_no_format",
+      "lookback_h": 48,
+      "seed": 0,
+      "feature": "dst_in_degree",
+      "gain": 6007.49,
+      "share": 0.019
+    },
+    {
+      "variant": "xgboost_centralized_no_format",
+      "lookback_h": 48,
+      "seed": 0,
+      "feature": "log_amount_paid",
+      "gain": 5737.21,
+      "share": 0.0182
+    },
+    {
+      "variant": "xgboost_centralized_no_format",
+      "lookback_h": 48,
+      "seed": 0,
+      "feature": "log_amount_received",
+      "gain": 5206.47,
+      "share": 0.0165
+    },
+    {
+      "variant": "xgboost_centralized_no_format",
+      "lookback_h": 48,
+      "seed": 0,
+      "feature": "dow_4",
+      "gain": 5053.78,
+      "share": 0.016
+    },
+    {
+      "variant": "xgboost_centralized_no_format",
+      "lookback_h": 48,
+      "seed": 0,
+      "feature": "recv_cur_Saudi Riyal",
+      "gain": 4540.01,
+      "share": 0.0144
+    },
+    {
+      "variant": "xgboost_centralized_no_format",
+      "lookback_h": 48,
+      "seed": 0,
+      "feature": "recv_cur_Rupee",
+      "gain": 4357.12,
+      "share": 0.0138
+    },
+    {
+      "variant": "xgboost_centralized_no_format",
+      "lookback_h": 48,
+      "seed": 0,
+      "feature": "dst_log_out_amount",
+      "gain": 3924.22,
+      "share": 0.0124
+    },
+    {
+      "variant": "xgboost_centralized_no_format",
+      "lookback_h": 48,
+      "seed": 0,
+      "feature": "dst_n_currencies",
+      "gain": 3862.85,
+      "share": 0.0122
+    },
+    {
+      "variant": "xgboost_centralized_no_format",
+      "lookback_h": 48,
+      "seed": 0,
+      "feature": "dow_5",
+      "gain": 3854.11,
+      "share": 0.0122
+    },
+    {
+      "variant": "xgboost_centralized_no_format",
+      "lookback_h": 48,
+      "seed": 0,
+      "feature": "dst_log_in_amount",
+      "gain": 3841.12,
+      "share": 0.0122
+    }
+  ]
+}

@@ -829,9 +829,11 @@ def command_evaluate_scorers(args: argparse.Namespace) -> int:
     random scorers, before any model exists to blame.
 
     The oracle's numbers are also the *ceiling*: the best lead time
-    achievable under the frozen matching rule, since no detector can see a
-    campaign earlier than the moment the rule's three-account requirement is
-    satisfiable.
+    achievable under the frozen matching rule **using only laundering
+    edges**. It is a reference, not an upper bound - a model keeps whatever
+    scores above tau, which is neither a subset nor a superset of the
+    laundering edges, so it can occasionally detect a campaign the oracle
+    declines.
     """
     import numpy as np
     import pandas as pd
@@ -1102,7 +1104,9 @@ def command_evaluate_scorers(args: argparse.Namespace) -> int:
         r for r in summary_rows
         if r["scorer"] == "oracle" and r["test_subset"] == "all"
     ]
-    print("\n=== ORACLE CEILING (best achievable under the frozen matching rule) ===")
+    print(
+        "\n=== ORACLE CEILING (best achievable from the laundering edges alone) ==="
+    )
     for row in ceiling:
         print(
             f"  L={row['lookback_h']:>2}h {row['split']:<7} "
@@ -1112,8 +1116,19 @@ def command_evaluate_scorers(args: argparse.Namespace) -> int:
             f"median frac observed {fmt(row['median_frac_observed_at_detection'], '.3f')}"
         )
     print(
-        "  No detector can beat these: the matching rule needs 3 of a "
-        "campaign's accounts before a cluster can hit it."
+        "  A reference, not an upper bound. The rule needs 3 of a campaign's"
+    )
+    print(
+        "  accounts before a cluster can hit it, and the oracle reaches that"
+    )
+    print(
+        "  from the laundering edges alone - but it keeps ALL of them, which"
+    )
+    print(
+        "  can merge a campaign into a cluster too impure to match. A model"
+    )
+    print(
+        "  keeping a different edge set can win those back; one does."
     )
 
     print("\n=== sanity verdict ===")
@@ -1261,9 +1276,12 @@ def command_evaluate_scorers(args: argparse.Namespace) -> int:
                 "",
                 "## Oracle ceiling",
                 "",
-                "The best lead time achievable under the frozen matching rule:",
-                "no detector can hit a campaign before three of its accounts are",
-                "visible.",
+                "The best lead time achievable under the frozen matching rule",
+                "**from the laundering edges alone**: no cluster can hit a",
+                "campaign before three of its accounts are visible. A reference,",
+                "not an upper bound - the oracle keeps every laundering edge, so",
+                "a model keeping fewer can occasionally form a cluster the",
+                "oracle's merges away.",
                 "",
                 _markdown_table(pd.DataFrame(ceiling)),
                 "",
@@ -1955,7 +1973,9 @@ def command_evaluate(args: argparse.Namespace) -> int:
     model is thresholded, and that is a decision, not a detail.
 
     Everything is reported against the oracle, because the oracle - not 1.0
-    - is the best achievable under the frozen matching rule. Earliness is
+    - is what the laundering edges can yield under the frozen matching rule.
+    It is a reference rather than an upper bound, so
+    `recall_relative_to_ceiling` can exceed 1. Earliness is
     compared by the paired method only; two median lead times are never
     subtracted.
     """
@@ -2419,9 +2439,12 @@ def command_evaluate(args: argparse.Namespace) -> int:
                 "",
                 "Tau chosen on validation only, by campaign-level F1, from the",
                 "model grid. Every number is reported against the oracle, which",
-                "is the best achievable under the frozen matching rule and is",
-                "well below 1.0. Earliness is compared only by the paired",
-                "method.",
+                "is what the laundering edges alone can yield under the frozen",
+                "matching rule and is well below 1.0. It is a reference, not an",
+                "upper bound: `recall_relative_to_ceiling` can exceed 1, and a",
+                "model detecting more campaigns than the oracle reaches shows up",
+                "as `all` detections above `oracle_reachable` ones. Earliness is",
+                "compared only by the paired method.",
                 "",
                 "## Chosen tau",
                 "",

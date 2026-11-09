@@ -609,3 +609,59 @@ def test_random_scorer_is_seeded():
     c = scorers.random_scores(50, 5)
     np.testing.assert_array_equal(a, b)
     assert not np.array_equal(a, c)
+
+
+def test_a_detector_can_beat_the_oracle_and_the_measure_must_allow_it():
+    """The ceiling is not strict, so `recall_relative_to_ceiling` may be > 1.
+
+    The oracle keeps exactly the laundering edges, so it is the best
+    achievable *from those edges* — not the best achievable. A model keeps
+    whatever scores above tau, which is neither a subset nor a superset of
+    them, so it can detect a campaign the oracle declines. Measured on the
+    full data: at L = 48 on stress, `xgboost_centralized` detects campaign
+    295 in all five seeds, where the oracle's cluster merges it into 13
+    accounts at purity 0.46 and the rule refuses it.
+
+    Clamping the ratio at 1, or treating `oracle_reachable` as the set of
+    campaigns anything could find, would hide exactly that.
+    """
+    def built(campaign_id):
+        stamp = pd.Timestamp("2022-09-09 12:00")
+        return evaluation.CampaignOutcome(
+            campaign_id=campaign_id, split="stress", base_type="CYCLE",
+            group="fragmentable", detected=True, detection_time=stamp,
+            lead_time_h=48.0, normalized_lead_time=0.5, frac_observed=0.3,
+            crosses_cutoff=False, shares_train_account=False,
+            deadline=stamp, end=stamp, duration_h=84.0, n_txn=7,
+        )
+
+    outcomes = [built(1), built(2), built(3)]  # 3 is the one the oracle misses
+    result = evaluation.EvaluationResult(
+        split="stress", scorer="model", tau=0.99, lookback_h=48, seed=0,
+        outcomes=outcomes, n_clusters=3, n_hits_clusters=3,
+        n_other_split_hits=0, n_ambiguous=0, n_false_alarms=0,
+        horizon_days=3.0,
+    )
+    reachable = [1, 2]  # the oracle reached only these
+
+    on_all = evaluation.summarize(
+        result, subset="all", oracle_reachable=reachable,
+        oracle_recall=2 / 3,  # the oracle found 2 of the 3 campaigns
+    )
+    assert on_all["n_detected"] == 3
+    assert on_all["campaign_recall"] == 1.0
+    assert on_all["recall_relative_to_ceiling"] == pytest.approx(1.5)
+
+    # on `oracle_reachable` the ratio is bounded by 1 by construction: only
+    # reachable campaigns are counted, so campaign 3 is excluded
+    on_reachable = evaluation.summarize(
+        result, subset="oracle_reachable", oracle_reachable=reachable,
+        oracle_recall=1.0,
+    )
+    assert on_reachable["n_campaigns"] == 2
+    assert on_reachable["n_detected"] == 2
+    assert on_reachable["recall_relative_to_ceiling"] == 1.0
+
+    # and the discrepancy is visible as `all` detections above reachable ones,
+    # which is how the real case was found
+    assert on_all["n_detected"] > on_reachable["n_detected"]

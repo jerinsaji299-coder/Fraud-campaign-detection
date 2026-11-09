@@ -5,6 +5,12 @@ ORACLE scores each edge with its true label. It should discover almost
 every evaluable campaign, at about the moment the campaign's third account
 appears. If it does not, the evaluation code is wrong, not the detector.
 
+The oracle is a **reference, not an upper bound.** It keeps exactly the
+laundering edges, so its clusters are the best obtainable *from those
+edges*; a model keeps whatever scores above tau, which is neither a subset
+nor a superset of them. A model can therefore detect a campaign the oracle
+misses, and one does — see `recall_relative_to_ceiling`.
+
 RANDOM scores uniformly at random. It should find almost nothing and raise
 many false alarms. If it scores well, the matching rule is too generous.
 """
@@ -15,7 +21,8 @@ import numpy as np
 
 
 def oracle_scores(labels: np.ndarray) -> np.ndarray:
-    """score = true label. The best any detector could possibly do."""
+    """score = true label: the best achievable **using only laundering
+    edges**, which is not the same as the best achievable."""
     return np.asarray(labels, dtype=np.float64)
 
 

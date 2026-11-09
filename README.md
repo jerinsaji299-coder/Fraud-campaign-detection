@@ -79,12 +79,13 @@ bank).
 (extraction, matching with other-split hits, horizons, lead time, metrics,
 bootstrap CIs) and the oracle/random sanity scorers are in place and
 validated.
-**Next step:** run `train` and `evaluate` on Kaggle (§5g of
-`backend/scripts/kaggle/run_on_kaggle.md`) over the full matrix — both
-variants, both lookbacks, five seeds, on CPU, about 3.5-4 hours. The tau
-grid is settled: the second quick check (L = 24, seed 0, commit `6a6d1be`)
-exited 0 with both taus interior. Its numbers are provisional on one seed
-and one lookback. The baseline, the model tau grid, the payment-format ablation and the
+**Next step:** stage 3.4, the centralized GNN — not started, and the
+first step here that needs a GPU. Stage 3.3 is complete: the non-graph
+baseline reaches **0.679 test recall at L = 48, 0.760 of the oracle**, and
+that is the number the GNN has to beat. Two things it must carry: both
+lookbacks (L = 48's validation margin mostly did not survive to test), and
+both format variants (payment format buys coverage, and it is a generator
+artefact). See §[stage 3.3 results](#stage-33-results-full-data-five-seeds--complete). The baseline, the model tau grid, the payment-format ablation and the
 seed sweep are all implemented and pass development checks on the 1% sample;
 **none of those sample numbers is a result.** The evaluation, the oracle
 ceiling and the miss diagnosis are measured on the full data. The training
@@ -114,7 +115,7 @@ no visibility reassignment is used in this phase.
 | 3.0 | Kaggle runner + Phase 2 full-data verification | done — all 24 numbers PASS, determinism confirmed |
 | 3.1 | Window builder + features + leakage tests | done |
 | 3.2 | Evaluation module (extraction, matching, lead time, bootstrap CIs) + oracle and random scorers | done, **validated on full data**; ceiling, miss diagnosis and the paired lookback comparison all measured and recorded |
-| 3.3 | XGBoost baseline: train, select tau on validation, evaluate on test | **code complete**, two variants x two lookbacks x five seeds. Two full-data quick checks at L = 24, seed 0: the first hit the grid's edge, the second (commit `6a6d1be`) exited 0 with both taus interior. **Provisional numbers only** — awaiting the five-seed run over both lookbacks |
+| 3.3 | XGBoost baseline: train, select tau on validation, evaluate on test | **done** — 20 boosters on the full data at commit `de48b35`, exit 0, no edge taus. Selected: the full model at L = 48 (validation recall 0.531 vs 0.385); test recall 0.679 [0.661, 0.696], 0.760 of the ceiling. Format ablation settled; one campaign beats the ceiling |
 | 3.4 | GNN centralized (GINEConv edge classification) | not started |
 | 3.5 | Gate report + results files + frontend Results page wired to real baseline results | not started |
 
@@ -381,12 +382,58 @@ separately from the excluded one.
 
 ### Oracle ceiling
 
-The oracle scorer (score = true label) is the **best any detector can do**
-under the frozen matching rule: a cluster cannot hit a campaign until three
-of its accounts are visible, so no model can fire earlier. Its median lead
-time and median `frac_observed` are therefore the ceiling every later result
-is read against — a model at 60% of the oracle's lead time is doing well,
-whereas 60% of the theoretical 100% would be meaningless.
+The oracle scorer (score = true label) is the best achievable under the
+frozen matching rule **using only the laundering edges**: a cluster cannot
+hit a campaign until three of its accounts are visible, and the oracle sees
+every laundering edge the moment it appears. Its median lead time and
+median `frac_observed` are the ceiling every later result is read
+against — a model at 60% of the oracle's lead time is doing well, whereas
+60% of a theoretical 100% would be meaningless.
+
+> **The ceiling is a reference, not a strict upper bound** (corrected
+> 2026-11-09). The README previously said no detector could beat it. That
+> is wrong, and the stage 3.3 run found the counterexample. The oracle
+> keeps *exactly* the laundering edges; a model keeps whatever scores above
+> tau, which is **neither a subset nor a superset** of them. Keeping every
+> laundering edge is not always best: it can merge a campaign into a
+> cluster too impure for the 50% rule, where a sparser edge set would have
+> matched.
+>
+> **Measured.** At L = 48 on stress, `xgboost_centralized` detects
+> **campaign 295** — a 7-transaction, 7-account CYCLE — in **all five
+> seeds**, and the oracle does not. The oracle's own diagnosis says why:
+> 295 is the single `purity_failure` in the entire full-data run. Its own
+> laundering edges do connect 5 accounts, comfortably past the 3 the rule
+> needs, but at L = 48 the full laundering edge set merges it with **9
+> other campaigns** into a 13-account cluster at purity **0.4615**, just
+> under the 0.5 required. The oracle detects it at L = 24, where the
+> shorter window does not reach the bridging edges.
+>
+> The model, thresholded at tau ≈ 0.99, keeps only the edges it scores
+> most confidently, drops part of that bridge, and is left with a cluster
+> that clears both conditions. That the campaign is won back by keeping
+> *fewer* edges is what the evidence supports: a cluster can only lose
+> purity by gaining accounts, so a model firing on background edges could
+> not have rescued this one. (The run does not export the model's cluster
+> membership, so the selectivity step is an inference from the oracle's
+> diagnosis rather than a direct observation; exporting the cluster for 295
+> at its detection time would settle it.)
+>
+> A second route exists in principle and has **not** been observed here: a
+> campaign whose own laundering edges never connect 3 accounts
+> (`structurally_disconnected`) could in theory be bridged into a matchable
+> cluster by background edges a model scores above tau. Nothing in this run
+> shows it.
+>
+> Consequences, all now implemented: `recall_relative_to_ceiling` **can
+> exceed 1** and is never clamped; on the `oracle_reachable` subset it is
+> bounded by 1 only because that subset counts reachable campaigns alone; a
+> detection outside the reachable set shows up as `all` detections
+> exceeding `oracle_reachable` detections, which is how this was found.
+> `tests/test_evaluation.py` pins the case and fails if the ratio is
+> clamped. In the stage 3.3 run the ratio never actually exceeded 1 — the
+> model misses 17–18 reachable stress campaigns for the one it adds — but
+> the measure must not assume it cannot.
 
 **Measured on the full data, 2026-10-15** (subset `all`):
 
@@ -407,11 +454,13 @@ subtraction. Comparisons between rows use the paired method below.
 Read these as the budget every later result is spent against. Two things
 stand out:
 
-- **A detector cannot aim for 100% recall.** The oracle itself reaches only
-  0.82 (L = 24) / 0.89 (L = 48) on test, so roughly 11–18% of evaluable test
-  campaigns are *unreachable* under the frozen matching rule, whatever the
-  model. Reporting a model's recall as a fraction of 1.0 would understate it;
-  the honest denominator is the oracle. §[Why the oracle misses](#why-the-oracle-misses-campaigns)
+- **A detector should not aim for 100% recall.** The oracle itself reaches
+  only 0.82 (L = 24) / 0.89 (L = 48) on test, so roughly 11–18% of evaluable
+  test campaigns are out of reach *of the laundering edges* under the frozen
+  matching rule. Reporting a model's recall as a fraction of 1.0 would
+  understate it; the honest denominator is the oracle — bearing in mind that
+  a model keeping a different edge set can occasionally exceed it, as one
+  does on stress. §[Why the oracle misses](#why-the-oracle-misses-campaigns)
   explains where that gap comes from.
 - **L = 48 buys recall and costs no earliness. Tested, 2026-10-17.** The
   paired comparison settles what the two medians could not: on the
@@ -611,48 +660,84 @@ deliberately, not something to do mid-run. If a chosen tau ever reaches
 saturated, and the thing to examine is the class weighting itself — a
 design decision, not a grid detail.
 
-#### Full-data quick check (L = 24, seed 0) — provisional
+#### Stage 3.3 results (full data, five seeds) — complete
 
-A single-seed run of both variants at L = 24 on the full dataset.
-**Provisional, and not to be quoted as results:** one seed says nothing
-about seed spread, and L = 24 is only one of the two lookbacks. The
-five-seed run over both lookbacks is what decides anything here.
+**Run:** Kaggle CPU notebook at commit `de48b35`, 20 boosters (2 variants ×
+2 lookbacks × 5 seeds), **exit 0 with no tau at a grid edge**. Evidence:
+`docs/reference/train_baseline.*` and `evaluate_baseline.*`.
 
-Quick check 2, at commit `6a6d1be` with the extended grid, **exited 0** —
-both taus are interior optima now, which is what the near-1 tail was added
-for:
+Test split, `all` subset, mean [min, max] over seeds 0–4:
 
-| Variant | Chosen tau | Validation F1 | Next tau up | Test recall | vs ceiling | FA/day |
+| Variant | L | Recall | vs ceiling | FA/day | Median lead | Seed sd |
 |---|---:|---:|---:|---:|---:|---:|
-| `xgboost_centralized` | 0.99 | 0.543 | 0.490 at 0.995 | 0.661 | 0.804 | 3.4 |
-| `xgboost_centralized_no_format` | 0.995 | 0.343 | 0.205 at 0.999 | 0.464 | 0.565 | 1.7 |
+| `xgboost_centralized` | 24 | 0.654 [0.643, 0.661] | 0.796 | 3.8 | 67.2h | 0.009 |
+| `xgboost_centralized` | **48** | **0.679 [0.661, 0.696]** | 0.760 | 10.5 | 68.2h | 0.016 |
+| `xgboost_centralized_no_format` | 24 | 0.479 [0.393, 0.554] | 0.583 | 4.2 | 62.6h | 0.052 |
+| `xgboost_centralized_no_format` | 48 | 0.532 [0.500, 0.571] | 0.596 | 8.6 | 64.7h | 0.026 |
 
-(Quick check 1, at commit `5664a6b`, chose tau = 0.99 for both — the top of
-the grid as it then stood — and exited 3. Its numbers are superseded: the
-ablated model's tau moved to 0.995 here, taking its recall from 0.500 to
-0.464. The full model's tau did not move, so its row is unchanged.)
+**Selected configuration: the full model at L = 48**, chosen by the frozen
+protocol — on **validation**, recall 0.531 against 0.385 for L = 24. Both
+lookbacks are reported, because the validation margin did not survive to
+test:
 
-**What the ablation shows, and what it does not.** Dropping payment format
-costs **coverage**: 0.661 against 0.464 on test, which is 37 campaigns
-against 26 — **11 fewer**, and 0.804 of the ceiling against 0.565. That
-gap is large and is exactly the concern the ablation was frozen to expose.
+- On validation the gap is large: 0.531 against 0.385, about **3.8 of 26**
+  campaigns.
+- On test it is about **1.4 of 56** — paired per seed, L = 48 adds 1–3
+  campaigns and loses 0–1, at **0.0h earliness on the campaigns both
+  detect** (CI [0.0, 0.0] in every seed).
+- And it costs roughly **3× the false alarms**, 10.5 a day against 3.8.
 
-On **earliness** the direct paired ablation — no-format against the full
-model, on the campaigns both detect — is **−3.0h with a 95% CI of
-[−12, 0]**. The interval includes zero, so **no earliness difference is
-demonstrated.** What format buys, on this evidence, is coverage.
+So the selection follows the protocol, but the honest summary is that the
+longer lookback buys one or two extra campaigns for three times the alarm
+load, and the validation estimate of its benefit was optimistic. Stage 3.4
+should carry both lookbacks rather than treat L = 48 as settled on this
+margin.
 
-An earlier version of this section claimed format bought 15 hours of
-earliness. That was wrong, and wrong in a specific way worth recording: it
-came from comparing each variant against the **oracle** separately (0.0h
-for the full model, −15h for the ablated one) and treating the gap between
-those two numbers as the ablation's effect. Those two comparisons are taken
-over different shared sets, so their difference is not a quantity — see
-rule 3 under §[the paired method](#comparing-two-configurations-the-paired-method).
-The direct comparison is the criterion, and it says there is nothing to
-claim yet.
+**The format ablation is settled: format buys coverage, not earliness.**
 
-The five-seed run over both lookbacks decides both readings.
+- **Earliness:** the direct paired ablation's CI includes zero in **all ten
+  test cells** (2 lookbacks × 5 seeds). Nothing is demonstrated, which
+  retires the withdrawn 15-hour claim for good.
+- **Coverage:** the full model detects **6–14 test campaigns per seed** that
+  the no-format variant misses; the reverse is **0–1**. On the ceiling
+  scale that is 0.760–0.796 against 0.583–0.596.
+- **Stability:** no-format is markedly noisier across seeds — sd **0.052**
+  at L = 24 against **0.009** for the full model, a five-fold difference.
+  Without the format columns the model is leaning on weaker, more
+  seed-sensitive signal.
+
+Read together: payment format is doing a large share of the work, and what
+it contributes is *finding* campaigns rather than finding them *sooner*.
+Since the link between format and laundering is an artefact of the IBM
+generator, the no-format column is the one that should be believed to
+transfer, and stage 3.4's GNN has to be read with both in view.
+
+**One campaign beats the ceiling.** At L = 48 on stress the full model
+detects campaign 295 in all five seeds, which the oracle declines — see
+§[Oracle ceiling](#oracle-ceiling) for the mechanism and what it changes.
+
+**Cost, measured against the estimate** (CPU notebook, 30 GB):
+
+| | Estimated | Measured |
+|---|---:|---:|
+| `train`, 20 boosters | ~1.5 h | **1.45 h** |
+| `evaluate`, 20 models | ~2 h | **1.59 h** |
+| Per booster, L = 24 / L = 48 | 215s / ~290s | 207–217s / 282–289s |
+| Peak memory, L = 24 | 9.9 GB | **9.9 GB** |
+| Peak memory, L = 48 | 12–13 GB | **15.9 GB** |
+
+About **3 hours** end to end. The L = 48 memory estimate was ~3 GB low —
+scaling the L = 24 peak by row count under-counts, because the pooled
+matrix and the per-window matrices coexist during `np.vstack` and both
+grow. 15.9 GB still fits a 30 GB CPU notebook comfortably, but it would
+**not** fit a GPU notebook's 13–16 GB, which settles the question of where
+this stage runs.
+
+*(Two earlier single-seed quick checks are superseded by this run. The
+first, at commit `5664a6b`, chose tau at the top of the grid and exited 3,
+which is what prompted the near-1 tail; the second, at `6a6d1be`, exited 0
+with interior taus. Their numbers — 0.661 and 0.464 test recall at L = 24,
+seed 0 — are consistent with the five-seed means above.)*
 
 #### Development checks on the 1% sample
 
@@ -697,15 +782,20 @@ the method:
 
 **Frozen 2026-10-17.** The oracle reaches 0.821 (L = 24) / 0.893 (L = 48)
 on test, so a model's recall measured against 1.0 is measured against a
-denominator that includes campaigns no detector could ever find. Every
-scorer and model is therefore reported two extra ways:
+denominator that includes campaigns the laundering edges alone cannot
+yield. Every scorer and model is therefore reported two extra ways:
 
 - **`oracle_reachable`**, a fourth test subset: the campaigns the oracle
   detects at that lookback and split. Reported alongside `all`,
   `fully_observed` and `no_shared_accounts`, never instead of them.
 - **`recall_relative_to_ceiling`**, the recall as a fraction of the
   oracle's recall on the same subset. A model at 0.60 against an 0.80
-  ceiling is at 0.75 of what was achievable, and saying 0.60 understates it.
+  ceiling is at 0.75 of what was achievable, and saying 0.60 understates
+  it. **It is never clamped and can exceed 1**, because the ceiling is not
+  strict — see §[Oracle ceiling](#oracle-ceiling). On `oracle_reachable` it
+  is bounded by 1, but only because that subset counts reachable campaigns
+  alone; a detection outside the reachable set appears as `all` detections
+  exceeding `oracle_reachable` detections.
 
 Both are reported; neither replaces absolute recall, because the absolute
 number is what says how much of the problem remains unsolved. The subset is
@@ -716,9 +806,9 @@ wrong denominator and overstate a model.
 
 **Phase 5 will report both.** The visibility sweep's headline numbers are
 given on `all` *and* on `oracle_reachable`. The reason is specific to that
-experiment: the structurally undetectable campaigns below are concentrated
-in the fragmentable group, and they are undetectable in every condition and
-at every visibility level. Left in the denominator they add the same dead
+experiment: the structurally disconnected campaigns below are concentrated
+in the fragmentable group, and their own laundering edges cannot form a
+matchable cluster in any condition at any visibility level. Left in the denominator they add the same dead
 weight to all four conditions, compressing the differences the experiment
 exists to measure; removed, the dose-response curve is read over campaigns
 that could actually respond. Both are reported because the `all` number is
@@ -965,6 +1055,9 @@ transactions.
 | 2026-10-17 | **Fourth test subset `oracle_reachable`** (the campaigns the oracle detects at that lookback and split) and **`recall_relative_to_ceiling`** reported for every scorer and model. Phase 5 reports the visibility analysis on both `all` and `oracle_reachable` | The oracle reaches 0.821/0.893 on test, so recall against 1.0 counts campaigns no detector could find. For Phase 5 specifically: the structurally undetectable campaigns are concentrated in the fragmentable group and are undetectable in every condition at every visibility level, so leaving them in the denominator adds the same dead weight to all four conditions and compresses the very differences the experiment measures. `all` is still reported, because that is what an institution would experience | user decision, 2026-10-17; `tests/test_evaluation.py` |
 | 2026-10-17 | **Stage 3.3 hyperparameters frozen and identical for every variant, lookback and seed**: 300 trees, depth 6, eta 0.1, subsample 0.8, colsample 0.8, `hist`, `binary:logistic` with `aucpr`, seed 0. The class weight `n_negative / n_positive` is applied **per window** as a per-row weight (positives carry their own window's weight, negatives 1.0) | Tuning per lookback would make the L comparison a comparison of tuning effort rather than of lookback length, and the same applies to the four conditions in Phase 4-5. The values are deliberately unremarkable: this is a baseline, not a contender. Per-window weighting rather than pooled because the windows differ by an order of magnitude in size, and a pooled weight would let a busy window set the balance for a quiet one | implementation, stage 3.3; `tests/test_xgb_baseline.py` |
 | 2026-10-17 | `xgboost>=2.1` added to requirements.txt; torch and torch_geometric still wait for 3.4 | Each dependency lands with the stage that uses it, so a baseline session does not pay for the CUDA stack. Local development used xgboost 3.4.1; the Kaggle image ships its own, hence the loose pin | implementation, stage 3.3 |
+| 2026-11-09 | **The oracle ceiling is a reference, not a strict upper bound.** Every "no detector can beat these" claim is corrected: the oracle is the best achievable **using only the laundering edges**, and `recall_relative_to_ceiling` can exceed 1 and is never clamped | The oracle keeps exactly the laundering edges; a model keeps whatever scores above tau, which is neither a subset nor a superset of them. Keeping *every* laundering edge is not always best: at L = 48 on stress it merges campaign 295 with 9 other campaigns into a 13-account cluster at purity 0.4615, just under the 0.5 the rule needs, while a model at tau ~ 0.99 keeps a sparser set and matches it. **Measured in all five seeds**, and 295 is the single `purity_failure` in the whole full-data diagnosis | user-reported, 2026-11-09; `tests/test_evaluation.py` |
+| 2026-11-09 | **Stage 3.3 selected configuration: the full model at L = 48**, by the frozen protocol (validation recall 0.531 against 0.385). Both lookbacks are carried into 3.4 rather than treating L = 48 as settled | The protocol selects on validation and that is what was done, but the margin did not survive: ~3.8 of 26 campaigns on validation against ~1.4 of 56 on test, for ~3x the false alarms (10.5/day against 3.8). Paired per seed, L = 48 adds 1-3 test campaigns and loses 0-1 at 0.0h earliness. A one-campaign edge bought with triple the alarm load is not a settled answer | implementation, stage 3.3 |
+| 2026-11-09 | **The payment-format ablation is settled: format buys coverage, not earliness.** Every later model still reports both variants | The direct paired earliness CI includes zero in **all ten** test cells (2 lookbacks x 5 seeds), so no earliness effect is demonstrated. Coverage is unambiguous: the full model finds 6-14 test campaigns per seed that no-format misses, against 0-1 the other way, and 0.76-0.80 of the ceiling against 0.58-0.60. No-format is also five times noisier across seeds (sd 0.052 against 0.009), which says it is leaning on weaker signal. Since the format-laundering link is a generator artefact, the no-format column is the one expected to transfer | implementation, stage 3.3 |
 | 2026-10-19 | **Rule 3 of the paired method, frozen: two configurations are compared DIRECTLY against each other.** An A-versus-B difference is never inferred from `A vs C` and `B vs C`, whatever the shared reference C — the oracle ceiling, the centralized condition, anything | Each of those comparisons is taken over its own shared set of campaigns, so the two numbers are not on a common scale and their difference is not a quantity. Pairing fixes the denominator for one comparison; it does not make two comparisons subtractable. **Evidence:** this produced the withdrawn claim that dropping payment format cost 15h of earliness — 0.0h for the full model against the oracle, -15h for the ablated one, read as a 15h ablation effect. The direct ablation is -3.0h with CI [-12, 0], so nothing is demonstrated. Structurally the same error as subtracting two medians (2026-10-17), one level up, which is why it is now written down rather than assumed | user-reported, 2026-10-19; `tests/test_paired_comparison.py` |
 | 2026-10-18 | **`MODEL_TAU_GRID` extended upward with a near-1 tail**: `0.05, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.95, 0.99, 0.995, 0.999, 0.9995, 0.9999`, the same grid for every model and condition from now on. The edge check stays: a chosen tau of 0.9999 exits 3 and stops | The full-data quick check (L = 24, seed 0) chose **0.99, the top of the grid**, for both variants, with F1 rising **0.128 at tau 0.95 to 0.543 at 0.99** - a jump that large across the final interval means the optimum lies beyond it. Per-window class weights of **495-3,461** push scores so close to 1 that a linear grid cannot resolve the region where the decision happens; the tail halves the remaining distance to 1 at each step, putting the resolution in `1 - tau`. The extra thresholds are nearly free, since almost no edges survive 0.999. If a tau ever reaches 0.9999 the answer is not more nines but the class weighting itself | user decision, 2026-10-18; `docs/reference` quick check, `tests/test_tau_and_budgets.py` |
 | 2026-10-17 | **A separate tau grid for model scorers** (extended 2026-10-18, above): `0.05, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.95, 0.99`, used by every model — XGBoost, the GNN, and the federated conditions. The oracle and random scorers keep `DEFAULT_TAU_GRID`. The edge warning stays, and if a model's chosen tau is still at an edge on full data the run reports it and **stops** rather than extending silently. `select_tau` records the seconds each tau cost | The two kinds of scorer are genuinely different: a sanity scorer's scores are 0 or 1, so every threshold keeps the same edges and the low end would only cost clustering time, while a class-weighted model spreads its scores across the unit interval and the old floor of 0.5 truncated its optimum (validation F1 0.821 at tau 0.3 against 0.803 at 0.5 on the sample). One grid for every model means a comparison between models or conditions is never a comparison of how far each was allowed to search. Per-tau timing is recorded because clustering cost scales with the edges kept, so the low thresholds are the expensive ones and that cost should be visible rather than inferred | user decision, 2026-10-17; `tests/test_tau_and_budgets.py` |
@@ -1062,6 +1155,15 @@ project-root/
       evaluate_scorers.{md,csv,json}  oracle vs random on the full data
       evaluate_scorers_tau_curve.csv  precision/recall/FA per tau
       oracle_diagnose.{md,csv,json}   every oracle miss, diagnosed, + the paired comparison
+      train_baseline.{md,csv,json}    stage 3.3: 20 boosters, windows, feature importance
+      train_baseline_windows.csv      per training window: edges, positives, class weight
+      train_baseline_importance.csv   gain by feature, one seed per variant
+      evaluate_baseline.{md,csv,json} stage 3.3 results: every subset, seed and lookback
+      evaluate_baseline_across_seeds.csv  mean/min/max/sd over the five seeds
+      evaluate_baseline_paired.csv    model vs ceiling, lookbacks, and the format ablation
+      evaluate_baseline_tau_curve.csv per-tau precision/recall/F1 and the seconds each cost
+      evaluate_baseline_budgets.csv   recall and lead time at 10/50/100 false alarms a day
+      evaluate_baseline_operating.csv recall vs false alarms, for plotting
   backend/
     requirements.txt               Python dependencies: pandas, numpy, pyarrow, pyyaml, pytest, fastapi, uvicorn, pydantic
     pyproject.toml                 setuptools packaging for `fraudcamp` (src/ layout) + pytest `fulldata` marker
@@ -2009,7 +2111,7 @@ campaign_id)`:
   the binding bound, and that the classification agrees with
   `cluster_hits_campaign` on five hand-built clusters rather than
   re-implementing the thresholds.
-- **Backend evaluation tests** (`test_evaluation.py`, 36 tests): cluster
+- **Backend evaluation tests** (`test_evaluation.py`, 37 tests): cluster
   extraction (tau threshold, transitive joining, the >= 3 account minimum,
   direction-independence, determinism); the matching rule at and around both
   of its thresholds; classification of all four outcome kinds, including
@@ -2126,7 +2228,7 @@ campaign_id)`:
     stubbed in these tests.
 
 **Current pass status (2026-10-17):**
-- Backend: `python -m pytest tests/` from `backend/` → 283 passed, 25
+- Backend: `python -m pytest tests/` from `backend/` → 284 passed, 25
   skipped, 0 failed. The skips are the full-data suite, which needs the
   dataset that only exists on Kaggle; all 24 of its numbers passed there on
   2026-10-08/09.
@@ -2256,6 +2358,71 @@ Tagged points in the repository, newest first. Check one out with
 | `v0.1-data-pipeline` | 2026-10-08 | Phase 2 complete, plus the stage 3.0 Kaggle runner. The research pipeline (campaign ground truth, splits, topology groups, institutions, visibility), the artifact export, the read-only FastAPI server, and the full React frontend — 69 backend tests and 48 frontend tests passing. **No models and no experiment results**: the four conditions are defined and the result schema is fixed, but nothing has been trained or run, and the full-data regression numbers are still unverified (that is what stage 3.0's Kaggle run is for). |
 
 ## Changelog
+
+- **2026-11-09** — **Stage 3.3 is complete**, and the oracle ceiling turns
+  out not to be a ceiling.
+
+  The full run went through on Kaggle CPU at commit `de48b35`: 20 boosters,
+  **exit 0, no tau at a grid edge**. Evidence committed under
+  `docs/reference/`.
+
+  *Results (test, `all`, mean over five seeds).* The full model reaches
+  **0.654 at L = 24** and **0.679 at L = 48** — 0.796 and 0.760 of the
+  oracle. The no-format variant reaches 0.479 and 0.532. **Selected by the
+  frozen protocol: the full model at L = 48**, on validation recall 0.531
+  against 0.385.
+
+  *The selection is honest but thin.* That validation margin, about 3.8 of
+  26 campaigns, came to roughly **1.4 of 56** on test — 1–3 campaigns
+  gained and 0–1 lost per seed, at 0.0h earliness on the campaigns both
+  detect — and it costs **3× the false alarms**, 10.5 a day against 3.8. So
+  both lookbacks go into 3.4 rather than L = 48 being treated as settled.
+
+  *The format ablation is settled.* The direct paired earliness CI includes
+  zero in **all ten** test cells, so the withdrawn 15-hour claim is retired
+  for good. What format buys is **coverage**: 6–14 test campaigns per seed
+  against 0–1 the other way. It also buys stability — no-format's seed sd
+  is **0.052** against **0.009**, five times noisier. Since the
+  format-laundering link is a generator artefact, the no-format column is
+  the one expected to transfer.
+
+  **The oracle ceiling is not strict, and the README said it was.** At
+  L = 48 on stress the full model detects **campaign 295 in all five
+  seeds** and the oracle does not. The oracle's own diagnosis explains it:
+  295 is the single `purity_failure` in the entire full-data run — its own
+  laundering edges connect 5 accounts, well past the 3 required, but
+  keeping *every* laundering edge merges it with 9 other campaigns into a
+  13-account cluster at purity **0.4615**, just under 0.5. A model at
+  tau ≈ 0.99 keeps a sparser edge set, drops part of that bridge, and
+  matches. The oracle is therefore the best achievable *from the laundering
+  edges*, not the best achievable, and every "no detector can beat these"
+  claim is corrected in the README, in `scorers.py`, in
+  `recall_relative_to_ceiling` and in the runner's printed and written
+  reports. The ratio **can exceed 1 and is never clamped**;
+  `tests/test_evaluation.py` pins the case and fails if it is. Worth
+  noting what the evidence does *not* show: a model firing on background
+  edges to bridge a disconnected campaign is possible in principle but did
+  not happen here — a cluster only loses purity by gaining accounts, so
+  295 was won back by keeping fewer edges, not more.
+
+  *Cost, measured against the estimate:* train 1.45 h (estimated ~1.5 h),
+  evaluate 1.59 h (~2 h), about **3 hours** end to end. Peak memory at
+  L = 24 was 9.9 GB, exactly as estimated; at L = 48 it was **15.9 GB**
+  against an estimate of 12–13, because scaling by row count under-counts
+  the `np.vstack` transient where the pooled and per-window matrices
+  coexist. Still comfortable in a 30 GB CPU notebook, and conclusively too
+  large for a GPU notebook's 13–16 GB.
+
+  *One reported detail did not hold up.* The run notes said the no-format
+  variant also beat the oracle once on test at L = 48 (seeds 3, 4). It does
+  not: its `all` and `oracle_reachable` detections are equal in every seed
+  there (28/28, 29/29, 32/32, 29/29, 31/31). What those two seeds show is
+  no-format detecting one campaign the **full model** misses — 225 and 207
+  — which is in the `format_ablation` rows, not `model_vs_oracle`. The
+  ceiling is beaten in exactly one place: `xgboost_centralized`, L = 48,
+  stress, campaign 295.
+
+  *Tests:* backend 284 passed, 25 skipped.
 
 - **2026-10-19** — **Quick check 2 recorded, and the earliness framing
   corrected.**
