@@ -80,12 +80,14 @@ bank).
 (extraction, matching with other-split hits, horizons, lead time, metrics,
 bootstrap CIs) and the oracle/random sanity scorers are in place and
 validated.
-**Next step:** run `gpu-probe-windows` on a Kaggle **GPU** notebook (§5i
-of `backend/scripts/kaggle/run_on_kaggle.md`) — the real largest windows
-through the real model, which decides full-batch versus neighbour sampling
-before the 3.4.1 design is written. Stage 3.4.0 is done: 2 × T4 at 15.6 GB,
-33.7 GB system RAM, all four PyG extensions, and ~4.6 MB per 1,000 edges,
-which reopened the sampling question. Stage 3.3
+**Next step:** the stage 3.4.1 design proposal. Its evidence is in:
+**full-batch training fits both lookbacks** (6.39 GB at L = 24, 10.70 GB at
+L = 48, against a 12 GB rule on a 15.6 GB card), inference needs no
+chunking, and the host peaks at 14.1 GB of 33.7. The proposal must also
+settle the **activation explosion** the probe exposed — losses of 10,615
+and 356,394 from random init, consistent with GINEConv's sum aggregation
+over high-degree accounts going unnormalised — which is an addition to the
+frozen design and needs approval. Stage 3.3
 is complete: the non-graph baseline reaches **0.679 test recall at L = 48,
 0.760 of the oracle**, and that is the number the GNN has to beat. Two
 things 3.4 must carry: both lookbacks (L = 48's validation margin mostly
@@ -773,7 +775,7 @@ It runs in sub-stages, each stopping for approval:
 | | Sub-stage | Status |
 |---|---|---|
 | 3.4.0 | GPU environment check — no model, no data | **done** (Kaggle, `2755139`, exit 0) |
-| 3.4.1 | Design proposal: full-batch or sampling, epochs, early stopping, optimizer, class weight, chunked inference, seed control — sized against measurements | **evidence implemented** (`gpu-probe-windows`), awaiting the run; proposal then follows |
+| 3.4.1 | Design proposal: full-batch or sampling, epochs, early stopping, optimizer, class weight, chunked inference, seed control — sized against measurements | **evidence measured** (full-batch fits both lookbacks: 6.39 / 10.70 GB); proposal outstanding, and must also address the activation explosion the probe exposed |
 | 3.4.2 | Implementation, tests, resumability, local CPU smoke run | not started |
 | 3.4.3 | Kaggle quick check: 1 seed, L = 24, full variant | not started |
 | 3.4.4 | Full-run plan against the 9-hour session and weekly GPU quota | not started |
@@ -900,6 +902,59 @@ before a GPU session is spent on it, which is how the unconditional
 `torch.cuda.reset_peak_memory_stats()` call was found, and how the
 self-install path above was tested (by uninstalling PyG locally and
 watching the probe put it back).
+
+#### 3.4.1 evidence: measured (Kaggle, one T4, 2026-11-10)
+
+All four probes completed, and every window matched what `features-smoke`
+recorded. Peaks are **reserved** — what the allocator holds, so what runs
+out:
+
+| | Edges | Accounts | Positives | Class weight | Peak reserved | MB/1k edges | Step |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| L = 24 train | 1,114,921 | 437,073 | 322 | 3,461 | **6.39 GB** | 5.73 | 0.28s |
+| L = 48 train | 1,869,370 | 509,993 | 730 | 2,560 | **10.70 GB** | 5.73 | 0.45s |
+| L = 24 eval | 654,467 | 346,684 | 514 | 1,272 | 2.71 GB | 4.13 | 0.12s |
+| L = 48 eval | 1,137,240 | 354,229 | 1,053 | 1,079 | 4.75 GB | 4.18 | 0.18s |
+
+**Full-batch training fits both lookbacks.** The largest L = 48 window
+peaks at 10.70 GB against the 12 GB rule fixed before the run, with 4.9 GB
+left on a 15.6 GB card. The 2026-10-10 sampling decision was taken on an
+estimate of ~16.6 GB; the measurement is 10.70.
+
+**The real windows are ~25% heavier than the synthetic ones**: 5.73 MB per
+1,000 edges against 4.6 from `gpu-check`, which projected 8.6 GB for L = 48
+where the truth is 10.70 GB. Still inside the budget, but with
+meaningfully less headroom than the projection implied — which is why the
+projection was not treated as the answer.
+
+**Inference needs no chunking.** The largest evaluation window scores
+unchunked in 0.18s at 4.75 GB, less than half the card.
+
+**Host memory peaked at 14.1 GB**, during the L = 48 feature-spec fit — the
+same pooling cost stage 3.3 pays — against 33.7 GB available. The GPU is
+not the binding constraint; fitting the spec over 9 or 13 training windows
+is the heaviest host step.
+
+**One result needs explaining before training, and changes what 3.4.1 must
+decide.** The reported losses are **10,615 at L = 24 and 356,394 at
+L = 48** after a single step from random initialisation. A class-weighted
+BCE on these windows should start near 1–2. Numbers that size mean the
+logits are enormous, and the likely cause is structural rather than a bug
+in the probe, which ran the frozen architecture faithfully: **GINEConv
+aggregates by sum**, and these windows contain accounts of very high
+degree. Summing hundreds or thousands of 64-dimensional messages, three
+layers deep, with no normalisation between them, compounds into activations
+far outside the range a linear readout can map to sensible logits — and the
+largest window, which has the most extreme hub degrees, is 34× worse than
+the smaller one, which is the pattern that explanation predicts.
+
+The frozen design specifies GINEConv, 2–3 layers and hidden 64, and says
+nothing about normalisation. **3.4.1 therefore has to propose one** — layer
+normalisation between convolutions, degree-normalised aggregation, or
+another remedy — with the reasoning, as a change to be approved rather than
+assumed. Nothing is trained until that is settled: a model whose activations
+explode on the busiest windows would train, report numbers, and mean
+nothing.
 
 #### Development checks on the 1% sample
 
@@ -1228,6 +1283,8 @@ transactions.
 | 2026-10-17 | **Every model configuration is trained at seeds 0-4**, and results are reported per seed and as mean [min, max] across seeds | A single run cannot distinguish an effect from seed noise. XGBoost's `subsample` and `colsample_bytree` make the fit genuinely stochastic, so the spread is real and worth carrying | user decision, 2026-10-17 |
 | 2026-10-17 | A **score cache** is used for the tau sweep and warmed before it | A scorer's output does not depend on tau, so a 16-point grid would otherwise re-featurise every million-edge window sixteen times for sixteen identical answers. It cannot change the curve and the cached and uncached curves are pinned equal in a test. Warming it first keeps the per-tau seconds comparable instead of letting the first tau absorb all the featurisation | implementation, stage 3.3 |
 | 2026-10-17 | **False alarms report which of the rule's two conditions failed** — purity < 0.5 vs coverage < 3 campaign accounts — with counts, replacing a single "best overlap" number | The old summary line said "best overlap 0.667 (below the 0.5 the rule requires)", which contradicts itself. Those clusters passed purity and failed coverage. On the sample 21 of 22 fail coverage, so the oracle's false alarms are mostly fragments of real campaigns too small to claim — a different problem from pollution by unrelated traffic, and one the three-account floor creates by design | user-reported, 2026-10-17 |
+| 2026-11-10 | **Measured: full-batch training fits both lookbacks** - the largest L = 48 window peaks at **10.70 GB reserved** on a 15.6 GB T4 against the 12 GB rule fixed before the run, and L = 24 at 6.39 GB. Inference needs no chunking (4.75 GB, 0.18s for the largest evaluation window). The regime choice itself is 3.4.1's to propose on this evidence | The 2026-10-10 estimate was ~16.6 GB, the measurement is 10.70. Real windows came in ~25% heavier than `gpu-check`'s synthetic graphs (5.73 vs 4.6 MB per 1,000 edges), so the synthetic projection of 8.6 GB would have understated it - which is exactly why the probe ran real windows before anything was decided. Host memory peaks at 14.1 GB during the feature-spec fit, not on the GPU | `gpu_probe_windows.*`, 2026-11-10 |
+| 2026-11-10 | **The probe exposed an activation explosion that 3.4.1 must resolve**: losses of 10,615 (L = 24) and 356,394 (L = 48) after one step from random init, where class-weighted BCE should start near 1-2. No training happens until a normalisation is proposed and approved | GINEConv aggregates by **sum**, and these windows hold accounts of very high degree; summing thousands of 64-dim messages three layers deep with nothing between them compounds beyond what a linear readout can map to sensible logits. The largest window being 34x worse than the smaller one is the pattern that explanation predicts. The frozen design names GINEConv, 2-3 layers and hidden 64 but says nothing about normalisation, so adding one is a change to approve rather than assume. A model whose activations explode on the busiest windows would still train and still report numbers | `gpu_probe_windows.*`, 2026-11-10 |
 | 2026-11-10 | **Every GPU subcommand installs `torch_geometric` itself** when the session lacks it, via one shared `ensure_torch_geometric`. Only `gpu-check` also attempts the optional extensions | A Kaggle session starts clean, and `gpu-probe-windows` failed on a fresh one with "No module named 'torch_geometric'" because only `gpu-check` installed it. The alternative was a documented rule that `gpu-check` must run first, which is a rule that gets forgotten - as it just was. The extensions stay exclusive to `gpu-check` because they are not required and a training command should not spend session minutes on wheels it can run without | user-reported, 2026-11-10 |
 | 2026-11-10 | **The stage 3.4 sampling decision is REOPENED**, and `gpu-probe-windows` added to settle it on a measurement. Full-batch will be proposed only if the largest L = 48 training window peaks **below 12 GB reserved** on one T4; whichever regime wins applies to **both** lookbacks | The 2026-10-10 decision rested on a shape-based estimate of ~16.6 GB for the busiest L = 48 window against 16 GB cards. `gpu-check` measured GINEConv 3x64 at **~4.6 MB per 1,000 edges** (251 MB at 50k, 936 MB at 200k, 2,302 MB at 500k), which projects **~5.1 GB** for the largest L = 24 window and **~8.6 GB** for the largest L = 48 one - roughly half the estimate. If that holds on real windows, sampling would add fanouts, a batch size and a sampler's bias to a comparison that does not need them. It is only a projection, though: a random graph's account-degree distribution is not a real window's, and linearity holds until it does not. Hence the probe before the proposal | user decision, 2026-11-10; `gpu_probe_windows.*` |
 | 2026-11-10 | **Correction: a Kaggle GPU notebook has 33.7 GB of system RAM**, so stage 3.3's 15.9 GB peak would fit there. Every "too large for a GPU notebook" claim is corrected | The claim confused the GPU's **device** memory (15.6 GB per T4) with the notebook's **host** RAM, which is a different quantity in a different place. Stage 3.3 still belongs on CPU, for the reason that always applied: its bottleneck is pandas and scipy, which a GPU does not touch, and stage 3.4 needs the weekly GPU quota. The 15.9 GB also does not constrain the GNN, which never materialises a pooled matrix | user-reported, 2026-11-10 |
@@ -1330,6 +1387,8 @@ project-root/
       evaluate_baseline_tau_curve.csv per-tau precision/recall/F1 and the seconds each cost
       evaluate_baseline_budgets.csv   recall and lead time at 10/50/100 false alarms a day
       evaluate_baseline_operating.csv recall vs false alarms, for plotting
+      gpu_check.{md,json}             stage 3.4.0: GPU, RAM, PyG install, GINEConv smoke test
+      gpu_probe_windows.{md,json}     stage 3.4.1: real windows through the real model
   backend/
     requirements.txt               Python dependencies: pandas, numpy, pyarrow, pyyaml, pytest, fastapi, uvicorn, pydantic
     pyproject.toml                 setuptools packaging for `fraudcamp` (src/ layout) + pytest `fulldata` marker
@@ -2535,6 +2594,38 @@ Tagged points in the repository, newest first. Check one out with
 | `v0.1-data-pipeline` | 2026-10-08 | Phase 2 complete, plus the stage 3.0 Kaggle runner. The research pipeline (campaign ground truth, splits, topology groups, institutions, visibility), the artifact export, the read-only FastAPI server, and the full React frontend — 69 backend tests and 48 frontend tests passing. **No models and no experiment results**: the four conditions are defined and the result schema is fixed, but nothing has been trained or run, and the full-data regression numbers are still unverified (that is what stage 3.0's Kaggle run is for). |
 
 ## Changelog
+
+- **2026-11-10 (3.4.1 evidence)** — **`gpu-probe-windows` ran on one T4,
+  and full-batch training fits both lookbacks.**
+
+  The largest L = 48 training window — 1,869,370 edges, 509,993 accounts —
+  peaks at **10.70 GB reserved** against the 12 GB rule fixed before the
+  run, leaving 4.9 GB on a 15.6 GB card; L = 24 peaks at **6.39 GB**. Steps
+  take 0.28s and 0.45s. Inference needs **no chunking**: the largest
+  evaluation window scores unchunked in 0.18s at 4.75 GB. Host memory peaks
+  at 14.1 GB during the feature-spec fit, against 33.7 GB — the GPU is not
+  the binding constraint. Every window matched what `features-smoke`
+  recorded.
+
+  **Running real windows mattered.** They came in **~25% heavier** than
+  `gpu-check`'s synthetic graphs — 5.73 against 4.6 MB per 1,000 edges — so
+  the synthetic projection of 8.6 GB for L = 48 understated the truth of
+  10.70. Still inside the budget, but with meaningfully less headroom than
+  the projection implied, which is why the projection was never treated as
+  the answer.
+
+  **The probe also exposed something that has to be fixed before any
+  training.** The losses are **10,615 at L = 24 and 356,394 at L = 48**
+  after one step from random initialisation, where a class-weighted BCE on
+  these windows should start near 1–2. GINEConv aggregates by **sum**, these
+  windows hold very high-degree accounts, and three layers of summing
+  64-dimensional messages with no normalisation between them compounds past
+  what a linear readout can turn into sensible logits — the largest window
+  being 34× worse than the smaller one is the pattern that predicts. The
+  frozen design names GINEConv, 2–3 layers and hidden 64 and says nothing
+  about normalisation, so **3.4.1 must propose one** and have it approved. A
+  model whose activations explode on the busiest windows would still train
+  and still report numbers.
 
 - **2026-11-10 (later)** — **Every GPU subcommand now installs PyG
   itself.** `gpu-probe-windows` failed on a fresh Kaggle session with "No
