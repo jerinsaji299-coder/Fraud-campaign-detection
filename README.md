@@ -790,7 +790,11 @@ version, CPU count, total and available RAM), and the torch / CUDA / cuDNN
 It then installs `torch_geometric` and attempts each optional extension —
 `pyg-lib`, `torch-scatter`, `torch-sparse`, `torch-cluster` — from the PyG
 wheel index matching the image's torch and CUDA, reporting each as
-installed or failed **without aborting**. None is required: GINEConv and
+installed or failed **without aborting**. The install itself lives in
+`ensure_torch_geometric`, which **every** GPU subcommand calls, so none of
+them depends on another having run first in the session; only `gpu-check`
+asks it for the optional extensions, since a command that needs to train
+should not spend minutes installing wheels it can run without. None is required: GINEConv and
 neighbour sampling work without them, they are only faster, and their
 wheels often lag the newest Python. Which of them lands is worth knowing
 before a training session rather than during one.
@@ -893,7 +897,9 @@ comparison is never confounded by the training method.
 and device memory are different quantities and no CPU timing resembles a
 T4's — and says so in its output; it exists so the code can be verified
 before a GPU session is spent on it, which is how the unconditional
-`torch.cuda.reset_peak_memory_stats()` call was found.
+`torch.cuda.reset_peak_memory_stats()` call was found, and how the
+self-install path above was tested (by uninstalling PyG locally and
+watching the probe put it back).
 
 #### Development checks on the 1% sample
 
@@ -1222,6 +1228,7 @@ transactions.
 | 2026-10-17 | **Every model configuration is trained at seeds 0-4**, and results are reported per seed and as mean [min, max] across seeds | A single run cannot distinguish an effect from seed noise. XGBoost's `subsample` and `colsample_bytree` make the fit genuinely stochastic, so the spread is real and worth carrying | user decision, 2026-10-17 |
 | 2026-10-17 | A **score cache** is used for the tau sweep and warmed before it | A scorer's output does not depend on tau, so a 16-point grid would otherwise re-featurise every million-edge window sixteen times for sixteen identical answers. It cannot change the curve and the cached and uncached curves are pinned equal in a test. Warming it first keeps the per-tau seconds comparable instead of letting the first tau absorb all the featurisation | implementation, stage 3.3 |
 | 2026-10-17 | **False alarms report which of the rule's two conditions failed** — purity < 0.5 vs coverage < 3 campaign accounts — with counts, replacing a single "best overlap" number | The old summary line said "best overlap 0.667 (below the 0.5 the rule requires)", which contradicts itself. Those clusters passed purity and failed coverage. On the sample 21 of 22 fail coverage, so the oracle's false alarms are mostly fragments of real campaigns too small to claim — a different problem from pollution by unrelated traffic, and one the three-account floor creates by design | user-reported, 2026-10-17 |
+| 2026-11-10 | **Every GPU subcommand installs `torch_geometric` itself** when the session lacks it, via one shared `ensure_torch_geometric`. Only `gpu-check` also attempts the optional extensions | A Kaggle session starts clean, and `gpu-probe-windows` failed on a fresh one with "No module named 'torch_geometric'" because only `gpu-check` installed it. The alternative was a documented rule that `gpu-check` must run first, which is a rule that gets forgotten - as it just was. The extensions stay exclusive to `gpu-check` because they are not required and a training command should not spend session minutes on wheels it can run without | user-reported, 2026-11-10 |
 | 2026-11-10 | **The stage 3.4 sampling decision is REOPENED**, and `gpu-probe-windows` added to settle it on a measurement. Full-batch will be proposed only if the largest L = 48 training window peaks **below 12 GB reserved** on one T4; whichever regime wins applies to **both** lookbacks | The 2026-10-10 decision rested on a shape-based estimate of ~16.6 GB for the busiest L = 48 window against 16 GB cards. `gpu-check` measured GINEConv 3x64 at **~4.6 MB per 1,000 edges** (251 MB at 50k, 936 MB at 200k, 2,302 MB at 500k), which projects **~5.1 GB** for the largest L = 24 window and **~8.6 GB** for the largest L = 48 one - roughly half the estimate. If that holds on real windows, sampling would add fanouts, a batch size and a sampler's bias to a comparison that does not need them. It is only a projection, though: a random graph's account-degree distribution is not a real window's, and linearity holds until it does not. Hence the probe before the proposal | user decision, 2026-11-10; `gpu_probe_windows.*` |
 | 2026-11-10 | **Correction: a Kaggle GPU notebook has 33.7 GB of system RAM**, so stage 3.3's 15.9 GB peak would fit there. Every "too large for a GPU notebook" claim is corrected | The claim confused the GPU's **device** memory (15.6 GB per T4) with the notebook's **host** RAM, which is a different quantity in a different place. Stage 3.3 still belongs on CPU, for the reason that always applied: its bottleneck is pandas and scipy, which a GPU does not touch, and stage 3.4 needs the weekly GPU quota. The 15.9 GB also does not constrain the GNN, which never materialises a pooled matrix | user-reported, 2026-11-10 |
 | 2026-10-10 | **Stage 3.4 training regime frozen: both candidate lookbacks train with neighbour sampling** (LinkNeighborLoader-style mini-batches of target edges with sampled multi-hop neighbourhoods). Inference scores full windows, chunked if needed. Fanouts, batch size and negative/positive handling are chosen in stage 3.4 and reported before training | If L = 24 trained full-batch and L = 48 trained with sampling, the L comparison would confound lookback length with training method, and the chosen L could not be attributed to the lookback. Using one regime for both keeps that comparison clean. It also sidesteps the capacity question: the busiest L = 48 window is estimated at ~16.6 GB full-batch against 16 GB GPUs | user decision, 2026-10-10. **The capacity half of this was reopened on 2026-11-10**: measured scaling is ~4.6 MB/1k edges, about half the estimate, so full-batch may fit. The *one regime for both lookbacks* half stands either way |
@@ -2528,6 +2535,25 @@ Tagged points in the repository, newest first. Check one out with
 | `v0.1-data-pipeline` | 2026-10-08 | Phase 2 complete, plus the stage 3.0 Kaggle runner. The research pipeline (campaign ground truth, splits, topology groups, institutions, visibility), the artifact export, the read-only FastAPI server, and the full React frontend — 69 backend tests and 48 frontend tests passing. **No models and no experiment results**: the four conditions are defined and the result schema is fixed, but nothing has been trained or run, and the full-data regression numbers are still unverified (that is what stage 3.0's Kaggle run is for). |
 
 ## Changelog
+
+- **2026-11-10 (later)** — **Every GPU subcommand now installs PyG
+  itself.** `gpu-probe-windows` failed on a fresh Kaggle session with "No
+  module named 'torch_geometric'", because only `gpu-check` installed it.
+
+  The install logic is now one function, `ensure_torch_geometric`, which
+  every GPU subcommand calls and any later one should too. The first GPU
+  command of a session pays about 30 seconds for it; the rest find it
+  already present. Only `gpu-check` asks for the optional extensions, since
+  they are not required and a command that needs to train should not spend
+  session minutes installing wheels it can run without.
+
+  The alternative — documenting that `gpu-check` must run first — is a rule
+  that gets forgotten, as it just was.
+
+  Verified by uninstalling `torch_geometric` locally and running the probe:
+  it installed it in 29s, re-imported it and completed all four windows.
+  `gpu-check`'s own report is unchanged apart from a new `installed_now`
+  field.
 
 - **2026-11-10** — **3.4.0 measured, and the sampling decision reopened.**
 

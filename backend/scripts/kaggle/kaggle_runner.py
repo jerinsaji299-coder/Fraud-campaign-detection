@@ -2597,6 +2597,102 @@ def _system_memory_mb() -> dict:
         return {"total_mb": None, "available_mb": None, "source": "unavailable"}
 
 
+def ensure_torch_geometric(
+    install: bool = True,
+    extensions: bool = False,
+    quiet: bool = False,
+) -> dict:
+    """Import torch_geometric, installing it first if the image lacks it.
+
+    **Every GPU subcommand calls this**, not just `gpu-check`. A Kaggle
+    session starts clean, so whichever GPU command runs first has to do the
+    install; requiring one particular command to run first is a rule that
+    will be forgotten, and was - `gpu-probe-windows` failed on a fresh
+    session with "No module named 'torch_geometric'" because only
+    `gpu-check` installed it. Any GPU command added later should call this
+    too.
+
+    `torch_geometric` itself is pure Python and installs anywhere. The
+    optional extensions are published per (torch, CUDA, Python), often lag
+    the newest Python, and are **not required** - GINEConv and neighbour
+    sampling both work without them. They are only attempted when
+    `extensions=True`, which `gpu-check` passes and the others do not: a
+    command that needs to train should not spend minutes of a session
+    installing wheels it can run without.
+
+    Returns what happened, so the caller can report it.
+    """
+    report: dict = {
+        "version": None, "installed_now": False, "installs": [],
+        "extensions": {}, "wheel_index": None,
+    }
+
+    def say(message: str) -> None:
+        if not quiet:
+            print(message)
+
+    try:
+        import torch_geometric
+
+        report["version"] = torch_geometric.__version__
+        say(f"torch_geometric {torch_geometric.__version__} already present")
+    except ImportError:
+        if not install:
+            say("torch_geometric is missing and installing was disabled")
+            return report
+        with step("install torch_geometric"):
+            report["installs"].append(_run_pip(["torch_geometric"]))
+        try:
+            import torch_geometric
+
+            report["version"] = torch_geometric.__version__
+            report["installed_now"] = True
+            say(f"torch_geometric {torch_geometric.__version__} installed")
+        except ImportError as exc:
+            print(
+                f"torch_geometric is still unavailable after installing: {exc}",
+                file=sys.stderr,
+            )
+            return report
+
+    if extensions and install:
+        import torch
+
+        if torch.cuda.is_available():
+            torch_tag = torch.__version__.split("+")[0]
+            cuda_tag = "cu" + (torch.version.cuda or "").replace(".", "")
+            index_url = (
+                f"https://data.pyg.org/whl/torch-{torch_tag}+{cuda_tag}.html"
+            )
+            report["wheel_index"] = index_url
+            say(f"\noptional PyG extensions, from {index_url}")
+            for package in PYG_EXTENSIONS:
+                with step(f"install {package}"):
+                    result = _run_pip([package], index_url=index_url)
+                report["installs"].append(result)
+                say(
+                    f"  {package:<16} "
+                    f"{'installed' if result['ok'] else 'FAILED'}"
+                )
+                if not result["ok"] and not quiet:
+                    for line in result.get("output_tail", [])[-2:]:
+                        print(f"      {line[:110]}")
+
+    for package in PYG_EXTENSIONS:
+        module = package.replace("-", "_")
+        try:
+            imported = __import__(module)
+            report["extensions"][package] = {
+                "importable": True,
+                "version": getattr(imported, "__version__", "unknown"),
+            }
+        except Exception as exc:  # noqa: BLE001
+            report["extensions"][package] = {
+                "importable": False, "error": f"{type(exc).__name__}: {exc}"
+            }
+    return report
+
+
 def _build_smoke_model(
     torch, GINEConv, edge_dims: int = EDGE_DIMS, node_dims: int = NODE_DIMS
 ):
@@ -2760,58 +2856,20 @@ def command_gpu_check(args: argparse.Namespace) -> int:
     report["devices"] = devices
 
     # --- torch_geometric and its optional extensions ---------------------
-    installs: list[dict] = []
-    try:
-        import torch_geometric  # noqa: F401
-
-        print(f"\ntorch_geometric {torch_geometric.__version__} already present")
-    except ImportError:
-        if args.no_install:
-            print("\ntorch_geometric missing and --no-install was passed")
-        else:
-            with step("install torch_geometric"):
-                installs.append(_run_pip(["torch_geometric"]))
-
-    pyg_version = None
-    try:
-        import torch_geometric
-
-        pyg_version = torch_geometric.__version__
-    except ImportError as exc:
-        print(f"torch_geometric is still unavailable: {exc}", file=sys.stderr)
-    report["torch_geometric"] = {"version": pyg_version}
-
-    # The extensions are published per (torch, CUDA, Python). Wheels often
-    # lag the newest Python, so each is attempted separately and a failure
-    # is recorded rather than fatal: none of them is required.
-    extension_status: dict[str, dict] = {}
-    if cuda_available and not args.no_install:
-        torch_tag = torch.__version__.split("+")[0]
-        cuda_tag = "cu" + (torch.version.cuda or "").replace(".", "")
-        index_url = f"https://data.pyg.org/whl/torch-{torch_tag}+{cuda_tag}.html"
-        report["pyg_wheel_index"] = index_url
-        print(f"\noptional PyG extensions, from {index_url}")
-        for package in PYG_EXTENSIONS:
-            with step(f"install {package}"):
-                result = _run_pip([package], index_url=index_url)
-            installs.append(result)
-            print(f"  {package:<16} {'installed' if result['ok'] else 'FAILED'}")
-            if not result["ok"]:
-                for line in result.get("output_tail", [])[-2:]:
-                    print(f"      {line[:110]}")
-
-    for package in PYG_EXTENSIONS:
-        module = package.replace("-", "_")
-        try:
-            imported = __import__(module)
-            extension_status[package] = {
-                "importable": True,
-                "version": getattr(imported, "__version__", "unknown"),
-            }
-        except Exception as exc:  # noqa: BLE001
-            extension_status[package] = {
-                "importable": False, "error": f"{type(exc).__name__}: {exc}"
-            }
+    # `gpu-check` is the one command that also attempts the optional
+    # extensions, because finding out which of them this image takes is
+    # part of its job.
+    print()
+    pyg = ensure_torch_geometric(
+        install=not args.no_install, extensions=True
+    )
+    pyg_version = pyg["version"]
+    installs = pyg["installs"]
+    extension_status = pyg["extensions"]
+    report["torch_geometric"] = {
+        "version": pyg_version, "installed_now": pyg["installed_now"]
+    }
+    report["pyg_wheel_index"] = pyg["wheel_index"]
     report["extensions"] = extension_status
     report["installs"] = installs
 
@@ -3077,14 +3135,20 @@ def command_gpu_probe_windows(args: argparse.Namespace) -> int:
 
     try:
         import torch
-        from torch_geometric.nn import GINEConv
     except ImportError as exc:
+        print(f"torch is not installed: {exc}", file=sys.stderr)
+        return 2
+
+    # A fresh Kaggle session has no torch_geometric, and this command must
+    # not depend on `gpu-check` having been run first in that session.
+    pyg = ensure_torch_geometric(install=not args.no_install)
+    if pyg["version"] is None:
         print(
-            f"torch / torch_geometric missing: {exc}\n"
-            "Run `gpu-check` first - it installs them.",
+            "torch_geometric is unavailable, so there is nothing to probe.",
             file=sys.stderr,
         )
         return 2
+    from torch_geometric.nn import GINEConv
 
     if not torch.cuda.is_available() and not args.allow_cpu:
         print(
@@ -3127,8 +3191,12 @@ def command_gpu_probe_windows(args: argparse.Namespace) -> int:
     print("STAGE 3.4.1 EVIDENCE - REAL WINDOWS THROUGH THE REAL MODEL")
     print("=" * 78)
     print(
-        f"device: {properties.name}, {properties.total_memory / 1e9:,.1f} GB"
-        f" (one of {torch.cuda.device_count()}; the probe uses cuda:0 only)"
+        f"device: {properties.name}"
+        + (
+            f", {properties.total_memory / 1e9:,.1f} GB (one of "
+            f"{torch.cuda.device_count()}; the probe uses cuda:0 only)"
+            if on_gpu else ""
+        )
     )
     print(f"torch {torch.__version__}, CUDA {torch.version.cuda}")
     print(f"full-batch budget for the 3.4.1 decision: {FULL_BATCH_BUDGET_GB:,.0f} GB")

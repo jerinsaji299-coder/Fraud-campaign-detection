@@ -566,7 +566,9 @@ otherwise be discovered halfway through a training session:
   capability, and how many there are.
 - **What the host is**: Python version, CPU count, total and available
   system RAM.
-- **What installs**: `torch_geometric` first, then each optional extension
+- **What installs**: `torch_geometric` first — which every GPU subcommand
+  does for itself, so no command depends on another having run earlier in
+  the session — then each optional extension
   (`pyg-lib`, `torch-scatter`, `torch-sparse`, `torch-cluster`) from the
   PyG wheel index matching this image's torch and CUDA. Each is attempted
   separately and reported as installed or failed **without aborting the
@@ -606,7 +608,12 @@ windows before anything is decided.
 
 ## 5i. Stage 3.4.1 evidence: the real windows
 
-Still **Accelerator: GPU**. No training, no saved model.
+Still **Accelerator: GPU**. No training, no saved model. **It does not
+depend on 5h having been run first**: every GPU subcommand installs
+`torch_geometric` itself if the session lacks it, so the first GPU command
+of a session pays ~30s for the install and the rest find it already there.
+A fresh session that ran this before `gpu-check` used to fail with "No
+module named 'torch_geometric'"; it no longer can.
 
 ```python
 !cd /kaggle/temp/repo/backend && python scripts/kaggle/kaggle_runner.py gpu-probe-windows
