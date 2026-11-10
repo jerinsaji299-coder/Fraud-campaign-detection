@@ -471,7 +471,12 @@ here, because `np.vstack` holds the per-window matrices and the pooled copy
 at the same time. L = 48 has 9.11M rows, 1.36x as many, so scaling the part
 that grows gives **~12-13 GB**. Both are inside a CPU notebook's 30 GB;
 neither would be comfortable on a GPU notebook's ~13-16 GB, which is one
-more reason this step is CPU. If L = 48 does run out, the fix is to
+more reason this step is CPU. **Corrected 2026-11-10:** that comparison was
+wrong - it put XGBoost's host-memory peak against the GPU's *device*
+memory. A Kaggle GPU notebook has **33.7 GB of system RAM** (measured by
+`gpu-check`), so the matrix would fit there. This step stays on CPU for the
+reason that always applied: its bottleneck is pandas and scipy, and stage
+3.4 needs the GPU quota. If L = 48 does run out, the fix is to
 preallocate the pooled matrix and fill it per window instead of stacking -
 report the number rather than working around it.
 
@@ -584,8 +589,71 @@ could still determine, so a failed check is still informative.
 50000,200000,500000,1000000` to push further up.
 
 **What to send back:** `gpu_check.md`, and whether the command exited 0.
-The numbers feed stage 3.4.1, where the fanouts, batch size and chunking
-are sized against them rather than guessed.
+
+### Measured, 2026-11-10 (commit 2755139, exit 0)
+
+Python 3.13.16, torch 2.11.0+cu130, PyG 2.8.1, **all four extensions
+installed**, **2 x Tesla T4 (15.6 GB each)**, **33.7 GB system RAM**.
+GINEConv 3x64 forward+backward: 50k edges 251 MB, 200k 936 MB, 500k
+2,302 MB, each in 0.07-0.16s.
+
+That is **~4.6 MB per 1,000 edges**, which projects ~5.1 GB for the largest
+L = 24 training window (1.11M edges) and ~8.6 GB for the largest L = 48 one
+(1.87M) - against the shape-based ~16.6 GB that justified neighbour
+sampling in the first place. So full-batch training may fit both lookbacks,
+and the sampling decision is reopened. Section 5i measures it on the real
+windows before anything is decided.
+
+## 5i. Stage 3.4.1 evidence: the real windows
+
+Still **Accelerator: GPU**. No training, no saved model.
+
+```python
+!cd /kaggle/temp/repo/backend && python scripts/kaggle/kaggle_runner.py gpu-probe-windows
+```
+
+`gpu-check` measured synthetic graphs with random edges. This measures the
+real thing, because a random graph's account-degree distribution is not a
+real window's and the 4.6 MB/1k projection is only linear until it is not:
+
+- the **largest rule-3 training window** at each lookback - L = 24 at
+  2022-09-02 00:00 (1,114,921 edges) and L = 48 at 2022-09-03 00:00
+  (1,869,370) - through GINE 3x64 + the edge readout MLP + the
+  class-weighted loss + an Adam step, forward and backward;
+- the **largest evaluation window**, 2022-09-10 00:00 at L = 48 (1,137,240
+  edges), scored unchunked, to find out whether chunking is needed at all.
+
+Features are real, from a spec fitted on **every** rule-3 training window
+exactly as training fits it: a spec fitted on one window would have
+narrower vocabularies and fewer edge features, and would understate the
+memory. One GPU only (`cuda:0`) - a window has to fit on a single card.
+Three training steps are timed, the first reported separately because it
+pays for allocator warm-up.
+
+It reports peak GPU memory **allocated and reserved** (reserved is what the
+allocator holds, so it is what runs out), MB per 1,000 edges, step time,
+and the build+featurise time per window. The largest windows are found by a
+full scan rather than remembered, and checked against `features-smoke`'s
+record so a mismatch shows. An OOM is caught and reported as a
+measurement. Writes `gpu_probe_windows.{md,json,csv}`; exits 3 if any probe
+failed.
+
+**The decision rule, fixed before the run:** full-batch is proposed only if
+the largest L = 48 window peaks **below 12 GB reserved**, leaving headroom
+on a 15.6 GB card for real-data variation and fragmentation. Whichever
+regime wins applies to **both** lookbacks, so the lookback comparison is
+never confounded by the training method.
+
+Expect a few minutes: most of it is the pipeline build (~32s), the scan,
+and fitting two feature specs over 13 and 9 training windows; the GPU steps
+themselves are fractions of a second.
+
+`--allow-cpu` runs the path without a GPU and measures nothing - it is for
+verifying the code off-session, not for numbers. `--steps` changes how many
+training steps are timed (default 3).
+
+**What to send back:** `gpu_probe_windows.md` and the exit code. The
+proposal in 3.4.1 is written from it.
 
 **A note on memory.** Stage 3.3's 15.9 GB peak is XGBoost's pooled
 *training matrix* - 9.1M rows x 66 features held at once. It says nothing

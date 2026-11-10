@@ -22,6 +22,10 @@ Subcommands:
                build the 1% development sample for download
     gpu-check  (stage 3.4.0) report the GPU, RAM and PyG install, and run a
                GINEConv forward+backward at the real feature widths
+    gpu-probe-windows
+               (stage 3.4.1 evidence) run the real largest training and
+               evaluation windows through the real model on one GPU and
+               report peak memory and step time
     train      train the XGBoost baseline, one model per lookback
     evaluate   score the trained baseline: tau on validation, then the
                horizons, against the oracle ceiling
@@ -41,6 +45,7 @@ import json
 import os
 import platform
 import subprocess
+from types import SimpleNamespace
 import os
 import shutil
 import subprocess
@@ -2592,7 +2597,9 @@ def _system_memory_mb() -> dict:
         return {"total_mb": None, "available_mb": None, "source": "unavailable"}
 
 
-def _build_smoke_model(torch, GINEConv):
+def _build_smoke_model(
+    torch, GINEConv, edge_dims: int = EDGE_DIMS, node_dims: int = NODE_DIMS
+):
     """The stage 3.4 architecture in miniature, at the real feature widths.
 
     Three GINEConv layers at hidden 64 over a bidirectional graph, then an
@@ -2606,9 +2613,9 @@ def _build_smoke_model(torch, GINEConv):
     class SmokeGNN(nn.Module):
         def __init__(self):
             super().__init__()
-            edge_dim = EDGE_DIMS + DIRECTION_FLAG_DIMS
+            edge_dim = edge_dims + DIRECTION_FLAG_DIMS
             self.convs = nn.ModuleList()
-            in_dim = NODE_DIMS
+            in_dim = node_dims
             for _ in range(LAYERS):
                 self.convs.append(
                     GINEConv(
@@ -2622,7 +2629,7 @@ def _build_smoke_model(torch, GINEConv):
                 )
                 in_dim = HIDDEN
             self.readout = nn.Sequential(
-                nn.Linear(2 * HIDDEN + EDGE_DIMS, HIDDEN),
+                nn.Linear(2 * HIDDEN + edge_dims, HIDDEN),
                 nn.ReLU(),
                 nn.Linear(HIDDEN, 1),
             )
@@ -2993,6 +3000,477 @@ def command_gpu_check(args: argparse.Namespace) -> int:
     return 0
 
 
+#: The decision threshold for 3.4.1: full-batch training is only proposed if
+#: the largest L=48 training window peaks below this, leaving headroom for
+#: real-data variation and for the allocator's own fragmentation.
+FULL_BATCH_BUDGET_GB = 12.0
+
+
+def _window_to_device(torch, built, device):
+    """Real window features as the tensors the model consumes.
+
+    Message passing goes both ways, so every edge is also inserted reversed
+    with a flag column saying which direction it is: the graph has 2E edges
+    and `edge_dims + 1` edge features. The *target* edges keep their own
+    unflagged features, because the readout scores each real transaction
+    once.
+    """
+    x = torch.from_numpy(built.node_features).to(device)
+    edge_index = torch.from_numpy(built.edge_index.astype("int64")).to(device)
+    edge_attr = torch.from_numpy(built.edge_features).to(device)
+    labels = torch.from_numpy(built.labels.astype("float32")).to(device)
+
+    n_edges = edge_attr.shape[0]
+    both_index = torch.cat([edge_index, edge_index.flip(0)], dim=1)
+    flag = torch.cat(
+        [
+            torch.zeros(n_edges, 1, device=device),
+            torch.ones(n_edges, 1, device=device),
+        ],
+        dim=0,
+    )
+    both_attr = torch.cat([torch.cat([edge_attr, edge_attr], dim=0), flag], dim=1)
+    return x, both_index, both_attr, edge_index, edge_attr, labels
+
+
+def _gpu_peaks(torch, device) -> dict:
+    """Allocated and reserved peaks. Reserved is the one that decides OOM."""
+    if device.type != "cuda":
+        return {"peak_allocated_mb": None, "peak_reserved_mb": None}
+    return {
+        "peak_allocated_mb": round(torch.cuda.max_memory_allocated() / 1e6, 1),
+        "peak_reserved_mb": round(torch.cuda.max_memory_reserved() / 1e6, 1),
+    }
+
+
+def command_gpu_probe_windows(args: argparse.Namespace) -> int:
+    """Stage 3.4.1 evidence: run the real largest windows through the real model.
+
+    `gpu-check` measured a synthetic graph. This measures the actual thing:
+    the largest rule-3 training window at each lookback, with real features,
+    through GINE 3x64 + the edge readout MLP + the class-weighted loss,
+    forward and backward on **one** T4 - and then full-window inference on
+    the largest evaluation window.
+
+    The question it answers is the one 3.4.1 turns on: does full-batch
+    training fit? The sampling decision in the decision log was taken on a
+    shape-based estimate of ~16.6 GB for the busiest L=48 window. If the
+    measured peak is comfortably under 12 GB there is no reason to
+    sample, and sampling would add fanouts, a batch size and a sampler's
+    bias to a comparison that does not need them.
+
+    Nothing is trained and no model is saved. Peaks are reported as both
+    allocated and reserved, because reserved is what the allocator actually
+    holds and therefore what runs out.
+    """
+    import numpy as np
+    import pandas as pd
+
+    from fraudcamp import constants, features, pipeline, windows
+
+    out = Path(args.out)
+    out.mkdir(parents=True, exist_ok=True)
+    lookbacks = (
+        [int(v) for v in args.lookbacks.split(",")] if args.lookbacks
+        else list(constants.LOOKBACKS_H)
+    )
+
+    try:
+        import torch
+        from torch_geometric.nn import GINEConv
+    except ImportError as exc:
+        print(
+            f"torch / torch_geometric missing: {exc}\n"
+            "Run `gpu-check` first - it installs them.",
+            file=sys.stderr,
+        )
+        return 2
+
+    if not torch.cuda.is_available() and not args.allow_cpu:
+        print(
+            "No CUDA device. This probe exists to measure GPU memory; set the"
+            "\nnotebook accelerator to a GPU and re-run, or pass --allow-cpu"
+            "\nto exercise the code path without measuring anything.",
+            file=sys.stderr,
+        )
+        return 2
+
+    # Deliberately one device. Both T4s are visible on Kaggle, but a single
+    # window must fit on a single card - using two here would measure
+    # something no training step will reproduce.
+    #
+    # --allow-cpu exists so the whole path can be exercised off a GPU before
+    # a session is spent on it. It measures nothing: host and device memory
+    # are different quantities, and no CPU timing here resembles a T4's.
+    on_gpu = torch.cuda.is_available()
+    device = torch.device("cuda:0" if on_gpu else "cpu")
+    properties = (
+        torch.cuda.get_device_properties(0) if on_gpu
+        else SimpleNamespace(name="CPU (no measurement)", total_memory=0)
+    )
+    if not on_gpu:
+        print(
+            "*** --allow-cpu: exercising the code path only. The memory and\n"
+            "*** timing numbers below are NOT GPU measurements.\n"
+        )
+
+    def sync():
+        """A no-op off the GPU: CUDA calls raise on a CPU-only build."""
+        if on_gpu:
+            torch.cuda.synchronize()
+
+    def reset_peaks():
+        if on_gpu:
+            torch.cuda.empty_cache()
+            torch.cuda.reset_peak_memory_stats()
+    print("=" * 78)
+    print("STAGE 3.4.1 EVIDENCE - REAL WINDOWS THROUGH THE REAL MODEL")
+    print("=" * 78)
+    print(
+        f"device: {properties.name}, {properties.total_memory / 1e9:,.1f} GB"
+        f" (one of {torch.cuda.device_count()}; the probe uses cuda:0 only)"
+    )
+    print(f"torch {torch.__version__}, CUDA {torch.version.cuda}")
+    print(f"full-batch budget for the 3.4.1 decision: {FULL_BATCH_BUDGET_GB:,.0f} GB")
+
+    with step("build pipeline"):
+        result = pipeline.build(Path(args.config))
+    print(f"  rows: {len(result.full_df):,}")
+
+    # The largest windows are found, not remembered: a scan of every usable
+    # detection time, the same one `features-smoke` uses. The expected
+    # values from that run are printed beside them so a mismatch is visible
+    # rather than silent.
+    with step("scan every usable detection time"):
+        scan = pd.DataFrame(scan_window_sizes(result.full_df, tuple(lookbacks)))
+    expected = {
+        (24, "train"): ("2022-09-02 00:00:00", 1_114_921),
+        (48, "train"): ("2022-09-03 00:00:00", 1_869_370),
+        (24, "eval"): ("2022-09-10 00:00:00", 654_467),
+        (48, "eval"): ("2022-09-10 00:00:00", 1_137_240),
+    }
+
+    def largest(lookback: int, kind: str):
+        rows = scan[(scan["lookback_h"] == lookback) & (~scan["excluded"])]
+        rows = (
+            rows[rows["split"] == "train"] if kind == "train"
+            else rows[rows["split"].isin(["val", "test", "stress"])]
+        )
+        row = rows.loc[rows["n_edges"].idxmax()]
+        want_t, want_edges = expected[(lookback, kind)]
+        agrees = str(row["t"]) == want_t and int(row["n_edges"]) == want_edges
+        if not agrees:
+            print(
+                f"  NOTE: largest {kind} window at L={lookback} is "
+                f"{row['t']} with {int(row['n_edges']):,} edges; "
+                f"features-smoke recorded {want_t} with {want_edges:,}"
+            )
+        return row, agrees
+
+    probes: list[dict] = []
+    inference: list[dict] = []
+
+    for lookback in lookbacks:
+        print(f"\n{'=' * 78}")
+        print(f"L = {lookback}h")
+        print("=" * 78)
+
+        # The spec is fitted exactly as training fits it - on every rule-3
+        # training window - because a spec fitted on one window would have
+        # narrower vocabularies and so fewer edge features, which would
+        # understate the memory this is here to measure.
+        with step(f"fit feature spec on all training windows, L={lookback}h"):
+            training_times = windows.training_detection_times(lookback)
+            train_windows = list(
+                windows.iter_windows(result.full_df, training_times, lookback)
+            )
+            spec = features.fit_feature_spec(train_windows, lookback)
+            del train_windows
+        print(f"  {len(training_times)} training windows, spec fitted")
+
+        for kind in ("train", "eval"):
+            row, agrees = largest(lookback, kind)
+            t = pd.Timestamp(row["t"])
+            label = f"largest {kind} window, L={lookback}h"
+
+            with step(f"build + featurise {label}"):
+                window = windows.build_window(result.full_df, t, lookback)
+                built = features.build_window_features(window, spec)
+            edge_dims = built.edge_features.shape[1]
+            node_dims = built.node_features.shape[1]
+            class_weight = built.class_weight()
+            print(
+                f"  {t}  {built.n_edges:,} edges, {built.n_nodes:,} accounts, "
+                f"{int(built.labels.sum()):,} positive "
+                f"(class weight {class_weight:,.1f})"
+            )
+            print(
+                f"  feature dims: {edge_dims} edge (+1 direction flag), "
+                f"{node_dims} node; "
+                f"host tensors {(built.edge_features.nbytes + built.node_features.nbytes) / 1e6:,.0f} MB"
+            )
+            if edge_dims != EDGE_DIMS or node_dims != NODE_DIMS:
+                print(
+                    f"  NOTE: dims differ from the recorded {EDGE_DIMS}/{NODE_DIMS}"
+                )
+
+            record = {
+                "lookback_h": lookback,
+                "kind": kind,
+                "t": str(t),
+                "n_edges": int(built.n_edges),
+                "n_accounts": int(built.n_nodes),
+                "n_positive": int(built.labels.sum()),
+                "class_weight": round(class_weight, 2),
+                "edge_dims": edge_dims,
+                "node_dims": node_dims,
+                "matches_features_smoke": bool(agrees),
+            }
+
+            try:
+                reset_peaks()
+                model = _build_smoke_model(
+                    torch, GINEConv, edge_dims=edge_dims, node_dims=node_dims
+                ).to(device)
+
+                with step(f"move {label} to the GPU"):
+                    tensors = _window_to_device(torch, built, device)
+                x, both_index, both_attr, target_index, target_attr, labels = tensors
+                after_load = _gpu_peaks(torch, device)
+                if on_gpu:
+                    print(
+                        f"  tensors on device: "
+                        f"{after_load['peak_allocated_mb']:,.0f} MB allocated"
+                    )
+
+                if kind == "train":
+                    # The real training step: class-weighted loss, a real
+                    # optimizer (Adam keeps two state tensors per parameter),
+                    # forward and backward. Three steps, because the first
+                    # pays for cuDNN autotuning and allocator warm-up and is
+                    # not what a training epoch looks like.
+                    optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
+                    pos_weight = torch.tensor(
+                        class_weight, dtype=torch.float32, device=device
+                    )
+                    step_seconds = []
+                    for index in range(args.steps):
+                        sync()
+                        started = time.perf_counter()
+                        optimizer.zero_grad(set_to_none=True)
+                        scores = model(
+                            x, both_index, both_attr, target_index, target_attr
+                        )
+                        loss = torch.nn.functional.binary_cross_entropy_with_logits(
+                            scores, labels, pos_weight=pos_weight
+                        )
+                        loss.backward()
+                        optimizer.step()
+                        sync()
+                        step_seconds.append(time.perf_counter() - started)
+                    peaks = _gpu_peaks(torch, device)
+                    record |= {
+                        "ok": True,
+                        "mode": "full-batch train step",
+                        "first_step_s": round(step_seconds[0], 3),
+                        "median_step_s": round(float(np.median(step_seconds[1:]))
+                                               if len(step_seconds) > 1
+                                               else step_seconds[0], 3),
+                        "loss": round(float(loss.detach()), 6),
+                        **peaks,
+                        "mb_per_1k_edges": (
+                            round(
+                                peaks["peak_reserved_mb"] / (built.n_edges / 1000), 3
+                            )
+                            if peaks["peak_reserved_mb"] else None
+                        ),
+                    }
+                    print(
+                        f"  forward+backward: first {record['first_step_s']:.2f}s, "
+                        f"median {record['median_step_s']:.2f}s over "
+                        f"{args.steps} steps"
+                    )
+                    if on_gpu:
+                        print(
+                            f"  PEAK GPU: "
+                            f"{peaks['peak_allocated_mb'] / 1000:,.2f} GB allocated, "
+                            f"{peaks['peak_reserved_mb'] / 1000:,.2f} GB reserved  "
+                            f"({record['mb_per_1k_edges']:.2f} MB per 1k edges)"
+                        )
+                    reserved_gb = (peaks["peak_reserved_mb"] or 0) / 1000
+                    headroom = properties.total_memory / 1e9 - reserved_gb
+                    verdict = (
+                        "fits the full-batch budget"
+                        if reserved_gb < FULL_BATCH_BUDGET_GB
+                        else "OVER the full-batch budget"
+                    )
+                    if on_gpu:
+                        print(
+                            f"  {verdict}: {reserved_gb:,.2f} GB against "
+                            f"{FULL_BATCH_BUDGET_GB:,.0f} GB, "
+                            f"{headroom:,.2f} GB left on the card"
+                        )
+                    record["fits_full_batch_budget"] = (
+                        bool(reserved_gb < FULL_BATCH_BUDGET_GB) if on_gpu else None
+                    )
+                    probes.append(record)
+                else:
+                    # Inference over a whole evaluation window, unchunked, to
+                    # find out whether chunking is needed at all.
+                    model.eval()
+                    with torch.no_grad():
+                        sync()
+                        started = time.perf_counter()
+                        scores = model(
+                            x, both_index, both_attr, target_index, target_attr
+                        )
+                        sync()
+                        seconds = time.perf_counter() - started
+                    peaks = _gpu_peaks(torch, device)
+                    record |= {
+                        "ok": True,
+                        "mode": "full-window inference",
+                        "seconds": round(seconds, 3),
+                        "n_scores": int(scores.shape[0]),
+                        **peaks,
+                        "mb_per_1k_edges": (
+                            round(
+                                peaks["peak_reserved_mb"] / (built.n_edges / 1000), 3
+                            )
+                            if peaks["peak_reserved_mb"] else None
+                        ),
+                    }
+                    print(
+                        f"  inference: {seconds:.2f}s for "
+                        f"{int(scores.shape[0]):,} scores"
+                        + (
+                            f"; PEAK GPU "
+                            f"{peaks['peak_allocated_mb'] / 1000:,.2f} GB allocated, "
+                            f"{peaks['peak_reserved_mb'] / 1000:,.2f} GB reserved"
+                            if on_gpu else ""
+                        )
+                    )
+                    inference.append(record)
+            except Exception as exc:  # noqa: BLE001 - an OOM is a measurement
+                record |= {
+                    "ok": False,
+                    "error": f"{type(exc).__name__}: {str(exc)[:300]}",
+                    **_gpu_peaks(torch, device),
+                }
+                (probes if kind == "train" else inference).append(record)
+                print(f"  FAILED: {type(exc).__name__}: {str(exc)[:160]}")
+            finally:
+                # Drop the device tensors before the next window is built.
+                # Rebinding on the next iteration is not enough: the previous
+                # window would stay alive while the next one loads, which on
+                # the largest pair doubles the peak and could OOM for no real
+                # reason. Assigning None here does release them - writing to
+                # `locals()` would not.
+                model = optimizer = tensors = None
+                x = both_index = both_attr = None
+                target_index = target_attr = labels = None
+                scores = loss = None
+                if on_gpu:
+                    torch.cuda.empty_cache()
+
+    # --- report -----------------------------------------------------------
+    print(f"\n{'=' * 78}")
+    print("SUMMARY")
+    print("=" * 78)
+    print(
+        f"{'L':>3} {'kind':<6}{'edges':>11}{'accounts':>11}"
+        f"{'peak GB':>10}{'MB/1k':>8}{'step s':>9}"
+    )
+    for record in probes + inference:
+        peak = record.get("peak_reserved_mb")
+        print(
+            f"{record['lookback_h']:>3} {record['kind']:<6}"
+            f"{record['n_edges']:>11,}{record['n_accounts']:>11,}"
+            f"{((peak or 0) / 1000):>10.2f}"
+            f"{(record.get('mb_per_1k_edges') or 0):>8.2f}"
+            f"{(record.get('median_step_s') or record.get('seconds') or 0):>9.2f}"
+        )
+
+    worst = max(
+        (r for r in probes if r.get("ok") and r.get("peak_reserved_mb")),
+        key=lambda r: r.get("peak_reserved_mb") or 0,
+        default=None,
+    )
+    if worst:
+        peak_gb = worst["peak_reserved_mb"] / 1000
+        print(
+            f"\nWorst training window: L={worst['lookback_h']}h, "
+            f"{worst['n_edges']:,} edges, {peak_gb:,.2f} GB reserved."
+        )
+        if peak_gb < FULL_BATCH_BUDGET_GB:
+            print(
+                f"That is inside the {FULL_BATCH_BUDGET_GB:,.0f} GB budget, so "
+                "FULL-BATCH training is viable for both lookbacks and 3.4.1 "
+                "should propose it: no fanouts, no batch size, no sampler bias."
+            )
+        else:
+            print(
+                f"That is over the {FULL_BATCH_BUDGET_GB:,.0f} GB budget, so "
+                "3.4.1 should propose NEIGHBOUR SAMPLING for both lookbacks."
+            )
+
+    (out / "gpu_probe_windows.json").write_text(
+        json.dumps(
+            {
+                "stage": "3.4.1-evidence",
+                "device": properties.name,
+                "device_total_gb": round(properties.total_memory / 1e9, 2),
+                "torch": torch.__version__,
+                "cuda": torch.version.cuda,
+                "full_batch_budget_gb": FULL_BATCH_BUDGET_GB,
+                "architecture": {
+                    "layers": LAYERS, "hidden": HIDDEN,
+                    "readout": "MLP on [h_src, h_dst, edge_features]",
+                    "bidirectional": True,
+                },
+                "training_windows": probes,
+                "inference_windows": inference,
+            },
+            indent=2,
+            default=str,
+        ),
+        encoding="utf-8",
+    )
+    frame = pd.DataFrame(probes + inference)
+    frame.to_csv(out / "gpu_probe_windows.csv", index=False)
+    (out / "gpu_probe_windows.md").write_text(
+        _NEWLINE.join(
+            [
+                "# Stage 3.4.1 evidence: real windows through the real model",
+                "",
+                f"GINE {LAYERS}x{HIDDEN} + edge readout MLP on "
+                "`[h_src, h_dst, edge_features]`, bidirectional message",
+                "passing with a direction flag, class-weighted loss, Adam. One",
+                f"GPU ({properties.name}, "
+                f"{properties.total_memory / 1e9:,.1f} GB). Real features from a",
+                "spec fitted on every rule-3 training window, as training fits",
+                "it.",
+                "",
+                "Peaks are reported allocated **and** reserved; reserved is what",
+                "the allocator holds and therefore what runs out.",
+                "",
+                "## Windows",
+                "",
+                _markdown_table(frame),
+                "",
+                "## Timing and host memory",
+                "",
+                steps_markdown(),
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    print(f"\nWrote {out / 'gpu_probe_windows.md'} (+ .json and .csv)")
+    failures = [r for r in probes + inference if not r.get("ok")]
+    return 3 if failures else 0
+
+
 # --------------------------------------------------------------------------
 # not yet implemented
 # --------------------------------------------------------------------------
@@ -3017,7 +3495,7 @@ def main() -> int:
         choices=[
             "verify", "pipeline", "features-smoke", "evaluate-scorers",
             "oracle-diagnose", "make-sample", "train", "evaluate",
-            "gpu-check",
+            "gpu-check", "gpu-probe-windows",
         ],
     )
     parser.add_argument(
@@ -3049,6 +3527,17 @@ def main() -> int:
     parser.add_argument(
         "--no-install", action="store_true",
         help="gpu-check: report the environment without pip installing anything",
+    )
+    parser.add_argument(
+        "--allow-cpu", action="store_true",
+        help=(
+            "gpu-probe-windows: exercise the path without a GPU. Measures "
+            "nothing; for development only"
+        ),
+    )
+    parser.add_argument(
+        "--steps", type=int, default=3,
+        help="gpu-probe-windows: training steps to time (default: 3)",
     )
     parser.add_argument(
         "--probe-edges", default="50000,200000,500000",
@@ -3088,6 +3577,7 @@ def main() -> int:
         "oracle-diagnose": command_oracle_diagnose,
         "make-sample": command_make_sample,
         "gpu-check": command_gpu_check,
+        "gpu-probe-windows": command_gpu_probe_windows,
         "train": command_train,
         "evaluate": command_evaluate,
     }
