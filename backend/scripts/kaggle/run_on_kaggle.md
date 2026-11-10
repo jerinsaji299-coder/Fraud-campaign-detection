@@ -668,6 +668,80 @@ about the GNN, which processes one window at a time under neighbour
 sampling and never materialises that pool. The GNN's memory is measured
 here and in 3.4.3, not inferred from 3.3.
 
+## 5j. Stage 3.4.3: the GNN quick check
+
+**Two sessions**, because training wants a GPU and evaluation does not.
+Run them in this order; the second reads what the first saved.
+
+### Session A - training, Accelerator: GPU
+
+```python
+!cd /kaggle/temp/repo/backend && python scripts/kaggle/kaggle_runner.py train-gnn \
+    --lookbacks 24 --variants gnn_centralized --seeds 0
+```
+
+One model: L = 24, the full variant, seed 0. Full-batch - one whole window
+per step, 13 steps an epoch - with GINE 3x64, layer normalisation after
+each convolution, and the `log1p` of the heavy-tailed node counts applied
+model-side. Up to 100 epochs, stopping when validation edge-level average
+precision has not improved for 10.
+
+It prints, per epoch: training loss, validation average precision,
+**max |logit|** and **peak GPU memory**. What to watch:
+
+- the loss should start near **0.693** (`ln 2`), which the balanced-mean
+  loss gives for any window - if it starts at 10,000 the normalisation is
+  not working;
+- `max |logit|` should stay in single or low double digits, not the 10⁴-10⁵
+  the unnormalised probe implied;
+- peak reserved memory should sit near the **6.39 GB** the probe measured
+  for the largest L = 24 window, and must not climb epoch over epoch, which
+  would mean fragmentation.
+
+Models are saved **the moment each finishes**, under
+`/kaggle/working/models/gnn/<variant>_L<L>_s<seed>/`, and a model already
+there is skipped on a re-run - so an interrupted session loses at most the
+model in flight. `--retrain` forces a rebuild. The feature spec and node
+preprocessor are fitted **once per lookback** into
+`models/gnn/spec_L<L>/` and reused by every variant and seed, because that
+fit is the 14.1 GB host-memory step.
+
+On out-of-memory it reports the window, epoch and peak, writes a partial
+report and **exits 4**. It does not fall back to sampling or chunking.
+
+**Save the notebook output** so session B can read the models.
+
+### Session B - evaluation, CPU (no accelerator)
+
+Add session A's output as a notebook input, then:
+
+```python
+!cd /kaggle/temp/repo/backend && python scripts/kaggle/kaggle_runner.py evaluate-gnn \
+    --lookbacks 24 --variants gnn_centralized --seeds 0 \
+    --model-dir /kaggle/input/<session-A-output>/models/gnn
+```
+
+Window-major: each evaluation window is featurised **once per variant** and
+scored by every seed of it, keeping only the scores. Tau is then chosen on
+validation by campaign-level F1 from the model grid - the same grid, the
+same rule, the same code as XGBoost - and everything is reported against
+the oracle on all four subsets with the paired comparisons.
+
+It writes a partial report after **every** configuration, so an interrupted
+evaluation session loses at most one. If a chosen tau lands at an edge of
+the grid it says so and **exits 3**.
+
+### What to send back
+
+From A: `train_gnn.md` and the per-epoch table - particularly the first
+epoch's loss, the `max |logit|` column and the peak memory. From B:
+`evaluate_gnn.md` and `evaluate_gnn_inference.csv`, which carries the
+measured featurise and forward cost per edge on Kaggle's CPU. Plus both
+exit codes, and the GPU time session A consumed.
+
+Those numbers size stage 3.4.4's plan for the full 2 variants x 2 lookbacks
+x 5 seeds.
+
 ## 6. Later stages
 
 `train` and `evaluate` are implemented and are section 5g above: the stage
@@ -681,11 +755,12 @@ lookbacks, so the lookback comparison is not confounded by the training
 method; see the README decision log), and `features_smoke` has measured
 the window sizes it has to fit.
 
-Stage 3.4 runs in sub-stages, each stopping for approval: **3.4.0** this
-environment check, **3.4.1** the design proposal sized against it,
-**3.4.2** implementation with tests and a local CPU smoke run, **3.4.3** a
-one-seed Kaggle quick check, **3.4.4** the full-run plan against the
-9-hour session and weekly GPU quota, and **3.4.5** the Phase 3 gate report
-comparing the GNN with XGBoost by paired comparisons only.
+Stage 3.4 runs in sub-stages, each stopping for approval. **3.4.0** (the
+environment check, section 5h), **3.4.1** (the design proposal, sized
+against section 5i's measurements) and **3.4.2** (implementation, tests and
+a local CPU smoke run) are done; **3.4.3** is section 5j above. Still to
+come: **3.4.4**, the full-run plan against the 9-hour session and the
+weekly GPU quota, and **3.4.5**, the Phase 3 gate report comparing the GNN
+with XGBoost by paired comparisons only.
 
 Everything in this document other than 5h runs on CPU.

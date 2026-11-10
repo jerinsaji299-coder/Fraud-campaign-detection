@@ -26,6 +26,11 @@ Subcommands:
                (stage 3.4.1 evidence) run the real largest training and
                evaluation windows through the real model on one GPU and
                report peak memory and step time
+    train-gnn  (stage 3.4) train the centralized GNN, full-batch and
+               resumable; needs a GPU
+    evaluate-gnn
+               (stage 3.4) score the trained GNNs window-major; runs on CPU
+               in a separate session
     train      train the XGBoost baseline, one model per lookback
     evaluate   score the trained baseline: tau on validation, then the
                horizons, against the oracle ceiling
@@ -3540,6 +3545,651 @@ def command_gpu_probe_windows(args: argparse.Namespace) -> int:
 
 
 # --------------------------------------------------------------------------
+# stage 3.4: the centralized GNN
+# --------------------------------------------------------------------------
+
+
+def _gnn_dir(args: argparse.Namespace, variant: str, lookback: int, seed: int) -> Path:
+    """Where one trained GNN lives.
+
+    Under `--out` so it survives in /kaggle/working between the GPU
+    training session and the CPU evaluation session, and so a restarted
+    training run can see what is already finished.
+    """
+    root = Path(args.model_dir) if args.model_dir else Path(args.out) / "models" / "gnn"
+    return root / f"{variant}_L{lookback}_s{seed}"
+
+
+def _spec_dir(args: argparse.Namespace, lookback: int) -> Path:
+    """Where a lookback's shared feature spec and node preprocessor live.
+
+    Fitted once per lookback and reused by every variant and seed: the
+    fit pooled every rule-3 training window and peaked at 14.1 GB of host
+    RAM on the full data, so doing it per model would be the most expensive
+    thing in the run, and doing it in two concurrent processes would not
+    fit.
+    """
+    root = Path(args.model_dir) if args.model_dir else Path(args.out) / "models" / "gnn"
+    return root / f"spec_L{lookback}"
+
+
+def _gnn_requested(args: argparse.Namespace):
+    from fraudcamp import constants
+    from fraudcamp.models import gnn
+
+    variants = (
+        [v.strip() for v in args.variants.split(",") if v.strip()]
+        if args.variants
+        else list(gnn.GNN_VARIANTS)
+    )
+    unknown = [v for v in variants if v not in gnn.GNN_VARIANTS]
+    if unknown:
+        raise SystemExit(
+            f"unknown variant(s) {unknown}; expected {sorted(gnn.GNN_VARIANTS)}"
+        )
+    lookbacks = (
+        [int(v) for v in args.lookbacks.split(",")] if args.lookbacks
+        else list(constants.LOOKBACKS_H)
+    )
+    seeds = (
+        [int(v) for v in args.seeds.split(",") if v.strip()] if args.seeds
+        else list(gnn.GNN_SEEDS)
+    )
+    return variants, lookbacks, seeds
+
+
+def command_train_gnn(args: argparse.Namespace) -> int:
+    """Train the GNN: full-batch, one window per step, resumable.
+
+    Each finished model is saved the moment it finishes, and a model that
+    is already on disk is skipped - so an interrupted session loses at most
+    the model in flight, and a restart costs nothing for the ones already
+    done.
+
+    On out-of-memory this reports the window, epoch and peak and exits
+    non-zero. It never falls back to sampling, chunking or a smaller batch:
+    a run that quietly changed training regime partway would produce
+    numbers comparable with nothing, including themselves.
+    """
+    # Before torch is imported: the allocator grows a segment instead of
+    # fragmenting into unusable blocks over hundreds of differently-sized
+    # windows, which matters when the largest window holds 10.7 GB of 15.6.
+    os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
+
+    import pandas as pd
+
+    from fraudcamp import features, pipeline, windows
+    from fraudcamp.models import gnn
+
+    out = Path(args.out)
+    out.mkdir(parents=True, exist_ok=True)
+    variants, lookbacks, seeds = _gnn_requested(args)
+
+    try:
+        import torch
+    except ImportError as exc:
+        print(f"torch is not installed: {exc}", file=sys.stderr)
+        return 2
+    if ensure_torch_geometric(install=not args.no_install)["version"] is None:
+        print("torch_geometric is unavailable; cannot train.", file=sys.stderr)
+        return 2
+
+    on_gpu = torch.cuda.is_available()
+    if not on_gpu and not args.allow_cpu:
+        print(
+            "No CUDA device. GNN training wants a GPU; pass --allow-cpu to run"
+            "\nanyway (development only - it will be slow).",
+            file=sys.stderr,
+        )
+        return 2
+    device = torch.device("cuda:0" if on_gpu else "cpu")
+    print("=" * 78)
+    print("STAGE 3.4: TRAIN THE CENTRALIZED GNN")
+    print("=" * 78)
+    print(f"device: {device}" + (f" ({torch.cuda.get_device_name(0)})" if on_gpu else ""))
+    print(f"alloc conf: {os.environ.get('PYTORCH_CUDA_ALLOC_CONF')}")
+    print(
+        f"{len(variants)} variant(s) x {len(lookbacks)} lookback(s) x "
+        f"{len(seeds)} seed(s) = {len(variants) * len(lookbacks) * len(seeds)} models"
+    )
+    print("hyperparameters, frozen before any full-data training:")
+    for key, value in gnn.GNNParams().as_dict().items():
+        if key != "seed":
+            print(f"  {key:<18} {value}")
+
+    with step("build pipeline"):
+        result = pipeline.build(Path(args.config))
+    print(f"  rows: {len(result.full_df):,}")
+
+    report: list[dict] = []
+    skipped: list[str] = []
+
+    for lookback in lookbacks:
+        # one spec and one node preprocessor per lookback, fitted once and
+        # saved, then loaded by every variant and seed
+        spec_dir = _spec_dir(args, lookback)
+        spec_path = spec_dir / "feature_spec.json"
+        node_path = spec_dir / "node_preprocessor.json"
+        if spec_path.exists() and node_path.exists():
+            print(f"\nL={lookback}h: reusing the spec already at {spec_dir}")
+            spec = features.FeatureSpec.load(spec_path)
+            node_pre = gnn.NodePreprocessor.load(node_path)
+        else:
+            with step(f"fit feature spec + node preprocessor, L={lookback}h"):
+                training_times = windows.training_detection_times(lookback)
+                train_windows = list(
+                    windows.iter_windows(result.full_df, training_times, lookback)
+                )
+                spec = features.fit_feature_spec(train_windows, lookback)
+                node_pre = gnn.fit_node_preprocessor(train_windows)
+                del train_windows
+            spec_dir.mkdir(parents=True, exist_ok=True)
+            spec.save(spec_path)
+            node_pre.save(node_path)
+            print(f"  saved to {spec_dir}")
+        print(
+            f"  log1p applied to: {', '.join(node_pre.log1p_columns)} "
+            f"(model-side only)"
+        )
+
+        for variant in variants:
+            for seed in seeds:
+                directory = _gnn_dir(args, variant, lookback, seed)
+                label = f"{variant} L={lookback}h seed={seed}"
+                if gnn.is_trained(directory) and not args.retrain:
+                    print(f"\n  SKIP {label}: already trained at {directory}")
+                    skipped.append(label)
+                    continue
+
+                def progress(row, label=label):
+                    memory = (
+                        f", peak {row['peak_reserved_mb'] / 1000:,.2f} GB"
+                        if "peak_reserved_mb" in row else ""
+                    )
+                    print(
+                        f"    epoch {row['epoch']:>3}  loss "
+                        f"{row['train_loss']:.4f}  val AP "
+                        f"{row['val_average_precision']:.4f}  max|logit| "
+                        f"{row['max_abs_logit']:,.1f}{memory}"
+                    )
+
+                try:
+                    with step(f"train {label}"):
+                        model = gnn.train_gnn(
+                            result.full_df, lookback, variant,
+                            params=gnn.GNNParams(seed=seed),
+                            spec=spec, node_pre=node_pre, device=device,
+                            progress=progress,
+                        )
+                except torch.cuda.OutOfMemoryError as exc:
+                    print(
+                        f"\nOUT OF MEMORY training {label}:\n  {exc}",
+                        file=sys.stderr,
+                    )
+                    print(
+                        "Not falling back to sampling or chunking - that would"
+                        "\nchange the training regime partway through a run."
+                        "\nReduce the matrix, or train this configuration alone.",
+                        file=sys.stderr,
+                    )
+                    pd.DataFrame(report).to_csv(
+                        out / "train_gnn_partial.csv", index=False
+                    )
+                    return 4
+
+                model.save(directory)
+                training = model.training
+                report.append(
+                    {
+                        "variant": variant, "lookback_h": lookback, "seed": seed,
+                        "model_dir": str(directory),
+                        "epochs_run": training["epochs_run"],
+                        "best_epoch": training["best_epoch"],
+                        "best_val_average_precision": training[
+                            "best_val_average_precision"
+                        ],
+                        "final_train_loss": training["history"][-1]["train_loss"],
+                        "max_abs_logit": max(
+                            r["max_abs_logit"] for r in training["history"]
+                        ),
+                        "peak_reserved_mb": max(
+                            (r.get("peak_reserved_mb") or 0)
+                            for r in training["history"]
+                        ),
+                        "cached_graph_memory_mb": training["cached_graph_memory_mb"],
+                        "deterministic": training["seeding"][
+                            "deterministic_algorithms"
+                        ],
+                        "n_training_windows": training["n_training_windows"],
+                        "n_validation_windows": training["n_validation_windows"],
+                    }
+                )
+                print(
+                    f"  saved {directory} "
+                    f"(best epoch {training['best_epoch']}, val AP "
+                    f"{training['best_val_average_precision']:.4f})"
+                )
+                # write the report after every model, so an interrupted run
+                # still leaves what it finished
+                pd.DataFrame(report).to_csv(out / "train_gnn.csv", index=False)
+
+    frame = pd.DataFrame(report)
+    (out / "train_gnn.json").write_text(
+        json.dumps(
+            {
+                "params": gnn.GNNParams().as_dict(),
+                "variants": variants, "lookbacks": lookbacks, "seeds": seeds,
+                "device": str(device),
+                "skipped_already_trained": skipped,
+                "models": report,
+            },
+            indent=2, default=str,
+        ),
+        encoding="utf-8",
+    )
+    (out / "train_gnn.md").write_text(
+        _NEWLINE.join(
+            [
+                "# Stage 3.4: GNN training",
+                "",
+                "Full-batch, one window per step, GINE 3x64 with layer",
+                "normalisation and an edge readout MLP. One frozen",
+                "hyperparameter configuration, never tuned on validation or",
+                "test. Early stopping on validation edge-level average",
+                "precision over the validation **detection** split.",
+                "",
+                "## Models",
+                "",
+                _markdown_table(frame) if not frame.empty else "_none trained_",
+                "",
+                "## Timing and memory",
+                "",
+                steps_markdown(),
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    print(f"\nWrote {out / 'train_gnn.md'} (+ .json and .csv)")
+    if skipped:
+        print(f"Skipped {len(skipped)} already-trained model(s).")
+    print("Next: `evaluate-gnn`, which can run in a later CPU session.")
+    return 0
+
+
+def command_evaluate_gnn(args: argparse.Namespace) -> int:
+    """Score the trained GNNs. Runs on CPU, in its own session.
+
+    **Window-major.** Each evaluation window is featurised once and scored
+    by every model at that lookback, and only the scores are kept. Stage
+    3.3 re-featurised every window for every model, which cost roughly 1.2
+    of its 1.59 hours; features for a lookback's evaluation windows would be
+    ~14 GB, the scores are ~1.6 GB.
+
+    Tau is then chosen per model on validation by campaign-level F1 from the
+    model grid, exactly as for XGBoost, and everything is reported against
+    the oracle with paired comparisons.
+    """
+    import numpy as np
+    import pandas as pd
+
+    from fraudcamp import constants, evaluation, pipeline, windows
+    from fraudcamp.evaluation import scorers
+    from fraudcamp.models import gnn
+
+    out = Path(args.out)
+    out.mkdir(parents=True, exist_ok=True)
+    splits = [s.strip() for s in args.splits.split(",") if s.strip()]
+    variants, lookbacks, seeds = _gnn_requested(args)
+    tau_grid = (
+        tuple(float(v) for v in args.tau_grid.split(","))
+        if args.tau_grid
+        else evaluation.MODEL_TAU_GRID
+    )
+
+    try:
+        import torch
+    except ImportError as exc:
+        print(f"torch is not installed: {exc}", file=sys.stderr)
+        return 2
+    if ensure_torch_geometric(install=not args.no_install)["version"] is None:
+        print("torch_geometric is unavailable; cannot evaluate.", file=sys.stderr)
+        return 2
+
+    wanted = [
+        (variant, lookback, seed)
+        for variant in variants for lookback in lookbacks for seed in seeds
+    ]
+    missing = [
+        str(_gnn_dir(args, *key)) for key in wanted
+        if not gnn.is_trained(_gnn_dir(args, *key))
+    ]
+    if missing:
+        print(
+            "No trained model at:" + _NEWLINE
+            + _NEWLINE.join("  " + m for m in missing)
+            + _NEWLINE + "Run `train-gnn` first; its output directory can be"
+            + _NEWLINE + "carried into this session as a notebook input.",
+            file=sys.stderr,
+        )
+        return 2
+
+    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+    print("=" * 78)
+    print("STAGE 3.4: EVALUATE THE CENTRALIZED GNN")
+    print("=" * 78)
+    print(f"device: {device} (CPU is expected and sufficient here)")
+    print(f"tau grid: {list(tau_grid)}")
+
+    with step("build pipeline"):
+        result = pipeline.build(Path(args.config))
+    print(f"  rows: {len(result.full_df):,}, campaigns: {len(result.camp):,}")
+
+    def oracle(window, t):
+        return scorers.oracle_scores(window["Is Laundering"].to_numpy())
+
+    summary_rows: list[dict] = []
+    curve_rows: list[dict] = []
+    tau_choices: list[dict] = []
+    tau_choices_done: dict[tuple, float] = {}
+    paired_rows: list[dict] = []
+    paired_notes: list[str] = []
+    edge_taus: list[dict] = []
+    inference_rows: list[dict] = []
+    model_outcomes: dict[tuple, list] = {}
+
+    for lookback in lookbacks:
+        # every detection time any split needs, scored once per model
+        # every detection time any split needs, including validation for
+        # tau selection, as one sorted set so each is featurised once
+        needed = sorted(
+            {
+                t
+                for split in set(splits) | {"val"}
+                for t in windows.evaluation_detection_times(split)
+            }
+        )
+        models = {
+            (variant, seed): gnn.TrainedGNN.load(
+                _gnn_dir(args, variant, lookback, seed), device=device
+            )
+            for variant in variants for seed in seeds
+        }
+        tables: dict[tuple, dict] = {key: {} for key in models}
+
+        # Window-major, and one graph build per (window, VARIANT) rather
+        # than per model: the five seeds of a variant consume byte-identical
+        # graphs, and featurising is far dearer than a forward pass.
+        by_variant: dict[str, list] = {}
+        for (variant, seed) in models:
+            by_variant.setdefault(variant, []).append(seed)
+
+        with step(
+            f"score {len(needed)} windows with {len(models)} model(s), "
+            f"L={lookback}h"
+        ):
+            total_edges = 0
+            for t in needed:
+                window = windows.window_slice(result.full_df, t, lookback)
+                if len(window) == 0:
+                    continue
+                total_edges += len(window)
+                for variant, variant_seeds in by_variant.items():
+                    reference = models[(variant, variant_seeds[0])]
+                    built_at = time.perf_counter()
+                    graph = reference.build_graph(window, t).to(device)
+                    build_seconds = time.perf_counter() - built_at
+                    for seed in variant_seeds:
+                        started = time.perf_counter()
+                        scores = models[(variant, seed)].score_graph(
+                            graph, device=device
+                        )
+                        forward_seconds = time.perf_counter() - started
+                        tables[(variant, seed)][pd.Timestamp(t)] = scores.astype(
+                            np.float32
+                        )
+                        inference_rows.append(
+                            {
+                                "variant": variant, "seed": seed,
+                                "lookback_h": lookback, "t": str(t),
+                                "n_edges": len(window),
+                                "build_seconds": round(build_seconds, 3),
+                                "forward_seconds": round(forward_seconds, 3),
+                                "build_us_per_edge": round(
+                                    build_seconds / len(window) * 1e6, 3
+                                ),
+                                "forward_us_per_edge": round(
+                                    forward_seconds / len(window) * 1e6, 3
+                                ),
+                            }
+                        )
+                    del graph
+        cached_mb = sum(
+            sum(v.nbytes for v in table.values()) for table in tables.values()
+        ) / 1e6
+        print(
+            f"  featurised {len(needed)} windows once each ({total_edges:,} "
+            f"edges), cached {cached_mb:,.0f} MB of scores for "
+            f"{len(models)} model(s)"
+        )
+        if inference_rows:
+            forward = np.median([r["forward_us_per_edge"] for r in inference_rows])
+            build = np.median([r["build_us_per_edge"] for r in inference_rows])
+            print(
+                f"  median {build:.2f} us/edge to featurise (once per window "
+                f"per variant) and {forward:.2f} us/edge per forward pass"
+            )
+
+        for split in splits:
+            with step(f"ceiling: oracle on {split}, L={lookback}h"):
+                ceiling = evaluation.evaluate_split(
+                    result.full_df, result.camp, result.pattern_df,
+                    result.accounts_by_campaign, split, oracle,
+                    tau=scorers.SANITY_TAU["oracle"], lookback_h=lookback,
+                    seed=0, scorer_name="oracle",
+                )
+            reachable = [o.campaign_id for o in ceiling.outcomes if o.detected]
+            for subset in constants.TEST_SUBSETS:
+                summary_rows.append(
+                    {
+                        **evaluation.summarize(
+                            ceiling, subset=subset, bootstrap_seed=0,
+                            n_resamples=args.bootstrap,
+                            oracle_reachable=reachable,
+                            oracle_recall=evaluation.summarize(
+                                ceiling, subset=subset, bootstrap_seed=0,
+                                n_resamples=args.bootstrap,
+                                oracle_reachable=reachable,
+                            )["campaign_recall"],
+                        ),
+                        "variant": "oracle", "lookback_h": lookback, "seed": None,
+                    }
+                )
+
+            for (variant, seed), table in tables.items():
+                def cached_scorer(window, t, table=table):
+                    scores = table.get(pd.Timestamp(t))
+                    if scores is None:
+                        raise KeyError(f"no cached score for {t}")
+                    if len(scores) != len(window):
+                        raise ValueError(
+                            f"cached scores for {t} cover {len(scores)} rows, "
+                            f"window has {len(window)}"
+                        )
+                    return scores
+
+                key = (variant, lookback, seed)
+                if key not in tau_choices_done:
+                    with step(f"select tau: {variant} L={lookback}h seed={seed}"):
+                        tau, curve = evaluation.select_tau(
+                            result.full_df, result.camp, result.pattern_df,
+                            result.accounts_by_campaign, cached_scorer,
+                            tau_grid=tau_grid, lookback_h=lookback, seed=seed,
+                            scorer_name=variant, cache_scores=False,
+                        )
+                    tau_choices_done[key] = tau
+                    at_edge = evaluation.tau_is_at_grid_edge(tau, tau_grid)
+                    tau_choices.append(
+                        {
+                            "variant": variant, "lookback_h": lookback,
+                            "seed": seed, "chosen_tau": tau, "selected_on": "val",
+                            "grid": list(tau_grid), "at_grid_edge": at_edge,
+                        }
+                    )
+                    for row in curve:
+                        curve_rows.append(
+                            {"variant": variant, "seed": seed, **row}
+                        )
+                    print(f"  {variant} L={lookback}h s{seed}: tau = {tau}")
+                    if at_edge:
+                        edge_taus.append(
+                            {"variant": variant, "lookback_h": lookback,
+                             "seed": seed, "chosen_tau": tau}
+                        )
+                        print(
+                            f"    *** tau {tau} is at an EDGE of the grid ***"
+                        )
+                tau = tau_choices_done[key]
+
+                with step(
+                    f"evaluate {variant} on {split}, L={lookback}h, seed={seed}"
+                ):
+                    evaluated = evaluation.evaluate_split(
+                        result.full_df, result.camp, result.pattern_df,
+                        result.accounts_by_campaign, split, cached_scorer,
+                        tau=tau, lookback_h=lookback, seed=seed,
+                        scorer_name=variant,
+                    )
+                model_outcomes[(variant, lookback, seed, split)] = evaluated.outcomes
+                for subset in constants.TEST_SUBSETS:
+                    ceiling_recall = evaluation.summarize(
+                        ceiling, subset=subset, bootstrap_seed=0,
+                        n_resamples=args.bootstrap, oracle_reachable=reachable,
+                    )["campaign_recall"]
+                    summary_rows.append(
+                        {
+                            **evaluation.summarize(
+                                evaluated, subset=subset, bootstrap_seed=0,
+                                n_resamples=args.bootstrap,
+                                oracle_reachable=reachable,
+                                oracle_recall=ceiling_recall,
+                            ),
+                            "variant": variant, "lookback_h": lookback,
+                            "seed": seed,
+                        }
+                    )
+
+                paired = evaluation.paired_lead_time_comparison(
+                    ceiling.outcomes, evaluated.outcomes, "oracle", variant,
+                    split=split, bootstrap_seed=0,
+                )
+                paired_rows.append(
+                    {"comparison": "model_vs_oracle", "lookback_h": lookback,
+                     "seed": seed, **paired.as_dict()}
+                )
+                paired_notes.append(
+                    f"[{split}, L={lookback}h, seed {seed}, vs the ceiling] "
+                    + evaluation.describe_paired_comparison(paired)
+                )
+
+                # a partial report after every configuration, so an
+                # interrupted session loses at most one
+                pd.DataFrame(summary_rows).to_csv(
+                    out / "evaluate_gnn_partial.csv", index=False
+                )
+        del models, tables
+
+    def fmt(value, spec=".3f"):
+        return format(value, spec) if value is not None else "-"
+
+    print(_NEWLINE + "=" * 120)
+    print(
+        f"{'variant':<30}{'L':>3} {'split':<7}{'seed':>5} {'subset':<20}"
+        f"{'tau':>7}{'recall':>8}{'vs ceil':>9}{'FA/day':>9}{'lead_h':>9}"
+    )
+    print("-" * 120)
+    for row in summary_rows:
+        print(
+            f"{row['variant']:<30}{row['lookback_h']:>3} {row['split']:<7}"
+            f"{(str(row['seed']) if row['seed'] is not None else '-'):>5} "
+            f"{row['test_subset']:<20}{row['tau']:>7}"
+            f"{fmt(row['campaign_recall']):>8}"
+            f"{fmt(row['recall_relative_to_ceiling']):>9}"
+            f"{row['false_alarms_per_day']:>9,.1f}"
+            f"{fmt(row['median_lead_time_h'], '.1f'):>9}"
+        )
+    print("=" * 120)
+    print(_NEWLINE + "PAIRED COMPARISONS")
+    for note in paired_notes:
+        print(f"  {note}")
+
+    pd.DataFrame(summary_rows).to_csv(out / "evaluate_gnn.csv", index=False)
+    pd.DataFrame(curve_rows).to_csv(out / "evaluate_gnn_tau_curve.csv", index=False)
+    pd.DataFrame(paired_rows).to_csv(out / "evaluate_gnn_paired.csv", index=False)
+    pd.DataFrame(inference_rows).to_csv(
+        out / "evaluate_gnn_inference.csv", index=False
+    )
+    (out / "evaluate_gnn.json").write_text(
+        json.dumps(
+            {
+                "tau_grid": list(tau_grid),
+                "tau_choices": tau_choices,
+                "tau_at_grid_edge": edge_taus,
+                "summary": summary_rows,
+                "paired": paired_rows,
+                "paired_notes": paired_notes,
+                "inference": inference_rows,
+            },
+            indent=2, default=str,
+        ),
+        encoding="utf-8",
+    )
+    (out / "evaluate_gnn.md").write_text(
+        _NEWLINE.join(
+            [
+                "# Stage 3.4: GNN results",
+                "",
+                "Window-major evaluation: each window featurised once and",
+                "scored by every model at that lookback. Tau chosen on",
+                "validation by campaign-level F1 from the model grid, as for",
+                "XGBoost. Reported against the oracle, which is what the",
+                "laundering edges alone can yield and not a strict bound.",
+                "",
+                "## Chosen tau",
+                "",
+                _markdown_table(pd.DataFrame(tau_choices)),
+                "",
+                "## Summary",
+                "",
+                _markdown_table(pd.DataFrame(summary_rows)),
+                "",
+                "## Paired comparisons",
+                "",
+                *["- " + note for note in paired_notes],
+                "",
+                "## Inference cost",
+                "",
+                _markdown_table(pd.DataFrame(inference_rows).head(50)),
+                "",
+                "## Timing",
+                "",
+                steps_markdown(),
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    print(f"{_NEWLINE}Wrote {out / 'evaluate_gnn.md'} (+ .json and 4 CSVs)")
+    if edge_taus:
+        print(_NEWLINE + "STOPPING: a chosen tau is at an edge of the model grid.")
+        for row in edge_taus:
+            print(f"  {row['variant']} L={row['lookback_h']}h s{row['seed']}: "
+                  f"tau = {row['chosen_tau']}")
+        return 3
+    return 0
+
+
+# --------------------------------------------------------------------------
 # not yet implemented
 # --------------------------------------------------------------------------
 
@@ -3563,7 +4213,7 @@ def main() -> int:
         choices=[
             "verify", "pipeline", "features-smoke", "evaluate-scorers",
             "oracle-diagnose", "make-sample", "train", "evaluate",
-            "gpu-check", "gpu-probe-windows",
+            "gpu-check", "gpu-probe-windows", "train-gnn", "evaluate-gnn",
         ],
     )
     parser.add_argument(
@@ -3599,9 +4249,13 @@ def main() -> int:
     parser.add_argument(
         "--allow-cpu", action="store_true",
         help=(
-            "gpu-probe-windows: exercise the path without a GPU. Measures "
-            "nothing; for development only"
+            "gpu-probe-windows / train-gnn: run without a GPU. The probe then "
+            "measures nothing; training is simply slow. Development only"
         ),
+    )
+    parser.add_argument(
+        "--retrain", action="store_true",
+        help="train-gnn: retrain models that are already saved",
     )
     parser.add_argument(
         "--steps", type=int, default=3,
@@ -3646,6 +4300,8 @@ def main() -> int:
         "make-sample": command_make_sample,
         "gpu-check": command_gpu_check,
         "gpu-probe-windows": command_gpu_probe_windows,
+        "train-gnn": command_train_gnn,
+        "evaluate-gnn": command_evaluate_gnn,
         "train": command_train,
         "evaluate": command_evaluate,
     }

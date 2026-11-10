@@ -81,14 +81,12 @@ bank).
 (extraction, matching with other-split hits, horizons, lead time, metrics,
 bootstrap CIs) and the oracle/random sanity scorers are in place and
 validated.
-**Next step:** approve or amend the
-§[3.4.1 design proposal](#341-design-proposal--proposed-awaiting-approval).
-Full-batch training is decided and recorded. The proposal's one addition to
-the frozen design is **layer normalisation** between GINEConv layers, to
-stop the activation explosion the probe exposed; the rest sizes epochs,
-early stopping, memory safeguards, seeding, resumability and the split
-between a GPU training session and a CPU evaluation session against
-measurements. Nothing is implemented until it is approved. Stage 3.3
+**Next step:** stage 3.4.3, the Kaggle quick check — one seed, L = 24,
+the full variant, GPU training then CPU evaluation in a separate session
+(§5j of `backend/scripts/kaggle/run_on_kaggle.md`). The design is approved,
+the implementation and its 25 tests are done, and a local CPU smoke run on
+the real 1% sample trains and evaluates end to end with `max |logit|` around
+10 rather than the 10⁴–10⁵ the unnormalised probe implied. Stage 3.3
 is complete: the non-graph baseline reaches **0.679 test recall at L = 48,
 0.760 of the oracle**, and that is the number the GNN has to beat. Two
 things 3.4 must carry: both lookbacks (L = 48's validation margin mostly
@@ -780,9 +778,9 @@ It runs in sub-stages, each stopping for approval:
 | | Sub-stage | Status |
 |---|---|---|
 | 3.4.0 | GPU environment check — no model, no data | **done** (Kaggle, `2755139`, exit 0) |
-| 3.4.1 | Design proposal | **proposed, awaiting approval** — full-batch decided; balanced-mean loss and LayerNorm proposed; see §[the proposal](#341-design-proposal--proposed-awaiting-approval) |
-| 3.4.2 | Implementation, tests, resumability, local CPU smoke run | not started |
-| 3.4.3 | Kaggle quick check: 1 seed, L = 24, full variant | not started |
+| 3.4.1 | Design | **approved 2026-11-10** with four additions — see §[the design](#341-design--approved-2026-11-10-with-four-additions) |
+| 3.4.2 | Implementation, tests, resumability, local CPU smoke run | **done** — `models/gnn.py`, 25 tests, `train-gnn` / `evaluate-gnn`, smoke run on the real sample |
+| 3.4.3 | Kaggle quick check: 1 seed, L = 24, full variant — GPU training then CPU evaluation | ready to run, §5j of the runbook |
 | 3.4.4 | Full-run plan against the 9-hour session and weekly GPU quota | not started |
 | 3.4.5 | Phase 3 gate report: GNN vs XGBoost, paired comparisons only | not started |
 
@@ -961,10 +959,22 @@ assumed. Nothing is trained until that is settled: a model whose activations
 explode on the busiest windows would train, report numbers, and mean
 nothing.
 
-#### 3.4.1 design proposal — **proposed, awaiting approval**
+#### 3.4.1 design — **approved 2026-11-10, with four additions**
 
-Nothing below is implemented or frozen. Every number is measured unless it
-says otherwise.
+Approved as proposed: the balanced-mean loss, layer normalisation after
+each convolution, sequential training on one GPU with parallelism as a
+contingency, one feature spec per lookback fitted once and shared, and
+window-major evaluation in a CPU session. Four additions came with the
+approval and are part of the design:
+
+1. **`log1p` on the heavy-tailed node counts, inside the GNN only** — the
+   root cause of the extreme logits, below.
+2. **Early stopping on validation edge-level average precision**, not
+   campaign-F1.
+3. **One frozen hyperparameter configuration**, as XGBoost had.
+4. The parameters below are stated explicitly so nothing is implicit.
+
+Every number is measured unless it says otherwise.
 
 ##### 1. The loss scale, and why it was 34× worse at L = 48
 
@@ -1016,9 +1026,42 @@ make window-invariance exact and the number readable: at initialisation it
 is **ln 2 ≈ 0.693** for any window, so a loss that is not ≈ 0.69 on the
 first step is a bug rather than a mystery.
 
-*(b) Layer normalisation after each GINEConv*, which is an **addition to
-the frozen design** and the thing most needing approval. Alternatives
-considered:
+*(b) `log1p` on the heavy-tailed node counts, inside the GNN only* —
+added on approval, and the root cause rather than a mitigation. The shared
+spec standardises **raw** counts, and standardising a heavy-tailed column
+does not bound it. The GNN therefore applies `log1p` to `in_degree`,
+`out_degree`, `n_counterparties` and `n_currencies` **before** standardising,
+with its own statistics fitted on training windows only (the shared spec's
+were computed on raw counts and do not describe a transformed column).
+`log_in_amount` and `log_out_amount` are already `log1p` in the shared
+features and are left alone.
+
+**The shared feature spec is untouched, and so is XGBoost.** A tree splits
+identically under any monotone transform of an input, so this changes
+nothing for stage 3.3 even in principle, and the stage 3.3 results stand.
+
+Measured on the 1% sample's largest training windows, maximum |x| per
+column, shared spec against GNN:
+
+| | Raw max | Shared spec | GNN | |
+|---|---:|---:|---:|---|
+| `in_degree` | 5 / 7 | 8.4 / 11.6 | **4.0 / 4.7** | log1p |
+| `out_degree` | 231 / 457 | 108.4 / 156.6 | **13.7 / 15.3** | log1p |
+| `log_in_amount` | 23 / 23 | 4.1 / 4.1 | 4.1 / 4.1 | — |
+| `log_out_amount` | 22 / 23 | 3.9 / 4.2 | 3.9 / 4.2 | — |
+| `n_counterparties` | 228 / 455 | 109.9 / 158.5 | **40.4 / 42.2** | log1p |
+| `n_currencies` | 3 / 7 | 18.0 / 48.3 | **16.1 / 29.8** | log1p |
+| **overall** | | **109.9 / 158.5** | **40.4 / 42.2** | |
+
+(L = 24 / L = 48.) Degree improves ~8–10×, and the overall maximum falls
+~3–4×. It does **not** bound the inputs: `n_counterparties` still reaches
+40, because standardising divides by a standard deviation that a tightly
+concentrated bulk makes small, and `n_currencies` barely moves at all since
+it takes only a handful of values and standardisation normalises away any
+monotone transform of a near-binary column. **That is why LayerNorm is kept
+as well rather than instead.**
+
+*(c) Layer normalisation after each GINEConv.* Alternatives considered:
 
 | Option | Why not |
 |---|---|
@@ -1106,9 +1149,12 @@ hours for stage 3.3's XGBoost.
 
 | | Proposed | Why |
 |---|---|---|
-| **Optimizer** | Adam, lr 1e-3, no schedule | Frozen across variants, lookbacks and seeds for the same reason stage 3.3's hyperparameters were: otherwise a comparison becomes a comparison of tuning effort. With the balanced loss starting at 0.69, 1e-3 is a conventional starting point; a schedule is an optimisation to consider only if training is unstable. |
-| **Epochs** | Max 100, early stopping with patience 10 | At ~4s an epoch the ceiling costs minutes, so it is set by patience, not by budget. |
-| **Early-stopping metric** | **Validation campaign-F1**, probed at taus {0.9, 0.99, 0.999}, best taken | It is the quantity this project selects on everywhere else, and it is what tau selection itself maximises. Validation *loss* is rejected: under a 2,500× class weight it is dominated by a few hundred positives and can fall while campaign-level recall does not move — the two are not interchangeable here. The probe grid is the high end because that is where stage 3.3's class-weighted model actually lived (chosen taus 0.99 and 0.995), and few edges survive those thresholds, so the clustering is cheap. |
+| **Architecture** | Linear 6→64 + LayerNorm + ReLU, then 3 × GINEConv at 64 each followed by LayerNorm + ReLU, then readout MLP `[h_src, h_dst, edge_features]` → 64 → 1. Dropout 0.0 | The input projection is an implementation choice worth stating: PyG's `GINEConv(edge_dim=…)` projects edge features down to the *node* width to add them to messages, so a first layer at the raw node width would squeeze 55 edge features into 6 dimensions and discard most of the edge information before it was used. Dropout is zero because the model is ~50k parameters and regularisation comes from early stopping. |
+| **Optimizer** | Adam, lr 1e-3, **weight decay 0.0**, no schedule | Frozen across variants, lookbacks and seeds for the same reason stage 3.3's hyperparameters were: otherwise a comparison becomes a comparison of tuning effort. With the balanced loss starting at 0.69, 1e-3 is a conventional starting point. Weight decay is zero: at ~50k parameters with early stopping already regularising, a decay term would be one more knob nobody tuned. |
+| **Epochs** | Max 100, patience 10, both fixed in advance | At ~4s an epoch the ceiling costs minutes, so it is set by patience, not by budget. Fixed before any full-data training, like everything else here. |
+| **Tuning** | **One configuration, never tuned on validation or test** | The condition that makes the GNN-versus-XGBoost comparison a comparison of models. XGBoost got one fixed configuration; so does this. Any later tuning would have to be declared and would change what the comparison means. |
+| **Early-stopping metric** | **Validation edge-level average precision (AUPRC)**, computed every epoch | Threshold-free, so it does not depend on a tau that has not been chosen yet, and it is the right summary when positives are rare — at a 0.1% positive rate ROC-AUC flatters almost anything. Campaign-F1 was considered and **rejected**: it needs cluster extraction at several thresholds every epoch, and over 26 validation campaigns it moves in steps of 1/26, so it would stop on noise. Validation *loss* is also rejected: under a 2,500× class weight it is dominated by a few hundred positives and can fall while campaign-level recall does not move. Tau is still chosen **once at the end** on validation campaign-F1 from the model grid, exactly as for XGBoost. |
+| **Windows early stopping may see** | The **validation detection split** only, `(Sept 5, Sept 6]` — four times at either lookback | The leakage trap in this sub-stage. Edge-level average precision reads *every* label in a window, and the validation **evaluation horizon** that tau selection uses runs to Sept 8, so it contains detection times inside the test detection split. Selecting epochs on it would be selecting on test-period edges. Tau selection can use that horizon because only validation campaigns' outcomes enter it (rule 2); this cannot. Pinned in `tests/test_gnn.py`. |
 | **Checkpoint kept** | The epoch with the best validation campaign-F1, not the last | Standard, and it makes early stopping a selection rather than just a stop. |
 | **Window order** | Shuffled each epoch by `numpy.random.default_rng(seed * 1000 + epoch)` | Full-batch means one window per step, so order is the only stochasticity besides initialisation; seeding it per (seed, epoch) keeps a run reproducible and the shuffle independent across seeds. |
 | **Seed control** | `torch.manual_seed`, `torch.cuda.manual_seed_all`, `numpy` and Python seeds, all from the run seed; `CUBLAS_WORKSPACE_CONFIG=:4096:8` and `torch.use_deterministic_algorithms(True)` **attempted** and the result recorded | Honest limit: GPU scatter accumulates in nondeterministic order and floating-point addition is not associative, so if PyG's kernel has no deterministic variant the call raises and determinism is reported as unavailable rather than claimed. Two mitigations make this acceptable: the five seeds' spread is reported and will dwarf last-bit drift, and **evaluation is exactly reproducible regardless**, because it runs from saved weights. |
@@ -1124,6 +1170,60 @@ hours for stage 3.3's XGBoost.
 
 Both halves fit single sessions with room, and the GPU session is the only
 one spending quota.
+
+#### 3.4.2 implementation — done
+
+`models/gnn.py`, `tests/test_gnn.py` (25 tests), and the
+`train-gnn` / `evaluate-gnn` subcommands. `torch` and `torch_geometric` are
+in `requirements.txt`, unpinned, because the Kaggle GPU image ships its own
+CUDA-matched torch and the GPU subcommands install PyG themselves.
+
+**The scorer has the same interface as the XGBoost scorer** —
+`scorer(window_transactions, t) → one probability per transaction in row
+order` — so `evaluation.evaluate_split`, `select_tau`, the budgets and the
+paired comparisons are the *same code* for both models, with no
+model-specific path. `score_graph` exists beside it so a caller evaluating
+several models can build each window once; the five seeds of a variant
+consume byte-identical graphs.
+
+**Resumability.** Each finished model is saved immediately under
+`models/gnn/<variant>_L<L>_s<seed>/` and skipped on a restart;
+`is_trained` requires **all four** files, so a run interrupted mid-save is
+retrained rather than skipped and then loaded broken. The feature spec and
+node preprocessor are fitted once per lookback into `models/gnn/spec_L<L>/`
+and reused. `evaluate-gnn` writes a partial report after every
+configuration and can run in a later session from the saved models.
+
+**Tests** cover the things that would quietly invalidate a result: that a
+window graph contains no edge at or after `t` (a transaction stamped
+exactly `t` is added to the data and the graph does not grow); that early
+stopping never sees a test detection time; that no account, bank or
+campaign name reaches the inputs and no parameter is account-vocabulary
+sized; that scores line up positionally with the window's rows and number
+`E` rather than the doubled `2E`; that the balanced loss is `ln 2` at
+initialisation for a 100-edge and a 100,000-edge window alike and that its
+per-sample weight ratio is exactly `n_neg / n_pos`, checked through the
+gradients; that average precision matches hand-computed values; that the
+no-format variant drops exactly the `fmt_*` columns including
+`fmt___other__` and changes nothing else; and that a saved model reloads to
+identical scores.
+
+**Local CPU smoke run on the real 1% sample — development numbers only.**
+The 1% background makes separation artificially easy; nothing here is a
+result. L = 24, full variant, seed 0: the loss starts near `ln 2` and falls
+to 0.06, validation average precision reaches **0.94**, early stopping fires
+at epoch 31 having peaked at 21, and **`max |logit|` stays around 10** —
+against the 10⁴–10⁵ the unnormalised probe implied, which is the `log1p`
+and LayerNorm working. Evaluation then gives test recall 0.786 at tau 0.99
+(interior), 0.957 of the oracle, and 0.0h paired against the ceiling.
+Training took 94s and evaluation 25s on a laptop CPU.
+
+Two measurements worth carrying into 3.4.3: featurisation costs ~40 µs per
+edge and a forward pass ~9 µs on these small windows, so **featurising
+dominates** — which is what window-major evaluation exists to amortise, and
+why the graph is built once per (window, variant) rather than once per
+model. On the full data's far larger windows both per-edge costs fall
+sharply.
 
 #### Development checks on the 1% sample
 
@@ -1452,6 +1552,9 @@ transactions.
 | 2026-10-17 | **Every model configuration is trained at seeds 0-4**, and results are reported per seed and as mean [min, max] across seeds | A single run cannot distinguish an effect from seed noise. XGBoost's `subsample` and `colsample_bytree` make the fit genuinely stochastic, so the spread is real and worth carrying | user decision, 2026-10-17 |
 | 2026-10-17 | A **score cache** is used for the tau sweep and warmed before it | A scorer's output does not depend on tau, so a 16-point grid would otherwise re-featurise every million-edge window sixteen times for sixteen identical answers. It cannot change the curve and the cached and uncached curves are pinned equal in a test. Warming it first keeps the per-tau seconds comparable instead of letting the first tau absorb all the featurisation | implementation, stage 3.3 |
 | 2026-10-17 | **False alarms report which of the rule's two conditions failed** — purity < 0.5 vs coverage < 3 campaign accounts — with counts, replacing a single "best overlap" number | The old summary line said "best overlap 0.667 (below the 0.5 the rule requires)", which contradicts itself. Those clusters passed purity and failed coverage. On the sample 21 of 22 fail coverage, so the oracle's false alarms are mostly fragments of real campaigns too small to claim — a different problem from pollution by unrelated traffic, and one the three-account floor creates by design | user-reported, 2026-10-17 |
+| 2026-11-10 | **The GNN gets ONE fixed hyperparameter configuration**, frozen before any full-data training and never tuned on validation or test | This is the condition that makes the GNN-versus-XGBoost comparison fair. XGBoost was given one configuration for the same reason, so neither model's number reflects how much search it received. Any later tuning of either would have to be declared, because it would change what the comparison means | user decision, 2026-11-10 |
+| 2026-11-10 | **`log1p` on the heavy-tailed node counts (`in_degree`, `out_degree`, `n_counterparties`, `n_currencies`), applied INSIDE THE GNN ONLY**, before standardising, with the GNN's own statistics fitted on training windows. The shared feature spec is unchanged and the stage 3.3 results stand | The root cause of the extreme logits, not a mitigation: the shared spec standardises *raw* counts, and standardising a heavy-tailed column does not bound it. Measured on the sample's largest windows, maximum |x| falls from 109.9 to 40.4 (L = 24) and 158.5 to 42.2 (L = 48), and on `out_degree` alone from 156.6 to 15.3. A tree splits identically under any monotone transform, so XGBoost is unaffected even in principle. It reduces but does not *bound* the inputs - `n_counterparties` still reaches 40 - so LayerNorm is kept as well | user decision, 2026-11-10; `tests/test_gnn.py` |
+| 2026-11-10 | **Early stopping on validation edge-level average precision**, computed every epoch over the **validation detection split** only. Campaign-F1 is not used for stopping; tau is still chosen once at the end by validation campaign-F1 on the model grid | AUPRC is threshold-free, so it does not need a tau that has not been chosen, and it is the right summary at a 0.1% positive rate. Campaign-F1 per epoch needs cluster extraction at several thresholds and moves in steps of 1/26 over 26 validation campaigns, so it would be both slow and noisy. The detection-split restriction matters: edge-level AUPRC reads every label in a window, and the validation *evaluation horizon* reaches into the test detection split, so stopping on it would select on test-period edges | user decision, 2026-11-10; `tests/test_gnn.py` |
 | 2026-11-10 | **DECIDED: full-batch training for both lookbacks**, closing the sampling decision reopened earlier the same day. Inference runs unchunked | Measured, not estimated: the largest L = 48 training window peaks at **10.70 GB reserved** of 15.6 GB and L = 24 at 6.39 GB, both inside the 12 GB rule fixed before the run; the largest evaluation windows need 2.71 and 4.75 GB. Steps take 0.28s and 0.45s. Full-batch removes three parameters the comparison does not need - fanouts, batch size and a sampler's bias - and sees every edge of a window at every step, which is what the frozen matching rule evaluates against. The 2026-10-10 sampling choice rested on a shape-based ~16.6 GB that the measurement halved | user decision, 2026-11-10; `gpu_probe_windows.*` |
 | 2026-11-10 | **Measured: full-batch training fits both lookbacks** - the largest L = 48 window peaks at **10.70 GB reserved** on a 15.6 GB T4 against the 12 GB rule fixed before the run, and L = 24 at 6.39 GB. Inference needs no chunking (4.75 GB, 0.18s for the largest evaluation window). The regime choice itself is 3.4.1's to propose on this evidence | The 2026-10-10 estimate was ~16.6 GB, the measurement is 10.70. Real windows came in ~25% heavier than `gpu-check`'s synthetic graphs (5.73 vs 4.6 MB per 1,000 edges), so the synthetic projection of 8.6 GB would have understated it - which is exactly why the probe ran real windows before anything was decided. Host memory peaks at 14.1 GB during the feature-spec fit, not on the GPU | `gpu_probe_windows.*`, 2026-11-10 |
 | 2026-11-10 | **The probe exposed an activation explosion that 3.4.1 must resolve**: losses of 10,615 (L = 24) and 356,394 (L = 48) after one step from random init, where class-weighted BCE should start near 1-2. No training happens until a normalisation is proposed and approved | GINEConv aggregates by **sum**, and these windows hold accounts of very high degree; summing thousands of 64-dim messages three layers deep with nothing between them compounds beyond what a linear readout can map to sensible logits. The largest window being 34x worse than the smaller one is the pattern that explanation predicts. The frozen design names GINEConv, 2-3 layers and hidden 64 but says nothing about normalisation, so adding one is a change to approve rather than assume. A model whose activations explode on the busiest windows would still train and still report numbers | `gpu_probe_windows.*`, 2026-11-10 |
@@ -1581,6 +1684,7 @@ project-root/
       models/
         __init__.py               the Phase 3 baselines
         xgb_baseline.py           stage 3.3: the non-graph control (no tau, no campaign knowledge)
+        gnn.py                    stage 3.4: GINEConv edge classification, full-batch, resumable
       federation/README.md        placeholder — Phase 4+ (not this session)
       evaluation/
         __init__.py               the public evaluation API
@@ -1610,7 +1714,7 @@ project-root/
         run_on_kaggle.md          the exact notebook cells for running this repo on Kaggle
         kaggle_runner.py          verify / pipeline / features-smoke / evaluate-scorers /
                                   oracle-diagnose / make-sample / train / evaluate /
-                                  gpu-check
+                                  gpu-check / gpu-probe-windows / train-gnn / evaluate-gnn
     tests/
       conftest.py                 src/ on sys.path + the `mini_dataset` synthetic-dataset fixture
       test_load_data.py           leading-zero banks, account IDs, timestamp parsing, cutoff
@@ -1629,6 +1733,7 @@ project-root/
       test_oracle_diagnose.py     the four oracle-miss reasons, each on a hand-built case
       test_paired_comparison.py   the paired lead-time method, incl. the misleading-medians case
       test_xgb_baseline.py        the baseline: rule 3, score alignment, identity, save/load
+      test_gnn.py                 the GNN: causality, identity, log1p, the loss, resumability
       test_features.py            feature shapes + the leakage properties (future, labels, identity)
       test_fulldata.py            @pytest.mark.fulldata, one test per regression number; skip if no data
     data/                         gitignored: raw/, sample/, processed/
@@ -2450,6 +2555,26 @@ campaign_id)`:
   of one per (window, tau) — that the cache raises if a window changes size
   under a key it has already answered, and that every curve row records what
   that tau cost.
+- **Backend GNN tests** (`test_gnn.py`, 25 tests): causality — a
+  transaction stamped exactly `t` is added to the data and the window graph
+  does not grow — and that early stopping never sees a test detection time,
+  which is the leakage trap of this sub-stage since edge-level AUPRC reads
+  every label in a window. Then that no account, bank or campaign name
+  reaches the inputs and no parameter is account-vocabulary sized; that
+  `log1p` is applied to the four count columns and not to the already-logged
+  amounts, with the mechanism tested on a power-law column where it cuts the
+  maximum z-score five-fold but demonstrably does **not** bound it, which is
+  why LayerNorm is kept; that the balanced loss is `ln 2` at initialisation
+  for a 100-edge and a 100,000-edge window alike, that its per-sample weight
+  ratio is exactly `n_neg / n_pos` (checked through the gradients), and that
+  a window with no positives still has a finite loss; that average precision
+  matches hand-computed values and is NaN without positives; that scores
+  number `E` rather than the doubled `2E` and line up positionally; that the
+  no-format variant drops exactly the `fmt_*` columns including
+  `fmt___other__` and leaves labels, graph and node features untouched; that
+  a saved model reloads to identical scores while a half-written one is not
+  counted as finished; and that `max |logit|` stays under 100 through
+  training, which is the fix working.
 - **Backend baseline tests** (`test_xgb_baseline.py`, 20 tests): the
   things that would quietly invalidate a result rather than the model's
   accuracy, which is measured on the full data and not asserted in a unit
@@ -2634,7 +2759,7 @@ campaign_id)`:
     stubbed in these tests.
 
 **Current pass status (2026-10-17):**
-- Backend: `python -m pytest tests/` from `backend/` → 284 passed, 25
+- Backend: `python -m pytest tests/` from `backend/` → 309 passed, 25
   skipped, 0 failed. The skips are the full-data suite, which needs the
   dataset that only exists on Kaggle; all 24 of its numbers passed there on
   2026-10-08/09.
@@ -2764,6 +2889,66 @@ Tagged points in the repository, newest first. Check one out with
 | `v0.1-data-pipeline` | 2026-10-08 | Phase 2 complete, plus the stage 3.0 Kaggle runner. The research pipeline (campaign ground truth, splits, topology groups, institutions, visibility), the artifact export, the read-only FastAPI server, and the full React frontend — 69 backend tests and 48 frontend tests passing. **No models and no experiment results**: the four conditions are defined and the result schema is fixed, but nothing has been trained or run, and the full-data regression numbers are still unverified (that is what stage 3.0's Kaggle run is for). |
 
 ## Changelog
+
+- **2026-11-10 (3.4.2)** — **3.4.1 approved with four additions; the GNN is
+  implemented, tested and smoke-run.**
+
+  *Approved as proposed:* the balanced-mean loss, LayerNorm after each
+  convolution, sequential training on one GPU, one shared feature spec per
+  lookback, window-major CPU evaluation.
+
+  *Addition 1, the root cause.* `log1p` on the heavy-tailed node counts —
+  `in_degree`, `out_degree`, `n_counterparties`, `n_currencies` — applied
+  **inside the GNN only**, before standardising, with the GNN's own
+  statistics fitted on training windows. The shared spec is untouched and
+  stage 3.3 stands: a tree splits identically under a monotone transform.
+  Measured on the sample's largest windows, maximum |x| falls **109.9 → 40.4**
+  (L = 24) and **158.5 → 42.2** (L = 48), and on `out_degree` alone
+  156.6 → 15.3. It reduces but does not bound — `n_counterparties` still
+  reaches 40, and `n_currencies` barely moves because standardisation
+  normalises away any monotone transform of a near-binary column — so
+  LayerNorm stays.
+
+  *Addition 2.* Early stopping on validation edge-level average precision,
+  every epoch, over the **validation detection split only**. That
+  restriction is the leakage trap here: AUPRC reads every label in a window,
+  and the validation *evaluation horizon* reaches into the test detection
+  split, so stopping on it would select on test-period edges. Campaign-F1 is
+  not used for stopping (slow per epoch, and 1/26 steps over 26 campaigns);
+  tau is still chosen once at the end by validation campaign-F1 on the model
+  grid.
+
+  *Additions 3 and 4.* One frozen hyperparameter configuration, never tuned
+  on validation or test — recorded as the condition that makes the
+  GNN-versus-XGBoost comparison fair — and every parameter stated
+  explicitly: 3 layers, hidden 64, dropout 0.0, Adam 1e-3, **weight decay
+  0.0**, max 100 epochs, patience 10, per-epoch window order shuffled from
+  `seed * 1000 + epoch`.
+
+  *Implemented:* `models/gnn.py`, `tests/test_gnn.py` (25 tests, backend 309
+  passing), the `train-gnn` and `evaluate-gnn` subcommands, and `torch` /
+  `torch_geometric` in requirements unpinned. The scorer matches the XGBoost
+  scorer's interface, so the evaluation code is shared rather than
+  duplicated. Resumability: each model saved the moment it finishes and
+  skipped on restart, `is_trained` requiring all four files so a
+  mid-save interruption is retrained rather than loaded broken, the spec
+  fitted once per lookback, and partial reports written per configuration.
+
+  *Local CPU smoke run on the real 1% sample — development numbers only.*
+  Loss starts near `ln 2` and falls to 0.06, validation AP reaches 0.94,
+  early stopping fires at epoch 31 having peaked at 21, and **`max |logit|`
+  stays near 10** against the 10⁴–10⁵ the unnormalised probe implied.
+  Evaluation gives test recall 0.786 at tau 0.99 (interior), 0.957 of the
+  oracle, 0.0h paired against the ceiling.
+
+  *One implementation bug found and fixed while measuring:* the first
+  evaluation loop built each window's graph once **per model**, which would
+  have featurised every window ten times and defeated the window-major
+  design. It now builds once per (window, variant) — the five seeds of a
+  variant consume byte-identical graphs — and the numbers are unchanged
+  either way, which is the invariance that restructuring had to preserve.
+  Featurisation costs ~40 µs/edge against ~9 µs for a forward pass on the
+  sample's small windows, so it is indeed the dominant cost.
 
 - **2026-11-10 (3.4.1 proposal)** — **Full-batch training decided; the
   design proposal written, awaiting approval.**

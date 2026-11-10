@@ -9,7 +9,15 @@ fastapi
 uvicorn
 pydantic
 
-# xgboost arrives with stage 3.3 (the non-graph baseline). torch and
-# torch_geometric still wait for 3.4, so a Phase 3 baseline session does not
-# pay for the CUDA stack. Pinned loosely: the Kaggle image ships its own.
+# xgboost arrives with stage 3.3 (the non-graph baseline). Pinned loosely:
+# the Kaggle image ships its own.
 xgboost>=2.1
+
+# torch and torch_geometric arrive with stage 3.4 (the GNN). Unpinned on
+# purpose: the Kaggle GPU image ships its own CUDA-matched torch -
+# 2.11.0+cu130, as measured by `gpu-check` - and pinning here would either
+# fight it or pull a 2 GB CPU wheel over the top of it. The runner's GPU
+# subcommands install torch_geometric themselves if a session lacks it.
+# Local development needs only the CPU build.
+torch
+torch_geometric
