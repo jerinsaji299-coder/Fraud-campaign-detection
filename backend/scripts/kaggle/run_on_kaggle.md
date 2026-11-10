@@ -668,7 +668,11 @@ about the GNN, which processes one window at a time under neighbour
 sampling and never materialises that pool. The GNN's memory is measured
 here and in 3.4.3, not inferred from 3.3.
 
-## 5j. Stage 3.4.3: the GNN quick check
+## 5j. Stage 3.4.3: the GNN quick check - RUN, 2026-11-10
+
+**Done** (commit `8d8929c`, both sessions exit 0). Kept here because 5k
+repeats the same two-session shape at full size, and because the measured
+numbers at the end are what 5k is sized from.
 
 **Two sessions**, because training wants a GPU and evaluation does not.
 Run them in this order; the second reads what the first saved.
@@ -742,6 +746,146 @@ exit codes, and the GPU time session A consumed.
 Those numbers size stage 3.4.4's plan for the full 2 variants x 2 lookbacks
 x 5 seeds.
 
+### Measured, 2026-11-10 (commit 8d8929c, exits 0 and 0)
+
+Training: first epoch's loss ~0.69 (`ln 2`), `max |logit|` 1.2 -> 14, peak
+**7.43 GB flat across epochs** (the probe measured 6.39 GB for the largest
+window's forward+backward alone; training adds optimizer state and
+fragmentation across 13 windows), **~7s an epoch**, best epoch 45 at
+validation AP 0.419, stopped at 55.
+
+Evaluation: tau 0.995, interior. Test recall 0.661 (37/56, 0.804 of the
+ceiling) at **33.3 false alarms a day**, against the stage 3.3 XGBoost's
+same 0.661 at **3.4 a day**. Inference on Kaggle's CPU over 24 windows and
+11.17M edges: **92.6s to featurise them once (8.28 us/edge)** and **56.4s
+for one model's forward passes (5.08 us/edge)**, with tau selection over
+the 16-value grid at **37.3s a model**.
+
+Those four numbers are what section 5k's estimates are built from.
+
+## 5k. Stage 3.4.4: the full run, and the direct comparison
+
+Two variants x two lookbacks x five seeds = **20 GNN models**, then one CPU
+session that evaluates all of them, regenerates the XGBoost per-campaign
+records and runs the comparison. **Three sessions**, in this order.
+
+### Sessions A1 and A2 - training, Accelerator: GPU, one per lookback
+
+```python
+# session A1
+!cd /kaggle/temp/repo/backend && python scripts/kaggle/kaggle_runner.py train-gnn \
+    --lookbacks 24
+```
+
+```python
+# session A2
+!cd /kaggle/temp/repo/backend && python scripts/kaggle/kaggle_runner.py train-gnn \
+    --lookbacks 48
+```
+
+No `--variants` or `--seeds`, so each trains all ten models of its
+lookback. Expect **~1.1h at L = 24** and **~1.5h at L = 48** from the
+measured 7s and projected 10s an epoch at 55 epochs, rising to ~2.0h and
+~2.8h if every model runs the 100-epoch cap. Either way each session is
+well inside the 9-hour GPU limit.
+
+**One session per lookback rather than one for both**, even though both
+would fit: a finished model is skipped on restart, so a lost session costs
+at most the model in flight, and splitting does not spend the whole
+estimate in one place against a weekly quota. The only thing the single
+session would save is one pipeline build (~33s).
+
+Watch the same three things as in 5j, now also at L = 48: the first epoch's
+loss near 0.693, `max |logit|` in single or low double digits, and peak
+reserved memory near the probe's **10.70 GB** for L = 48 - flat, not
+climbing. On out-of-memory it reports the window, epoch and peak, writes a
+partial report and **exits 4**, with no fallback to sampling.
+
+**Save both notebook outputs.**
+
+### Session B - evaluation and comparison, CPU (no accelerator)
+
+Add as notebook inputs: A1's output, A2's output, **and the stage 3.3
+training session's output** (the 20 boosters under
+`models/<variant>_L<L>_s<seed>/`). Then four cells:
+
+```python
+# 0. put both lookbacks' models in one place first. Each model is four
+#    small files and each spec is one, so this copy takes seconds.
+!mkdir -p /kaggle/working/models/gnn
+!cp -r /kaggle/input/<A1-output>/models/gnn/* /kaggle/working/models/gnn/
+!cp -r /kaggle/input/<A2-output>/models/gnn/* /kaggle/working/models/gnn/
+!ls /kaggle/working/models/gnn
+```
+
+That listing should show **20 model directories** - `gnn_centralized_L24_s0`
+through `gnn_centralized_no_format_L48_s4` - plus `spec_L24` and `spec_L48`.
+If it does not, stop and check the inputs: a missing model is retrained
+rather than skipped, and a CPU session cannot train one.
+
+```python
+# 1. all 20 GNN models, both lookbacks, from the copied tree
+!cd /kaggle/temp/repo/backend && python scripts/kaggle/kaggle_runner.py evaluate-gnn
+```
+
+```python
+# 2. the XGBoost records - re-evaluation, NOT retraining
+!cd /kaggle/temp/repo/backend && python scripts/kaggle/kaggle_runner.py evaluate \
+    --model-dir /kaggle/input/<stage-3.3-output>/models
+```
+
+```python
+# 3. the direct comparison, which reads only the two outcome files
+!cd /kaggle/temp/repo/backend && python scripts/kaggle/kaggle_runner.py compare-models
+```
+
+Cell 0 exists because `--model-dir` takes one path while the two training
+sessions are two separate notebook inputs. Copying both trees into
+`/kaggle/working/models/gnn/` - the default location - lets cell 1 run once
+over all 20 models, with one report covering all of them. Running cell 1
+twice instead, with `--lookbacks 24` and `--lookbacks 48` against each
+input in turn, also works but writes each lookback's report over the
+other's.
+
+Cell 2 is there because **stage 3.3 never saved per-campaign records** - its
+files hold summaries, tau curves, budget rows and its own comparisons
+against the oracle, but not one row per campaign, and rule 3 needs those to
+compare two models directly. Re-running `evaluate` regenerates them from
+the unchanged boosters: **1.59h measured**, CPU, no training. If the stage
+3.3 output no longer exists, insert `train` before it (1.44h measured, also
+CPU) - the session still fits.
+
+Expect **~35-80 min** for L = 24 and **~70-160 min** for L = 48 of
+`evaluate-gnn`, plus the 1.59h for `evaluate`: **~3.5-5 hours** in a
+12-hour session. The width of those ranges is one thing: clustering cost
+scales with the edges kept, so a *low* budget tau is the expensive case -
+stage 3.3 spent 194s on one model at its 10/day tau against 3.7s at its F1
+tau. Nothing is lost if it runs long: both commands write a partial report
+after every configuration, and a later session resumes from the saved
+models.
+
+`compare-models` takes seconds. It reads `evaluate_outcomes.csv` and
+`evaluate_gnn_outcomes.csv`, pairs on split, lookback, seed, operating point
+and ablation arm, and reports earliness over the campaigns both detect with
+a bootstrap CI, coverage each way by campaign id, edge-level average
+precision for both models on the same windows, and the false-alarm cluster
+size distribution at each operating point. It **exits 2** rather than
+guessing if either outcomes file is missing or if the two files share no
+configuration.
+
+### What to send back
+
+From A1 and A2: `train_gnn.md` for each - the per-epoch tables, the peak
+memory column, and how much GPU time each session consumed. From B:
+`evaluate_gnn.md`, `evaluate_gnn_budgets.csv`,
+`evaluate_gnn_edge_metrics.csv`, `evaluate_gnn_clusters.csv`,
+`evaluate_baseline.md` and the three `compare_models.*` files. Plus every
+exit code.
+
+Stage 3.4.5, the Phase 3 gate report, is written from those - by paired
+comparisons only, per lookback, per seed, at the F1-chosen taus and at every
+budget, with coverage reported separately.
+
 ## 6. Later stages
 
 `train` and `evaluate` are implemented and are section 5g above: the stage
@@ -756,11 +900,12 @@ method; see the README decision log), and `features_smoke` has measured
 the window sizes it has to fit.
 
 Stage 3.4 runs in sub-stages, each stopping for approval. **3.4.0** (the
-environment check, section 5h), **3.4.1** (the design proposal, sized
-against section 5i's measurements) and **3.4.2** (implementation, tests and
-a local CPU smoke run) are done; **3.4.3** is section 5j above. Still to
-come: **3.4.4**, the full-run plan against the 9-hour session and the
-weekly GPU quota, and **3.4.5**, the Phase 3 gate report comparing the GNN
-with XGBoost by paired comparisons only.
+environment check, section 5h), **3.4.1** (the design, sized against
+section 5i's measurements), **3.4.2** (implementation, tests and a local CPU
+smoke run) and **3.4.3** (the quick check, section 5j) are all done.
+**3.4.4** is section 5k above, awaiting approval of the plan in the README.
+Then **3.4.5**, the Phase 3 gate report comparing the GNN with XGBoost by
+paired comparisons only, which is written from 5k's output and needs no
+further session.
 
 Everything in this document other than 5h runs on CPU.

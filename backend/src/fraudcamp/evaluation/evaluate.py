@@ -56,6 +56,12 @@ class EvaluationResult:
     n_detection_times: int = 0
     horizon_days: float = 0.0
     per_time: list[dict] = field(default_factory=list)
+    #: One row per extracted cluster: `{t, kind, n_accounts}`. Kept because
+    #: "how many false alarms" and "what the false alarms look like" are
+    #: different questions, and two models can match on the first while
+    #: differing entirely on the second - one raising a few huge components,
+    #: the other many minimal ones. Counts only, never account names.
+    cluster_sizes: list[dict] = field(default_factory=list)
 
     @property
     def false_alarms_per_day(self) -> float:
@@ -155,6 +161,9 @@ def evaluate_split(
                 account_index,
             )
             kinds[kind] += 1
+            result.cluster_sizes.append(
+                {"t": t, "kind": kind, "n_accounts": len(cluster)}
+            )
             if kind == "hit":
                 for cid in hit_ids:
                     # first detection wins, and only if it beats the deadline
@@ -750,3 +759,199 @@ def summarize_by(result: EvaluationResult, attribute: str) -> list[dict]:
             }
         )
     return rows
+
+
+# ---------------------------------------------------------------------------
+# cluster shape: what the alerts look like, not just how many
+# ---------------------------------------------------------------------------
+
+#: Account-count buckets for a cluster-size distribution. The first three are
+#: single values because `MATCH_MIN_ACCOUNTS` is 3, and the question at a
+#: matched alert rate is whether a model's false alarms sit at that floor or
+#: are large merged components.
+CLUSTER_SIZE_BUCKETS: tuple[tuple[int, int | None], ...] = (
+    (3, 3), (4, 4), (5, 5), (6, 10), (11, 50), (51, 200), (201, None),
+)
+
+
+def _bucket_name(low: int, high: int | None) -> str:
+    if high is None:
+        return f"n_{low}_plus"
+    return f"n_{low}" if low == high else f"n_{low}_{high}"
+
+
+def cluster_size_distribution(
+    result: EvaluationResult, kind: str = "false_alarm"
+) -> dict:
+    """The size distribution of one kind of cluster, in accounts.
+
+    Two models tuned to the same false alarms per day can still differ in
+    what an analyst sees: a hundred three-account components is not the same
+    alert load as a hundred components averaging forty accounts. This reports
+    the shape, so a comparison at a matched budget compares comparable
+    things.
+
+    Percentiles use numpy's linear interpolation, so a reported p90 can fall
+    between two observed sizes.
+    """
+    sizes = np.asarray(
+        [row["n_accounts"] for row in result.cluster_sizes if row["kind"] == kind],
+        dtype=np.float64,
+    )
+    buckets = {
+        _bucket_name(low, high): int(
+            ((sizes >= low) & (sizes <= (high if high is not None else np.inf))).sum()
+        )
+        for low, high in CLUSTER_SIZE_BUCKETS
+    }
+    if sizes.size == 0:
+        return {
+            "kind": kind, "n_clusters": 0, "n_accounts_total": 0,
+            "min_accounts": None, "median_accounts": None, "mean_accounts": None,
+            "p90_accounts": None, "max_accounts": None, **buckets,
+        }
+    return {
+        "kind": kind,
+        "n_clusters": int(sizes.size),
+        "n_accounts_total": int(sizes.sum()),
+        "min_accounts": int(sizes.min()),
+        "median_accounts": float(np.median(sizes)),
+        "mean_accounts": float(sizes.mean()),
+        "p90_accounts": float(np.percentile(sizes, 90)),
+        "max_accounts": int(sizes.max()),
+        **buckets,
+    }
+
+
+def cluster_size_rows(result: EvaluationResult, **extra) -> list[dict]:
+    """One `cluster_size_distribution` row per cluster kind, for a CSV."""
+    return [
+        {
+            **extra, "eval_split": result.split, "scorer": result.scorer,
+            "tau": result.tau, "lookback_h": result.lookback_h,
+            "seed": result.seed,
+            "false_alarms_per_day": result.false_alarms_per_day,
+            **cluster_size_distribution(result, kind),
+        }
+        for kind in constants.HIT_KINDS
+    ]
+
+
+# ---------------------------------------------------------------------------
+# per-campaign records: the unit a cross-model comparison needs
+# ---------------------------------------------------------------------------
+
+#: The fields of a `CampaignOutcome`, in order. A record keeps all of them,
+#: not only the ones earliness needs, because the test subsets are filters
+#: over campaign properties and a saved record has to support them too.
+OUTCOME_FIELDS: tuple[str, ...] = (
+    "campaign_id", "split", "base_type", "group", "detected", "detection_time",
+    "lead_time_h", "normalized_lead_time", "frac_observed", "crosses_cutoff",
+    "shares_train_account", "deadline", "end", "duration_h", "n_txn",
+)
+
+
+def outcome_records(result: EvaluationResult, **extra) -> list[dict]:
+    """One row per campaign, carrying what a later paired comparison needs.
+
+    **Why this is saved at all.** Rule 3 says two detectors are compared
+    directly, never through a third. A direct comparison needs both
+    detectors' per-campaign detection times at a matched seed, lookback and
+    operating point, and those existed only inside a running process. Stage
+    3.3 saved summaries, tau curves and its own paired rows, so the
+    XGBoost-versus-GNN comparison could not be assembled from its files at
+    all and the campaign-level records had to be regenerated. From here on
+    every evaluation writes them, which also makes the Phase 4+ comparisons
+    between federated conditions possible across sessions without re-scoring
+    anything.
+
+    `operating_point` belongs in `extra`: the same model at the F1-chosen tau
+    and at a budget tau are two different detectors for this purpose.
+    """
+    rows = []
+    for outcome in result.outcomes:
+        row = {
+            **extra,
+            "scorer": result.scorer,
+            "tau": result.tau,
+            "lookback_h": result.lookback_h,
+            "seed": result.seed,
+            "eval_split": result.split,
+        }
+        for name in OUTCOME_FIELDS:
+            value = getattr(outcome, name)
+            row[name] = str(value) if isinstance(value, pd.Timestamp) else value
+        rows.append(row)
+    return rows
+
+
+def _as_bool(value) -> bool:
+    """A CSV round trip turns `False` into the string "False", which is
+    truthy. Parse explicitly rather than trusting whatever pandas inferred:
+    coercing that string would mark every campaign detected and every recall
+    1.0, and the number would look plausible."""
+    if isinstance(value, str):
+        text = value.strip().lower()
+        if text in {"true", "1", "1.0", "yes"}:
+            return True
+        if text in {"false", "0", "0.0", "no", "", "nan", "none"}:
+            return False
+        raise ValueError(f"not a boolean: {value!r}")
+    if value is None:
+        return False
+    if isinstance(value, float) and np.isnan(value):
+        return False
+    return bool(value)
+
+
+def _as_float(value) -> float | None:
+    if value is None or value == "":
+        return None
+    number = float(value)
+    return None if np.isnan(number) else number
+
+
+def _as_text(value) -> str:
+    """Empty for a missing field. A CSV round trip turns a missing string
+    into the float NaN, and `str(nan)` is the word "nan", which would travel
+    into a report as if it were a campaign's real base type."""
+    if value is None or (isinstance(value, float) and np.isnan(value)):
+        return ""
+    return str(value)
+
+
+def _as_time(value) -> pd.Timestamp | None:
+    if value is None or value == "" or value != value:
+        return None
+    return pd.Timestamp(value)
+
+
+def outcomes_from_records(records: Iterable[dict]) -> list[CampaignOutcome]:
+    """Rebuild `CampaignOutcome`s from saved records.
+
+    The inverse of `outcome_records`, so a comparison can run in a later
+    session, or on another machine, from two CSVs with no model, no features
+    and no scoring.
+    """
+    rebuilt = []
+    for record in records:
+        rebuilt.append(
+            CampaignOutcome(
+                campaign_id=int(record["campaign_id"]),
+                split=_as_text(record.get("split")) or None,
+                base_type=_as_text(record.get("base_type")),
+                group=_as_text(record.get("group")),
+                detected=_as_bool(record["detected"]),
+                detection_time=_as_time(record.get("detection_time")),
+                lead_time_h=_as_float(record.get("lead_time_h")),
+                normalized_lead_time=_as_float(record.get("normalized_lead_time")),
+                frac_observed=_as_float(record.get("frac_observed")),
+                crosses_cutoff=_as_bool(record.get("crosses_cutoff")),
+                shares_train_account=_as_bool(record.get("shares_train_account")),
+                deadline=_as_time(record.get("deadline")),
+                end=_as_time(record.get("end")),
+                duration_h=float(record.get("duration_h") or 0.0),
+                n_txn=int(record.get("n_txn") or 0),
+            )
+        )
+    return rebuilt

@@ -1,0 +1,4 @@
+comparison,lookback_h,seed,label_a,label_b,split,n_both,n_only_a,n_only_b,n_neither,only_a_campaigns,only_b_campaigns,median_difference_h,median_normalized_difference,median_frac_observed_difference,n_b_earlier,n_a_earlier,n_tied,ci_low_h,ci_high_h
+model_vs_oracle,24,0,oracle,gnn_centralized,val,12,7,0,7,"145,148,155,175,176,178,183",,0.0,0.0,0.0,0,2,10,0.0,0.0
+model_vs_oracle,24,0,oracle,gnn_centralized,test,37,9,0,10,"185,191,193,197,225,229,230,231,248",,0.0,0.0,0.0,0,17,20,-6.0,0.0
+model_vs_oracle,24,0,oracle,gnn_centralized,stress,42,13,0,21,"259,265,283,294,299,304,305,308,340,348,349,351,364",,0.0,0.0,0.0,0,13,29,0.0,0.0

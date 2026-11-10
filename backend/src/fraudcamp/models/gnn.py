@@ -44,6 +44,7 @@ import numpy as np
 import pandas as pd
 
 from .. import constants, features, windows
+from ..evaluation.edge_metrics import average_precision
 from .xgb_baseline import dropped_columns, keep_mask
 
 #: Model variants, as the edge-feature prefixes each one drops. The same
@@ -387,32 +388,11 @@ def balanced_bce(logits, labels):
     return 0.5 * losses[positive].mean() + 0.5 * losses[negative].mean()
 
 
-def average_precision(scores: np.ndarray, labels: np.ndarray) -> float:
-    """Edge-level average precision: the area under precision-recall.
-
-    The early-stopping metric. Threshold-free, so it does not depend on a
-    tau that has not been chosen yet, and it is the right summary for rare
-    positives - a 0.1% positive rate makes ROC-AUC look good for almost any
-    model. Campaign-level F1 is *not* used here: it needs cluster
-    extraction at several thresholds on every epoch, and over 26 validation
-    campaigns it moves in steps of 1/26 and would stop on noise.
-
-    Equivalent to scikit-learn's `average_precision_score`, implemented here
-    because scikit-learn is not a dependency of this project.
-    """
-    scores = np.asarray(scores, dtype=np.float64)
-    labels = np.asarray(labels, dtype=np.float64)
-    positives = labels.sum()
-    if positives == 0 or len(scores) == 0:
-        return float("nan")
-
-    order = np.argsort(-scores, kind="stable")
-    hits = labels[order]
-    true_positives = np.cumsum(hits)
-    precision = true_positives / np.arange(1, len(hits) + 1)
-    # sum of precision at each positive, over the number of positives: the
-    # step-function area, which is what average_precision_score computes
-    return float((precision * hits).sum() / positives)
+#: Edge-level average precision, the early-stopping metric. Imported from
+#: `evaluation.edge_metrics` rather than defined here, so that the number the
+#: GNN stops on and the number XGBoost is diagnosed with are produced by one
+#: function and cannot drift apart.
+_ = average_precision
 
 
 # --------------------------------------------------------------------------
@@ -604,11 +584,7 @@ def validation_detection_times(lookback_h: int) -> list:
     because only validation campaigns' outcomes enter it (rule 2); this
     cannot.
     """
-    return [
-        t
-        for t in windows.detection_times_for_split("val")
-        if windows.has_full_lookback(t, lookback_h)
-    ]
+    return windows.full_lookback_detection_times("val", lookback_h)
 
 
 def train_gnn(

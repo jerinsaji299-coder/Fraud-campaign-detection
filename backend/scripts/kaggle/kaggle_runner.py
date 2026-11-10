@@ -34,6 +34,12 @@ Subcommands:
     train      train the XGBoost baseline, one model per lookback
     evaluate   score the trained baseline: tau on validation, then the
                horizons, against the oracle ceiling
+    compare-models
+               (stage 3.4.5) compare two models directly from their saved
+               per-campaign records: earliness paired over the campaigns
+               both detect, coverage each way, edge-level average precision
+               and false-alarm cluster shape, at the F1-chosen taus and at
+               every alert budget
 
 Everything it writes goes to --out (default /kaggle/working), which is the
 only directory Kaggle persists. Each step prints its elapsed time and peak
@@ -1977,6 +1983,72 @@ def command_train(args: argparse.Namespace) -> int:
     return 0
 
 
+def _ablation(variant: str) -> str:
+    """Which arm of the payment-format ablation a variant is.
+
+    A cross-model comparison has to pair like with like: the GNN trained
+    without the format columns belongs against the XGBoost trained without
+    them, not against the full one. The variant names differ between models
+    by design - a results table has to say which model it is - so this is
+    the common axis they are matched on.
+    """
+    return "no_format" if variant.endswith("no_format") else "full"
+
+
+def _table_scorer(table: dict):
+    """A `scorer(window, t)` reading precomputed scores for that window.
+
+    The row-count check is not paranoia: the scores are positional, so a
+    table built for one window and applied to another would silently score
+    the wrong transactions and still produce a plausible number.
+    """
+    import pandas as pd
+
+    def score(window, t):
+        scores = table.get(pd.Timestamp(t))
+        if scores is None:
+            raise KeyError(f"no cached score for {t}")
+        if len(scores) != len(window):
+            raise ValueError(
+                f"cached scores for {t} cover {len(scores)} rows, window has "
+                f"{len(window)}"
+            )
+        return scores
+
+    return score
+
+
+def _edge_metric_rows(full_df, scorer, splits, lookback: int, **extra) -> list[dict]:
+    """Edge-level scoring quality for one model, over the window sets that matter.
+
+    Two sets, and the distinction is the point:
+
+    * `val_detection` - the **validation detection split**, the four windows
+      the GNN's early stopping is allowed to see. XGBoost is measured on
+      exactly those four so the two models' edge rankings are compared on
+      the same windows, which is what says whether a campaign-level
+      difference comes from the scores or from the clustering step.
+    * each requested evaluation horizon, for the same question on test.
+
+    It is nearly free: both commands have already scored these windows and
+    cache the scores, so this reads them rather than recomputing.
+    """
+    from fraudcamp import evaluation, windows
+
+    rows: list[dict] = []
+    sets = {"val_detection": windows.full_lookback_detection_times("val", lookback)}
+    for split in splits:
+        sets[split] = windows.evaluation_detection_times(split)
+    for name, times in sets.items():
+        rows.extend(
+            evaluation.edge_metrics_over_times(
+                full_df, scorer, times, lookback_h=lookback,
+                window_set=name, **extra,
+            )
+        )
+    return rows
+
+
 def command_evaluate(args: argparse.Namespace) -> int:
     """Score the trained baselines: tau on validation, then the horizons.
 
@@ -2048,6 +2120,12 @@ def command_evaluate(args: argparse.Namespace) -> int:
     ceilings: dict[tuple[int, str], object] = {}
     reachable_by: dict[tuple[int, str], list[int]] = {}
     edge_taus: list[dict] = []
+    # per-campaign records, cluster shapes and edge-level scoring quality.
+    # Stage 3.3 kept none of these, which is why its results could not be
+    # compared directly with the GNN's and had to be regenerated.
+    outcome_rows: list[dict] = []
+    cluster_rows: list[dict] = []
+    edge_rows: list[dict] = []
 
     # the ceiling first: every model is reported against it, and it does not
     # depend on the model, so it is computed once per lookback and split
@@ -2209,6 +2287,17 @@ def command_evaluate(args: argparse.Namespace) -> int:
                             at_budget, subset="all", bootstrap_seed=args.seed,
                             n_resamples=args.bootstrap,
                         )
+                        tagged = {
+                            "model": "xgboost", "variant": variant,
+                            "ablation": _ablation(variant),
+                            "operating_point": f"budget_{budget}",
+                        }
+                        outcome_rows.extend(
+                            evaluation.outcome_records(at_budget, **tagged)
+                        )
+                        cluster_rows.extend(
+                            evaluation.cluster_size_rows(at_budget, **tagged)
+                        )
                         budget_rows.append(
                             {
                                 "variant": variant, "lookback_h": lookback,
@@ -2245,6 +2334,16 @@ def command_evaluate(args: argparse.Namespace) -> int:
                     model_outcomes[(variant, lookback, seed, split)] = (
                         evaluated.outcomes
                     )
+                    tagged = {
+                        "model": "xgboost", "variant": variant,
+                        "ablation": _ablation(variant), "operating_point": "f1",
+                    }
+                    outcome_rows.extend(
+                        evaluation.outcome_records(evaluated, **tagged)
+                    )
+                    cluster_rows.extend(
+                        evaluation.cluster_size_rows(evaluated, **tagged)
+                    )
                     for subset in constants.TEST_SUBSETS:
                         ceiling_recall = evaluation.summarize(
                             ceiling, subset=subset, bootstrap_seed=args.seed,
@@ -2279,6 +2378,33 @@ def command_evaluate(args: argparse.Namespace) -> int:
                     paired_notes.append(
                         f"[{split}, L={lookback}h, seed {seed}, vs the ceiling] "
                         + evaluation.describe_paired_comparison(paired)
+                    )
+
+                # every window these need is already in the cache, so this
+                # reads scores rather than recomputing them
+                with step(
+                    f"edge metrics: {variant}, L={lookback}h, seed={seed}"
+                ):
+                    edge_rows.extend(
+                        _edge_metric_rows(
+                            result.full_df, cached, splits, lookback,
+                            model="xgboost", variant=variant,
+                            ablation=_ablation(variant), seed=seed,
+                        )
+                    )
+                pooled = [
+                    row for row in edge_rows
+                    if row.get("window") == "pooled" and row.get("seed") == seed
+                    and row.get("variant") == variant
+                    and row.get("lookback_h") == lookback
+                ]
+                for row in pooled:
+                    print(
+                        f"  edge AP [{row['window_set']}]: "
+                        f"{row['average_precision']:.4f} "
+                        f"({row['ap_lift']:,.0f}x the positive rate "
+                        f"{row['positive_rate']:.5f}), P@P "
+                        f"{row['precision_at_n_positive']:.3f}"
                     )
                 cached.clear()
 
@@ -2425,6 +2551,9 @@ def command_evaluate(args: argparse.Namespace) -> int:
     pd.DataFrame(operating_rows).to_csv(
         out / "evaluate_baseline_operating.csv", index=False
     )
+    pd.DataFrame(outcome_rows).to_csv(out / "evaluate_outcomes.csv", index=False)
+    pd.DataFrame(cluster_rows).to_csv(out / "evaluate_clusters.csv", index=False)
+    pd.DataFrame(edge_rows).to_csv(out / "evaluate_edge_metrics.csv", index=False)
     (out / "evaluate_baseline.json").write_text(
         json.dumps(
             {
@@ -2487,6 +2616,33 @@ def command_evaluate(args: argparse.Namespace) -> int:
                 "",
                 _markdown_table(pd.DataFrame(curve_rows)),
                 "",
+                "## Edge-level scoring quality (diagnostic, selects nothing)",
+                "",
+                "Average precision over the raw edge scores, before any",
+                "threshold or clustering. `val_detection` is the four windows",
+                "the GNN early-stops on, measured here so the two models are",
+                "compared on the same windows. A random ranker's average",
+                "precision is the positive rate, which is why `ap_lift` is",
+                "given beside it.",
+                "",
+                _markdown_table(
+                    pd.DataFrame(
+                        [r for r in edge_rows if r.get("window") == "pooled"]
+                    )
+                ),
+                "",
+                "## False-alarm cluster shape",
+                "",
+                "How many false alarms is one question; how big they are is",
+                "another. Two models at the same alerts per day can put very",
+                "different work on an analyst.",
+                "",
+                _markdown_table(
+                    pd.DataFrame(
+                        [r for r in cluster_rows if r.get("kind") == "false_alarm"]
+                    )
+                ),
+                "",
                 "## Timing",
                 "",
                 steps_markdown(),
@@ -2495,7 +2651,12 @@ def command_evaluate(args: argparse.Namespace) -> int:
         ),
         encoding="utf-8",
     )
-    print(f"\nWrote {out / 'evaluate_baseline.md'} (+ .json and 6 CSVs)")
+    print(f"\nWrote {out / 'evaluate_baseline.md'} (+ .json and 9 CSVs)")
+    print(
+        "  evaluate_outcomes.csv carries one row per campaign per operating "
+        "point:" + _NEWLINE
+        + "  the input `compare-models` needs for a direct GNN comparison."
+    )
 
     if edge_taus:
         print(_NEWLINE + "*" * 78)
@@ -3829,6 +3990,17 @@ def command_evaluate_gnn(args: argparse.Namespace) -> int:
     Tau is then chosen per model on validation by campaign-level F1 from the
     model grid, exactly as for XGBoost, and everything is reported against
     the oracle with paired comparisons.
+
+    Every model is also evaluated at the **fixed false-alarm budgets** the
+    design requires, with the tau for each budget chosen on validation. That
+    is the fair head-to-head view: two models' F1-chosen operating points can
+    sit an order of magnitude apart in alert volume, and comparing a detector
+    raising 33 alerts a day with one raising 3 is not a comparison of models.
+
+    It writes the per-campaign records as well, which is what makes a direct
+    GNN-versus-XGBoost paired comparison possible at all (see
+    `compare-models`), plus edge-level average precision and the shape of the
+    false-alarm clusters.
     """
     import numpy as np
     import pandas as pd
@@ -3897,6 +4069,14 @@ def command_evaluate_gnn(args: argparse.Namespace) -> int:
     edge_taus: list[dict] = []
     inference_rows: list[dict] = []
     model_outcomes: dict[tuple, list] = {}
+    curves_done: dict[tuple, list] = {}
+    budget_taus_done: dict[tuple, dict] = {}
+    budget_rows: list[dict] = []
+    operating_rows: list[dict] = []
+    outcome_rows: list[dict] = []
+    cluster_rows: list[dict] = []
+    edge_rows: list[dict] = []
+    unreachable_noted: set = set()
 
     for lookback in lookbacks:
         # every detection time any split needs, scored once per model
@@ -4007,17 +4187,7 @@ def command_evaluate_gnn(args: argparse.Namespace) -> int:
                 )
 
             for (variant, seed), table in tables.items():
-                def cached_scorer(window, t, table=table):
-                    scores = table.get(pd.Timestamp(t))
-                    if scores is None:
-                        raise KeyError(f"no cached score for {t}")
-                    if len(scores) != len(window):
-                        raise ValueError(
-                            f"cached scores for {t} cover {len(scores)} rows, "
-                            f"window has {len(window)}"
-                        )
-                    return scores
-
+                cached_scorer = _table_scorer(table)
                 key = (variant, lookback, seed)
                 if key not in tau_choices_done:
                     with step(f"select tau: {variant} L={lookback}h seed={seed}"):
@@ -4028,6 +4198,11 @@ def command_evaluate_gnn(args: argparse.Namespace) -> int:
                             scorer_name=variant, cache_scores=False,
                         )
                     tau_choices_done[key] = tau
+                    curves_done[key] = curve
+                    for point in evaluation.recall_vs_false_alarms(curve):
+                        operating_rows.append(
+                            {"variant": variant, "seed": seed, **point}
+                        )
                     at_edge = evaluation.tau_is_at_grid_edge(tau, tau_grid)
                     tau_choices.append(
                         {
@@ -4061,6 +4236,16 @@ def command_evaluate_gnn(args: argparse.Namespace) -> int:
                         scorer_name=variant,
                     )
                 model_outcomes[(variant, lookback, seed, split)] = evaluated.outcomes
+                tagged = {
+                    "model": "gnn", "variant": variant,
+                    "ablation": _ablation(variant), "operating_point": "f1",
+                }
+                outcome_rows.extend(
+                    evaluation.outcome_records(evaluated, **tagged)
+                )
+                cluster_rows.extend(
+                    evaluation.cluster_size_rows(evaluated, **tagged)
+                )
                 for subset in constants.TEST_SUBSETS:
                     ceiling_recall = evaluation.summarize(
                         ceiling, subset=subset, bootstrap_seed=0,
@@ -4092,11 +4277,124 @@ def command_evaluate_gnn(args: argparse.Namespace) -> int:
                     + evaluation.describe_paired_comparison(paired)
                 )
 
+                # the fixed false-alarm budgets. The tau for each budget is
+                # chosen on validation, from the same curve the F1 tau came
+                # from, so no test information enters the operating point.
+                if key not in budget_taus_done:
+                    budget_taus_done[key] = {
+                        budget: evaluation.select_tau_for_budget(
+                            curves_done[key], budget
+                        )
+                        for budget in evaluation.FALSE_ALARM_BUDGETS
+                    }
+                    print(
+                        f"  {variant} L={lookback}h s{seed} budget taus: "
+                        + ", ".join(
+                            f"{b}/day -> "
+                            + ("unreachable" if t is None else str(t))
+                            for b, t in budget_taus_done[key].items()
+                        )
+                    )
+                for budget, budget_tau in budget_taus_done[key].items():
+                    if budget_tau is None:
+                        if (key, budget) in unreachable_noted:
+                            continue
+                        unreachable_noted.add((key, budget))
+                        cheapest = min(
+                            row["false_alarms_per_day"]
+                            for row in curves_done[key]
+                        )
+                        budget_rows.append(
+                            {
+                                "variant": variant, "lookback_h": lookback,
+                                "seed": seed, "budget_per_day": budget,
+                                "tau": None, "reachable": False, "split": None,
+                                "campaign_recall": None,
+                                "median_lead_time_h": None,
+                                "false_alarms_per_day": None,
+                                "note": (
+                                    f"cheapest tau on the grid gives "
+                                    f"{cheapest:,.1f}/day"
+                                ),
+                            }
+                        )
+                        continue
+                    with step(
+                        f"{variant} at budget {budget}/day on {split}, "
+                        f"L={lookback}h, seed={seed}"
+                    ):
+                        at_budget = evaluation.evaluate_split(
+                            result.full_df, result.camp, result.pattern_df,
+                            result.accounts_by_campaign, split, cached_scorer,
+                            tau=budget_tau, lookback_h=lookback, seed=seed,
+                            scorer_name=variant,
+                        )
+                    budget_summary = evaluation.summarize(
+                        at_budget, subset="all", bootstrap_seed=0,
+                        n_resamples=args.bootstrap,
+                    )
+                    tagged = {
+                        "model": "gnn", "variant": variant,
+                        "ablation": _ablation(variant),
+                        "operating_point": f"budget_{budget}",
+                    }
+                    outcome_rows.extend(
+                        evaluation.outcome_records(at_budget, **tagged)
+                    )
+                    cluster_rows.extend(
+                        evaluation.cluster_size_rows(at_budget, **tagged)
+                    )
+                    budget_rows.append(
+                        {
+                            "variant": variant, "lookback_h": lookback,
+                            "seed": seed, "budget_per_day": budget,
+                            "tau": budget_tau, "reachable": True,
+                            "split": split,
+                            "campaign_recall": budget_summary["campaign_recall"],
+                            "median_lead_time_h": budget_summary[
+                                "median_lead_time_h"
+                            ],
+                            "median_frac_observed_at_detection": budget_summary[
+                                "median_frac_observed_at_detection"
+                            ],
+                            "false_alarms_per_day": budget_summary[
+                                "false_alarms_per_day"
+                            ],
+                            "n_campaigns": budget_summary["n_campaigns"],
+                            "n_detected": budget_summary["n_detected"],
+                            "note": "",
+                        }
+                    )
+
                 # a partial report after every configuration, so an
                 # interrupted session loses at most one
                 pd.DataFrame(summary_rows).to_csv(
                     out / "evaluate_gnn_partial.csv", index=False
                 )
+
+        # the scores are already in hand, so this is a read, not a rescore
+        for (variant, seed), table in tables.items():
+            with step(f"edge metrics: {variant}, L={lookback}h, seed={seed}"):
+                edge_rows.extend(
+                    _edge_metric_rows(
+                        result.full_df, _table_scorer(table), splits, lookback,
+                        model="gnn", variant=variant,
+                        ablation=_ablation(variant), seed=seed,
+                    )
+                )
+            for row in edge_rows:
+                if (
+                    row.get("window") == "pooled" and row.get("seed") == seed
+                    and row.get("variant") == variant
+                    and row.get("lookback_h") == lookback
+                ):
+                    print(
+                        f"  edge AP [{row['window_set']}]: "
+                        f"{row['average_precision']:.4f} "
+                        f"({row['ap_lift']:,.0f}x the positive rate "
+                        f"{row['positive_rate']:.5f}), P@P "
+                        f"{row['precision_at_n_positive']:.3f}"
+                    )
         del models, tables
 
     def fmt(value, spec=".3f"):
@@ -4129,6 +4427,15 @@ def command_evaluate_gnn(args: argparse.Namespace) -> int:
     pd.DataFrame(inference_rows).to_csv(
         out / "evaluate_gnn_inference.csv", index=False
     )
+    pd.DataFrame(budget_rows).to_csv(out / "evaluate_gnn_budgets.csv", index=False)
+    pd.DataFrame(operating_rows).to_csv(
+        out / "evaluate_gnn_operating.csv", index=False
+    )
+    pd.DataFrame(outcome_rows).to_csv(out / "evaluate_gnn_outcomes.csv", index=False)
+    pd.DataFrame(cluster_rows).to_csv(out / "evaluate_gnn_clusters.csv", index=False)
+    pd.DataFrame(edge_rows).to_csv(
+        out / "evaluate_gnn_edge_metrics.csv", index=False
+    )
     (out / "evaluate_gnn.json").write_text(
         json.dumps(
             {
@@ -4139,6 +4446,11 @@ def command_evaluate_gnn(args: argparse.Namespace) -> int:
                 "paired": paired_rows,
                 "paired_notes": paired_notes,
                 "inference": inference_rows,
+                "budgets": budget_rows,
+                "operating_curve": operating_rows,
+                "edge_metrics": [
+                    row for row in edge_rows if row.get("window") == "pooled"
+                ],
             },
             indent=2, default=str,
         ),
@@ -4167,6 +4479,39 @@ def command_evaluate_gnn(args: argparse.Namespace) -> int:
                 "",
                 *["- " + note for note in paired_notes],
                 "",
+                "## At fixed false-alarm budgets",
+                "",
+                "Tau per budget chosen on validation, from the same curve the",
+                "F1 tau came from. This is the view to compare with XGBoost:",
+                "the F1-chosen points of two models need not alert at",
+                "comparable rates, and recall at ten times the alert volume is",
+                "not a better detector.",
+                "",
+                _markdown_table(pd.DataFrame(budget_rows)),
+                "",
+                "## Edge-level scoring quality (diagnostic, selects nothing)",
+                "",
+                "Average precision over the raw edge scores, before any",
+                "threshold or clustering. `val_detection` is the four windows",
+                "early stopping is allowed to see. Comparing this with",
+                "XGBoost's on the same windows separates a difference in",
+                "ranking from a difference in how the scores survive",
+                "clustering.",
+                "",
+                _markdown_table(
+                    pd.DataFrame(
+                        [r for r in edge_rows if r.get("window") == "pooled"]
+                    )
+                ),
+                "",
+                "## False-alarm cluster shape",
+                "",
+                _markdown_table(
+                    pd.DataFrame(
+                        [r for r in cluster_rows if r.get("kind") == "false_alarm"]
+                    )
+                ),
+                "",
                 "## Inference cost",
                 "",
                 _markdown_table(pd.DataFrame(inference_rows).head(50)),
@@ -4179,13 +4524,336 @@ def command_evaluate_gnn(args: argparse.Namespace) -> int:
         ),
         encoding="utf-8",
     )
-    print(f"{_NEWLINE}Wrote {out / 'evaluate_gnn.md'} (+ .json and 4 CSVs)")
+    print(f"{_NEWLINE}Wrote {out / 'evaluate_gnn.md'} (+ .json and 9 CSVs)")
+    print(
+        "  evaluate_gnn_outcomes.csv holds one row per campaign per operating "
+        "point;" + _NEWLINE
+        + "  run `compare-models` with it and evaluate_outcomes.csv for the "
+        "direct" + _NEWLINE + "  GNN-versus-XGBoost paired comparison."
+    )
     if edge_taus:
         print(_NEWLINE + "STOPPING: a chosen tau is at an edge of the model grid.")
         for row in edge_taus:
             print(f"  {row['variant']} L={row['lookback_h']}h s{row['seed']}: "
                   f"tau = {row['chosen_tau']}")
         return 3
+    return 0
+
+
+# --------------------------------------------------------------------------
+# stage 3.4.5: two models, compared directly
+# --------------------------------------------------------------------------
+
+
+def _sibling(path: Path, what: str) -> Path:
+    """The companion table beside an outcomes file.
+
+    `evaluate_gnn_outcomes.csv` -> `evaluate_gnn_<what>.csv`, so one
+    `--a`/`--b` pair locates the edge metrics and cluster shapes too.
+    """
+    return path.with_name(path.name.replace("_outcomes", f"_{what}"))
+
+
+def command_compare_models(args: argparse.Namespace) -> int:
+    """Compare two models directly, from their saved per-campaign records.
+
+    **Rule 3.** An A-versus-B difference is measured between A and B, never
+    inferred from `A vs C` and `B vs C`: each of those medians is taken over
+    its own shared set of campaigns, and the two sets are different
+    campaigns. This command is the only place a GNN-versus-XGBoost earliness
+    claim may come from.
+
+    It reads two `*_outcomes.csv` files and nothing else - no model, no
+    features, no transactions - so the comparison can be run in a cheap CPU
+    session long after the runs, and the same command serves the Phase 4+
+    federated-versus-centralized comparisons.
+
+    Rows are paired on evaluation split, lookback, seed, operating point and
+    ablation arm. Both the F1-chosen operating points and each false-alarm
+    budget are compared, because two models' F1 points can differ tenfold in
+    alert volume and a budget is what makes the comparison like-for-like.
+    Earliness and coverage are reported separately, never folded together.
+    """
+    import pandas as pd
+
+    from fraudcamp import evaluation
+
+    out = Path(args.out)
+    out.mkdir(parents=True, exist_ok=True)
+    a_path = Path(args.a) if args.a else out / "evaluate_outcomes.csv"
+    b_path = Path(args.b) if args.b else out / "evaluate_gnn_outcomes.csv"
+    label_a = args.a_label or "xgboost"
+    label_b = args.b_label or "gnn"
+
+    missing = [path for path in (a_path, b_path) if not path.exists()]
+    if missing:
+        print(
+            "No per-campaign records at:" + _NEWLINE
+            + _NEWLINE.join("  " + str(path) for path in missing)
+            + _NEWLINE
+            + "`evaluate` writes evaluate_outcomes.csv and `evaluate-gnn` writes"
+            + _NEWLINE
+            + "evaluate_gnn_outcomes.csv. Runs from before those existed saved"
+            + _NEWLINE
+            + "summaries only, so their campaign-level records have to be"
+            + _NEWLINE
+            + "regenerated by re-running the evaluation - the models themselves"
+            + _NEWLINE
+            + "do not need retraining.",
+            file=sys.stderr,
+        )
+        return 2
+
+    print("=" * 78)
+    print(f"DIRECT COMPARISON: {label_b} against {label_a}")
+    print("=" * 78)
+    a_records = pd.read_csv(a_path).to_dict("records")
+    b_records = pd.read_csv(b_path).to_dict("records")
+    print(f"  {label_a}: {len(a_records):,} campaign rows from {a_path}")
+    print(f"  {label_b}: {len(b_records):,} campaign rows from {b_path}")
+
+    paired_rows, paired_notes, unmatched = evaluation.compare_outcome_tables(
+        a_records, b_records, label_a, label_b,
+        bootstrap_seed=args.seed, n_resamples=args.bootstrap,
+    )
+    coverage = evaluation.coverage_rows(a_records, b_records, label_a, label_b)
+    if not paired_rows:
+        print(
+            "Nothing matched: the two files share no "
+            f"{list(evaluation.MATCH_KEYS)} key." + _NEWLINE
+            + "Check that both runs cover the same splits, lookbacks, seeds and"
+            + _NEWLINE + "operating points.",
+            file=sys.stderr,
+        )
+        return 2
+
+    print(
+        f"{_NEWLINE}matched {len(paired_rows)} configurations on "
+        f"{list(evaluation.MATCH_KEYS)}"
+    )
+    if unmatched:
+        print(f"  {len(unmatched)} key(s) appear in only one file:")
+        for key in unmatched[:20]:
+            print(f"    {key}")
+        if len(unmatched) > 20:
+            print(f"    ... and {len(unmatched) - 20} more")
+        print("  those configurations are NOT in the comparison below.")
+
+    print(_NEWLINE + "-" * 118)
+    print(
+        f"{'split':<7}{'L':>3}{'seed':>5} {'operating':<12}{'arm':<10}"
+        f"{'recall_a':>9}{'recall_b':>9}{'both':>6}{'only_a':>7}{'only_b':>7}"
+        f"{'b-a (h)':>9}{'CI':>18}"
+    )
+    print("-" * 118)
+    coverage_by_key = {
+        (
+            row["eval_split"], row["lookback_h"], row["seed"],
+            row["operating_point"], row["ablation"],
+        ): row
+        for row in coverage
+    }
+    for row in paired_rows:
+        key = (
+            row["eval_split"], row["lookback_h"], row["seed"],
+            row["operating_point"], row["ablation"],
+        )
+        cover = coverage_by_key.get(key, {})
+        low, high = row.get("ci_low_h"), row.get("ci_high_h")
+        interval = (
+            f"[{low:.1f}, {high:.1f}]" if low is not None and high is not None
+            else "[n/a]"
+        )
+        median = row.get("median_difference_h")
+        print(
+            f"{str(row['eval_split']):<7}{row['lookback_h']:>3}"
+            f"{row['seed']:>5} {str(row['operating_point']):<12}"
+            f"{str(row['ablation']):<10}"
+            f"{(cover.get('recall_a') if cover.get('recall_a') is not None else float('nan')):>9.3f}"
+            f"{(cover.get('recall_b') if cover.get('recall_b') is not None else float('nan')):>9.3f}"
+            f"{row['n_both']:>6}{row['n_only_a']:>7}{row['n_only_b']:>7}"
+            f"{(median if median is not None else float('nan')):>9.1f}"
+            f"{interval:>18}"
+        )
+    print("-" * 118)
+    print(
+        f"  b - a, so a positive difference means {label_b} detected earlier"
+        + _NEWLINE
+        + "  on the campaigns both detect. only_a / only_b is coverage, which is"
+        + _NEWLINE
+        + "  reported separately and never folded into the earliness number."
+    )
+
+    print(_NEWLINE + "PAIRED NOTES")
+    for note in paired_notes:
+        print(f"  {note}")
+
+    # --- edge-level ranking: which stage the difference lives in ---------
+    edge_table = pd.DataFrame()
+    a_edge, b_edge = _sibling(a_path, "edge_metrics"), _sibling(b_path, "edge_metrics")
+    if a_edge.exists() and b_edge.exists():
+        keys = ["window_set", "lookback_h", "seed", "ablation"]
+        columns = keys + [
+            "n_edges", "n_positive", "positive_rate", "average_precision",
+            "ap_lift", "precision_at_n_positive",
+        ]
+        left = pd.read_csv(a_edge)
+        right = pd.read_csv(b_edge)
+        left = left[left["window"] == "pooled"][columns]
+        right = right[right["window"] == "pooled"][columns]
+        edge_table = left.merge(
+            right, on=keys, suffixes=(f"_{label_a}", f"_{label_b}"), how="inner"
+        )
+        if not edge_table.empty:
+            edge_table["ap_difference"] = (
+                edge_table[f"average_precision_{label_b}"]
+                - edge_table[f"average_precision_{label_a}"]
+            )
+            print(_NEWLINE + "EDGE-LEVEL AVERAGE PRECISION (before any clustering)")
+            print(
+                f"  {'window set':<14}{'L':>3}{'seed':>5} {'arm':<10}"
+                f"{'AP ' + label_a:>16}{'AP ' + label_b:>16}{'b-a':>9}"
+            )
+            for row in edge_table.to_dict("records"):
+                print(
+                    f"  {str(row['window_set']):<14}{row['lookback_h']:>3}"
+                    f"{row['seed']:>5} {str(row['ablation']):<10}"
+                    f"{row[f'average_precision_{label_a}']:>16.4f}"
+                    f"{row[f'average_precision_{label_b}']:>16.4f}"
+                    f"{row['ap_difference']:>9.4f}"
+                )
+            print(
+                "  If the campaign-level gap is here too, the difference is in"
+                + _NEWLINE
+                + "  how the edges are ranked. If it is not, the difference is in"
+                + _NEWLINE
+                + "  how the scores survive thresholding and clustering."
+            )
+    else:
+        print(
+            _NEWLINE + "No edge-metric tables beside the outcomes files, so the"
+            + _NEWLINE + "edge-versus-clustering diagnostic is not in this report."
+        )
+
+    # --- false-alarm cluster shape at matched budgets --------------------
+    cluster_table = pd.DataFrame()
+    a_clusters = _sibling(a_path, "clusters")
+    b_clusters = _sibling(b_path, "clusters")
+    if a_clusters.exists() and b_clusters.exists():
+        keys = ["eval_split", "lookback_h", "seed", "ablation", "operating_point"]
+        columns = keys + [
+            "tau", "false_alarms_per_day", "n_clusters", "median_accounts",
+            "mean_accounts", "p90_accounts", "max_accounts", "n_3", "n_4",
+            "n_5", "n_6_10", "n_11_50", "n_51_200", "n_201_plus",
+        ]
+        left = pd.read_csv(a_clusters)
+        right = pd.read_csv(b_clusters)
+        left = left[left["kind"] == "false_alarm"][columns]
+        right = right[right["kind"] == "false_alarm"][columns]
+        cluster_table = left.merge(
+            right, on=keys, suffixes=(f"_{label_a}", f"_{label_b}"), how="inner"
+        )
+        if not cluster_table.empty:
+            print(_NEWLINE + "FALSE-ALARM CLUSTER SHAPE (accounts per cluster)")
+            print(
+                f"  {'split':<7}{'L':>3}{'seed':>5} {'operating':<12}"
+                f"{'FA/day a':>10}{'FA/day b':>10}"
+                f"{'median a':>10}{'median b':>10}{'max a':>8}{'max b':>8}"
+            )
+            for row in cluster_table.to_dict("records"):
+                print(
+                    f"  {str(row['eval_split']):<7}{row['lookback_h']:>3}"
+                    f"{row['seed']:>5} {str(row['operating_point']):<12}"
+                    f"{row[f'false_alarms_per_day_{label_a}']:>10,.1f}"
+                    f"{row[f'false_alarms_per_day_{label_b}']:>10,.1f}"
+                    f"{row[f'median_accounts_{label_a}']:>10,.1f}"
+                    f"{row[f'median_accounts_{label_b}']:>10,.1f}"
+                    f"{row[f'max_accounts_{label_a}']:>8,.0f}"
+                    f"{row[f'max_accounts_{label_b}']:>8,.0f}"
+                )
+    else:
+        print(
+            _NEWLINE + "No cluster-shape tables beside the outcomes files, so the"
+            + _NEWLINE + "false-alarm size distribution is not in this report."
+        )
+
+    pd.DataFrame(paired_rows).to_csv(out / "compare_models_paired.csv", index=False)
+    pd.DataFrame(coverage).to_csv(out / "compare_models_coverage.csv", index=False)
+    edge_table.to_csv(out / "compare_models_edge_ap.csv", index=False)
+    cluster_table.to_csv(out / "compare_models_clusters.csv", index=False)
+    (out / "compare_models.json").write_text(
+        json.dumps(
+            {
+                "label_a": label_a, "label_b": label_b,
+                "a_path": str(a_path), "b_path": str(b_path),
+                "match_keys": list(evaluation.MATCH_KEYS),
+                "unmatched_keys": [list(key) for key in unmatched],
+                "paired": paired_rows,
+                "paired_notes": paired_notes,
+                "coverage": coverage,
+                "edge_average_precision": edge_table.to_dict("records"),
+                "false_alarm_cluster_shape": cluster_table.to_dict("records"),
+            },
+            indent=2, default=str,
+        ),
+        encoding="utf-8",
+    )
+    (out / "compare_models.md").write_text(
+        _NEWLINE.join(
+            [
+                f"# {label_b} against {label_a}, directly",
+                "",
+                "Paired campaign by campaign, on the campaigns both detect, at",
+                f"matched {', '.join(evaluation.MATCH_KEYS)}. The difference is",
+                f"`{label_b} - {label_a}`, so positive means {label_b} detected",
+                "earlier. Coverage is reported separately and is never folded",
+                "into the earliness number: a detector that finds more",
+                "campaigns usually shows a lower median lead time, because the",
+                "extra ones are the slow, hard campaigns.",
+                "",
+                "Both the F1-chosen operating points and the fixed false-alarm",
+                "budgets are compared. The budget rows are the fair",
+                "head-to-head: two models' F1 points need not alert at",
+                "comparable rates.",
+                "",
+                "## Earliness and coverage",
+                "",
+                _markdown_table(pd.DataFrame(paired_rows)),
+                "",
+                *["- " + note for note in paired_notes],
+                "",
+                "## Coverage, each way",
+                "",
+                _markdown_table(pd.DataFrame(coverage)),
+                "",
+                "## Edge-level average precision",
+                "",
+                "Before any threshold or clustering, so it says whether a",
+                "campaign-level difference comes from the ranking or from what",
+                "survives clustering. `val_detection` is the four windows the",
+                "GNN early-stops on.",
+                "",
+                _markdown_table(edge_table),
+                "",
+                "## False-alarm cluster shape",
+                "",
+                _markdown_table(cluster_table),
+                "",
+                "## Configurations in only one file",
+                "",
+                (
+                    "None - the two files cover the same grid."
+                    if not unmatched
+                    else _NEWLINE.join(
+                        "- " + ", ".join(str(v) for v in key) for key in unmatched
+                    )
+                ),
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    print(f"{_NEWLINE}Wrote {out / 'compare_models.md'} (+ .json and 4 CSVs)")
     return 0
 
 
@@ -4214,6 +4882,7 @@ def main() -> int:
             "verify", "pipeline", "features-smoke", "evaluate-scorers",
             "oracle-diagnose", "make-sample", "train", "evaluate",
             "gpu-check", "gpu-probe-windows", "train-gnn", "evaluate-gnn",
+            "compare-models",
         ],
     )
     parser.add_argument(
@@ -4280,6 +4949,28 @@ def main() -> int:
         "--model-dir", default="",
         help="train/evaluate: where models live (default: <out>/models)",
     )
+    parser.add_argument(
+        "--a", default="",
+        help=(
+            "compare-models: the first model's outcomes CSV "
+            "(default: <out>/evaluate_outcomes.csv)"
+        ),
+    )
+    parser.add_argument(
+        "--b", default="",
+        help=(
+            "compare-models: the second model's outcomes CSV "
+            "(default: <out>/evaluate_gnn_outcomes.csv)"
+        ),
+    )
+    parser.add_argument(
+        "--a-label", default="",
+        help="compare-models: name for the first model (default: xgboost)",
+    )
+    parser.add_argument(
+        "--b-label", default="",
+        help="compare-models: name for the second model (default: gnn)",
+    )
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument(
         "--bootstrap", type=int, default=1000,
@@ -4304,6 +4995,7 @@ def main() -> int:
         "evaluate-gnn": command_evaluate_gnn,
         "train": command_train,
         "evaluate": command_evaluate,
+        "compare-models": command_compare_models,
     }
     started = time.perf_counter()
     code = handlers[args.command](args)

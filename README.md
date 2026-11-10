@@ -77,16 +77,27 @@ bank).
 
 ## Project status
 
-**Current stage:** Phase 3, stage 3.2 — **done**. The evaluation module
-(extraction, matching with other-split hits, horizons, lead time, metrics,
-bootstrap CIs) and the oracle/random sanity scorers are in place and
-validated.
-**Next step:** stage 3.4.3, the Kaggle quick check — one seed, L = 24,
-the full variant, GPU training then CPU evaluation in a separate session
-(§5j of `backend/scripts/kaggle/run_on_kaggle.md`). The design is approved,
-the implementation and its 25 tests are done, and a local CPU smoke run on
-the real 1% sample trains and evaluates end to end with `max |logit|` around
-10 rather than the 10⁴–10⁵ the unnormalised probe implied. Stage 3.3
+**Current stage:** Phase 3, stage **3.4** — the centralized GNN, in
+sub-stages. 3.4.0 to 3.4.3 are done: the environment measured, full-batch
+training decided on the probe, the design approved with four additions, the
+model implemented and tested, and the one-seed quick check run on the full
+data. 3.4.4, the full run, is planned and awaiting approval. Stages 3.0-3.3
+are complete, including the evaluation module and the oracle ceiling
+validated on the full data.
+**Next step:** approve or amend the
+§[3.4.4 full-run plan](#344-the-full-run-plan--proposed-awaiting-approval) —
+two GPU sessions, one per lookback, then one CPU session that evaluates all
+20 GNN models, regenerates the XGBoost per-campaign records and runs the
+direct comparison (§5k of `backend/scripts/kaggle/run_on_kaggle.md` has the
+cells). One thing to confirm with it: whether the stage 3.3 training
+session's output still exists, since that decides whether the CPU session is
+3.5–5 hours or 5–6.5. The 3.4.3 quick check is done and is **provisional, one
+seed**: the GNN matches XGBoost's test recall (0.661, 0.804 of the ceiling)
+but at **33.3 false alarms a day against 3.4**, and at a comparable alert
+volume on validation it reaches 0.231 recall against XGBoost's 0.423. It is
+behind on this configuration, it is **not being tuned to close that gap**
+(equal tuning effort stands; only a demonstrated bug justifies a change),
+and the five-seed, two-lookback, both-variant run decides it. Stage 3.3
 is complete: the non-graph baseline reaches **0.679 test recall at L = 48,
 0.760 of the oracle**, and that is the number the GNN has to beat. Two
 things 3.4 must carry: both lookbacks (L = 48's validation margin mostly
@@ -124,7 +135,7 @@ no visibility reassignment is used in this phase.
 | 3.1 | Window builder + features + leakage tests | done |
 | 3.2 | Evaluation module (extraction, matching, lead time, bootstrap CIs) + oracle and random scorers | done, **validated on full data**; ceiling, miss diagnosis and the paired lookback comparison all measured and recorded |
 | 3.3 | XGBoost baseline: train, select tau on validation, evaluate on test | **done** — 20 boosters on the full data at commit `de48b35`, exit 0, no edge taus. Selected: the full model at L = 48 (validation recall 0.531 vs 0.385); test recall 0.679 [0.661, 0.696], 0.760 of the ceiling. Format ablation settled; one campaign beats the ceiling |
-| 3.4 | GNN centralized (GINEConv edge classification) | **in progress**, in sub-stages. 3.4.0 **done** (2 x T4, 33.7 GB RAM, all PyG extensions, ~4.6 MB/1k edges); 3.4.1 evidence (`gpu-probe-windows`) implemented and awaiting a Kaggle run, then the design proposal; 3.4.2-3.4.5 not started |
+| 3.4 | GNN centralized (GINEConv edge classification) | **in progress**, in sub-stages. 3.4.0-3.4.3 **done**: the environment measured (2 x T4, 33.7 GB RAM, all PyG extensions), full-batch training decided on the probe, the design approved with four additions, the model implemented with 25 tests, and the quick check run (L = 24, seed 0: test recall 0.661 at 33.3 FA/day against XGBoost's 0.661 at 3.4 - **provisional, one seed, and the GNN is behind at a comparable alert volume**). 3.4.4, the full run, is planned and awaiting approval; 3.4.5, the gate report, has its machinery built and its inputs not yet generated |
 | 3.5 | Gate report + results files + frontend Results page wired to real baseline results | not started |
 
 **Later phases (not started)**
@@ -780,9 +791,9 @@ It runs in sub-stages, each stopping for approval:
 | 3.4.0 | GPU environment check — no model, no data | **done** (Kaggle, `2755139`, exit 0) |
 | 3.4.1 | Design | **approved 2026-11-10** with four additions — see §[the design](#341-design--approved-2026-11-10-with-four-additions) |
 | 3.4.2 | Implementation, tests, resumability, local CPU smoke run | **done** — `models/gnn.py`, 25 tests, `train-gnn` / `evaluate-gnn`, smoke run on the real sample |
-| 3.4.3 | Kaggle quick check: 1 seed, L = 24, full variant — GPU training then CPU evaluation | ready to run, §5j of the runbook |
-| 3.4.4 | Full-run plan against the 9-hour session and weekly GPU quota | not started |
-| 3.4.5 | Phase 3 gate report: GNN vs XGBoost, paired comparisons only | not started |
+| 3.4.3 | Kaggle quick check: 1 seed, L = 24, full variant — GPU training then CPU evaluation | **done** (Kaggle, `8d8929c`, both sessions exit 0) — see §[the quick check](#343-quick-check--done-provisional-one-seed) |
+| 3.4.4 | Full-run plan against the 9-hour session and weekly GPU quota | **plan written 2026-11-10, awaiting approval** — see §[the plan](#344-the-full-run-plan--proposed-awaiting-approval) |
+| 3.4.5 | Phase 3 gate report: GNN vs XGBoost, paired comparisons only | not started — the machinery it needs is built and tested (`compare-models`), the inputs are not yet generated |
 
 #### 3.4.0: what the check does
 
@@ -1225,6 +1236,242 @@ why the graph is built once per (window, variant) rather than once per
 model. On the full data's far larger windows both per-edge costs fall
 sharply.
 
+#### 3.4.3 quick check — done, provisional, one seed
+
+One model on the full data: L = 24, the full variant, seed 0. GPU training
+in one session, CPU evaluation in another, both exit 0 (Kaggle, commit
+`8d8929c`). Evidence: `docs/reference/evaluate_gnn.{md,csv,json}` and the
+four companion CSVs.
+
+**Training behaved as designed.**
+
+| | Measured | Expected, and what it tells us |
+|---|---|---|
+| First epoch's loss | ~0.69 | `ln 2`, which the balanced-mean loss gives for any window whatever its class ratio. The loss scale is right. |
+| `max \|logit\|` | 1.2 → 14 over training | Single and low double digits, against the 10⁴–10⁵ the unnormalised probe implied. `log1p` on the node counts plus LayerNorm hold on the full data, not only on the sample. |
+| Peak GPU memory | **7.43 GB, flat across epochs** | The probe measured 6.39 GB for the largest L = 24 window forward+backward; training adds optimizer state and allocator fragmentation across 13 windows, so 16% above the probe is the expected direction and size. Flat is the part that matters: no epoch-over-epoch climb, so nothing leaks. Half of one 15.6 GB card. |
+| Epoch time | ~7s | 13 full-batch steps. The 100-epoch ceiling therefore costs ~12 minutes, so patience decides the runtime, not the budget. |
+| Early stopping | best epoch 45 (val AP 0.419), stopped at 55 | Patience 10, fired as designed. |
+
+**Validation average precision is 0.419 on the full data against 0.94 on
+the 1% sample.** That is not a regression — it is the positive rate. The
+sample keeps every laundering edge and 1% of the background, so positives
+are ~6% of its edges against 0.102% on the full data, and average precision
+is bounded below by the positive rate. The sample's 0.94 was never
+comparable to anything, which is why no sample number is a bar.
+
+##### The result, and what it does and does not say
+
+L = 24, seed 0, test split, against the stage 3.3 XGBoost at the same
+lookback and seed. **Provisional: one seed, one lookback, one variant.**
+
+| | GNN | XGBoost | |
+|---|---:|---:|---|
+| Chosen tau (validation campaign-F1) | 0.995 | 0.99 | both interior to the grid |
+| Test recall (`all`) | 0.661 (37/56) | 0.661 | identical |
+| Share of the oracle ceiling | 0.804 | 0.804 | identical |
+| **Test false alarms per day** | **33.3** | **3.4** | **~10× apart** |
+| Best validation campaign-F1 | 0.418 | 0.543 | the quantity tau selection maximises |
+| Validation recall at ~4 FA/day | 0.231 (tau 0.999) | 0.423 (tau 0.99) | at a comparable alert volume |
+| Paired earliness vs the oracle | 0.0h, CI includes zero | 0.0h, CI includes zero | on every split |
+
+**"Equal recall" is not the finding.** The two models reach the same test
+recall at alert volumes an order of magnitude apart, and matching a
+detector's recall while raising ten times as many alerts is worse, not
+equal. The comparable readings all favour XGBoost: the validation
+campaign-F1 that tau selection actually maximises (0.418 against 0.543),
+and validation recall at a matched ~4 alerts a day (0.231 against 0.423).
+On this one configuration the GNN is **behind**, and the honest summary is
+that it is behind by roughly a factor of two in recall at a comparable
+alert volume.
+
+Three limits on even that statement:
+
+1. **One seed, one lookback, one variant.** Stage 3.3 found no-format
+   recall varying 5× more across seeds than the full variant's, so a single
+   seed is not a measurement of a model.
+2. **The alert volumes were not matched by the evaluation.** Both numbers
+   above come from tau chosen by validation campaign-F1, which optimises F1
+   and not a budget. The budget comparison is the fair one and did not
+   exist in `evaluate-gnn` until now — see below.
+3. **There is still no direct GNN-versus-XGBoost paired comparison.** Both
+   "0.0h" rows above are each model against *the oracle*, and rule 3
+   forbids inferring an A-versus-B difference from `A vs C` and `B vs C`.
+   The earliness question between these two models is, as of this run,
+   **untested** — not answered, and not answered either way.
+
+##### The GNN is not being tuned to close this gap
+
+**Equal tuning effort stands.** The GNN has one hyperparameter
+configuration, frozen before any full-data training, exactly as XGBoost
+does. A result that reflects how much search each model received is not a
+result about models, and the asymmetry would be invisible in the final
+table. So nothing here is widened, deepened, re-weighted or
+re-scheduled because the number came out low.
+
+The only thing that justifies changing the model is a **demonstrated bug**:
+a specific, named defect with evidence that it is wrong, not an
+underwhelming metric. "It could probably do better with more layers" is not
+a bug. The diagnostics added below exist to *find* such a defect if there is
+one, and to characterise the gap honestly if there is not.
+
+#### 3.4.3 follow-up: four evaluation gaps closed
+
+The quick check exposed four gaps in what the evaluation reported, not in
+what the models do. No model changed, nothing was tuned, and no frozen
+definition moved.
+
+**1. Alert budgets, which the frozen design requires.** `evaluate-gnn` now
+evaluates every model at 10, 50 and 100 false alarms a day, with the tau for
+each budget chosen on **validation** from the same curve the F1 tau comes
+from, so no test information enters the operating point. This is the fair
+head-to-head: two models' F1-chosen points need not alert at comparable
+rates, and at 33 against 3 alerts a day they do not.
+
+**2. A direct model-versus-model paired comparison — and the records it
+needs.** Rule 3 requires A and B be compared to each other. That needs both
+models' per-campaign detection times at a matched seed, lookback and
+operating point, and **stage 3.3 saved none of them**: its files hold
+summaries, tau curves, budget rows and its own paired comparisons against
+the oracle, but not one row per campaign. The campaign-level records existed
+only inside the running process.
+
+So from now on **every evaluation writes them** — `evaluate_outcomes.csv`
+and `evaluate_gnn_outcomes.csv`, one row per campaign per operating point —
+and a new `compare-models` subcommand reads two such files and nothing else:
+no model, no features, no transactions. It pairs on evaluation split,
+lookback, seed, operating point and ablation arm, reports earliness over
+the campaigns both detect with a bootstrap CI, reports coverage each way by
+campaign id, and refuses to run if two detectors ever collapse into one key.
+Because it reads files, the comparison can run in a cheap CPU session long
+after the runs, and the same command serves every Phase 4+
+federated-versus-centralized comparison.
+
+Stage 3.3's records are **regenerated by re-running `evaluate`, not by
+retraining**: CPU only, 1.59 hours measured, and the 20 boosters are
+unchanged. If the stage 3.3 training output no longer exists, retraining
+them is a further 1.44 measured CPU hours — still no GPU.
+
+**3. Two diagnostics that select nothing.** Both answer "where does the
+difference live", and neither chooses a tau, stops a model or appears in a
+headline.
+
+- **Edge-level average precision**, over the raw scores before any
+  threshold or clustering, computed for both models on the **same four
+  validation-detection-split windows** the GNN early-stops on, and on each
+  evaluation horizon. If the campaign-level gap shows up here, the
+  difference is in how the edges are ranked; if it does not, the difference
+  is in how the scores survive thresholding and connected-component
+  extraction. The GNN's early stopping and this diagnostic call **one**
+  function, so the two numbers cannot drift apart.
+- **The size distribution of false-alarm clusters**, in accounts, at each
+  operating point. A hundred three-account components is not the same alert
+  load as a hundred forty-account ones, so "the same false alarms per day"
+  is not necessarily the same work.
+
+**4. The quick-check numbers are recorded as provisional**, which is the
+section above.
+
+What this cost in code: `evaluation/edge_metrics.py` and
+`evaluation/compare.py` (both model-agnostic), per-campaign records and
+cluster-size rows in `evaluate.py`, the budget loop and the two diagnostics
+in both `evaluate` and `evaluate-gnn`, and the `compare-models` subcommand.
+`tests/test_compare_models.py` adds 22 tests. The three that matter are the
+ones whose failure would be invisible: that a record survives a CSV round
+trip with `detected` intact (the string `"False"` is truthy, so a careless
+parse reports every campaign detected and a recall of 1.0 — checked through
+a file read as text, because pandas usually infers a real boolean column and
+would hide it); that a comparison run from two files is identical to the
+same comparison in process, so rule 3 holds across sessions; and that two
+variants tagged into one key are **refused** rather than silently mixed into
+one paired set. Each was confirmed to fail when the guard is removed.
+
+Verified end to end on the real 1% sample — development numbers only: train
+and evaluate both models at L = 24 seed 0, then `compare-models`, which
+pairs all four operating points on both splits, reports coverage each way
+(the GNN finds 2 campaigns XGBoost misses at the 50/day budget, and
+1-for-1 at the F1 point), and produces the edge-AP and cluster-shape tables.
+On the sample the GNN's `val_detection` edge AP is 0.9406 — **the same
+number training reported as its best epoch's validation AP**, which is the
+check that the diagnostic computes the quantity early stopping used.
+
+#### 3.4.4 the full-run plan — proposed, awaiting approval
+
+Two variants × two lookbacks × five seeds = **20 GNN models**, plus the
+XGBoost records to compare them with. Every estimate below is extrapolated
+from a measurement, and says which.
+
+**GPU, training.** Measured: ~7s an epoch at L = 24 (13 full-batch steps),
+55 epochs to stop with patience 10, 7.43 GB peak. L = 48 has 9 windows of
+roughly twice the edges, so ~1.4× the edges an epoch → ~10s, and the probe
+measured 10.70 GB peak there.
+
+| | Per model | 10 models | At the 100-epoch cap |
+|---|---:|---:|---:|
+| L = 24 | ~6.5 min | ~1.1 h | ~2.0 h |
+| L = 48 | ~9 min | ~1.5 h | ~2.8 h |
+
+Plus, per lookback, the feature spec and node-preprocessor fit — once,
+shared by all ten models of that lookback — and the pipeline build (~33s
+measured).
+
+**Proposed split: one GPU session per lookback.** Each is ~1.5–3 hours
+inside a 9-hour limit, so neither is near the wall even if every model runs
+to the cap; and because a finished model is skipped on restart, a lost
+session costs at most the model in flight rather than the lookback. Running
+both lookbacks in one session would also fit the 9 hours on these numbers,
+but it spends the whole estimate in one place against a weekly quota, and
+the only thing it buys is one pipeline build.
+
+**CPU, evaluation and comparison — one 12-hour session.** Measured on the
+quick check at L = 24 over 24 windows and 11.17M edges: 92.6s to featurise
+all of them once (8.28 µs/edge) and 56.4s for one model's forward passes
+(5.08 µs/edge), with tau selection over the 16-value grid at 37.3s a model.
+
+| Step | L = 24 | L = 48 (≈2× the edges) | Basis |
+|---|---:|---:|---|
+| Featurise, once per variant | ~3 min | ~6 min | measured |
+| Forward passes, 10 models | ~9 min | ~19 min | measured |
+| Tau selection, 10 models | ~6 min | ~12 min | measured |
+| Evaluate: 3 splits × 4 operating points × 10 models | ~15–60 min | ~30–120 min | measured at the F1 tau; the range is the risk below |
+| **`evaluate-gnn` total** | **~35–80 min** | **~70–160 min** | |
+| `evaluate` (XGBoost, for the records) | — | — | 1.59 h measured, both lookbacks |
+| `compare-models` | — | — | under a minute; it reads two CSVs |
+
+So **~3.5–5 hours** of CPU, inside one 12-hour session, for everything:
+both lookbacks of `evaluate-gnn`, the XGBoost re-run that regenerates the
+per-campaign records, and the direct comparison. If the stage 3.3 models are
+gone, add the measured 1.44h to retrain them — still one session, still no
+GPU.
+
+**The one real risk, named.** Clustering cost scales with the edges kept, so
+a *low* budget tau is the expensive case: at L = 24 on test, stage 3.3 spent
+194s on a single model at its 10/day tau against 3.7s at its F1 tau, a 50×
+spread. The GNN alerts more freely at its F1 tau, so its 10/day tau will be
+*higher* and cheaper — but its 50 and 100/day taus will be lower and dearer,
+and they are new work that stage 3.3's total does not cover. The upper end
+of each range above assumes every budget behaves like stage 3.3's worst
+case. Nothing silently degrades if it is slow: `evaluate-gnn` writes a
+partial report after every configuration, so a session that runs out of time
+loses no completed work and the rest resumes from the saved models.
+
+**Sequence.**
+
+1. GPU session, L = 24: `train-gnn --lookbacks 24` (both variants, five
+   seeds). Save the output.
+2. GPU session, L = 48: the same at `--lookbacks 48`. Save the output.
+3. CPU session, with both GPU outputs and the stage 3.3 models as inputs:
+   `evaluate-gnn` over both lookbacks, then `evaluate` for the XGBoost
+   records, then `compare-models`.
+4. Stage 3.4.5, the Phase 3 gate report, is written from the three output
+   sets — by paired comparisons only, per lookback, per seed, at the
+   F1-chosen taus and at every budget, with coverage reported separately.
+
+**One thing to confirm before step 3:** whether the stage 3.3 training
+session's output (`models/<variant>_L<L>_s<seed>/`, 20 boosters) still
+exists as a Kaggle notebook output. It decides whether step 3 is 3.5–5
+hours or 5–6.5.
+
 #### Development checks on the 1% sample
 
 **These are development checks, not results.** They exist to show the code
@@ -1552,8 +1799,12 @@ transactions.
 | 2026-10-17 | **Every model configuration is trained at seeds 0-4**, and results are reported per seed and as mean [min, max] across seeds | A single run cannot distinguish an effect from seed noise. XGBoost's `subsample` and `colsample_bytree` make the fit genuinely stochastic, so the spread is real and worth carrying | user decision, 2026-10-17 |
 | 2026-10-17 | A **score cache** is used for the tau sweep and warmed before it | A scorer's output does not depend on tau, so a 16-point grid would otherwise re-featurise every million-edge window sixteen times for sixteen identical answers. It cannot change the curve and the cached and uncached curves are pinned equal in a test. Warming it first keeps the per-tau seconds comparable instead of letting the first tau absorb all the featurisation | implementation, stage 3.3 |
 | 2026-10-17 | **False alarms report which of the rule's two conditions failed** — purity < 0.5 vs coverage < 3 campaign accounts — with counts, replacing a single "best overlap" number | The old summary line said "best overlap 0.667 (below the 0.5 the rule requires)", which contradicts itself. Those clusters passed purity and failed coverage. On the sample 21 of 22 fail coverage, so the oracle's false alarms are mostly fragments of real campaigns too small to claim — a different problem from pollution by unrelated traffic, and one the three-account floor creates by design | user-reported, 2026-10-17 |
+| 2026-11-10 | **The GNN is not tuned in response to the 3.4.3 quick check.** It matched XGBoost's test recall at ~10x the alert volume and reached a lower validation campaign-F1 (0.418 against 0.543); the configuration stays frozen anyway. Only a **demonstrated bug** - a named defect with evidence - justifies a change | Equal tuning effort is the condition that makes the comparison a comparison of models. Tuning the GNN because its number came out low, and only then, would make the final table a record of how much search each model received, and the asymmetry would be invisible in it. An underwhelming metric is not evidence of a defect | user decision, 2026-11-10 |
+| 2026-11-10 | **Alert budgets (10/50/100 a day) added to `evaluate-gnn`**, tau per budget chosen on validation from the same curve the F1 tau comes from | Required by the frozen design, and the only fair head-to-head: the two models' F1-chosen operating points sit an order of magnitude apart in alert volume (33.3 against 3.4 a day), so comparing recall at those points compares a cheap detector with an expensive one. No test information enters the operating point | user decision, 2026-11-10 |
+| 2026-11-10 | **Every evaluation now writes per-campaign records (`*_outcomes.csv`), and the new `compare-models` subcommand is the only place a cross-model earliness claim may come from.** Stage 3.3 saved none, so its records are regenerated by re-running `evaluate` - CPU only, 1.59h measured, no retraining | Rule 3 requires A and B be compared directly, which needs both models' per-campaign detection times at a matched seed, lookback and operating point. Those existed only inside a running process, so the GNN-versus-XGBoost comparison could not be assembled from stage 3.3's files at all. Reading two files rather than two live models also means the comparison runs in a cheap CPU session across runs days apart, which is what Phase 4+ needs for the federated conditions | user decision, 2026-11-10; `tests/test_compare_models.py` |
+| 2026-11-10 | **Two diagnostics added that select nothing**: edge-level average precision for both models on the same windows (including the four validation-detection-split windows the GNN early-stops on), and the size distribution of false-alarm clusters at each operating point | A campaign-level number is the product of two stages - rank the edges, then cluster and match - and on its own it does not say which stage two models differ in. The edge metric isolates the ranking; a gap present there is a ranking gap, a gap absent there lives in what survives clustering. The cluster sizes answer the second question a matched alert rate leaves open: a hundred three-account components is not the same work as a hundred forty-account ones. Neither chooses a tau, stops a model or appears in a headline, and the GNN's early stopping and the diagnostic call one function so they cannot drift | user decision, 2026-11-10; `tests/test_compare_models.py` |
 | 2026-11-10 | **The GNN gets ONE fixed hyperparameter configuration**, frozen before any full-data training and never tuned on validation or test | This is the condition that makes the GNN-versus-XGBoost comparison fair. XGBoost was given one configuration for the same reason, so neither model's number reflects how much search it received. Any later tuning of either would have to be declared, because it would change what the comparison means | user decision, 2026-11-10 |
-| 2026-11-10 | **`log1p` on the heavy-tailed node counts (`in_degree`, `out_degree`, `n_counterparties`, `n_currencies`), applied INSIDE THE GNN ONLY**, before standardising, with the GNN's own statistics fitted on training windows. The shared feature spec is unchanged and the stage 3.3 results stand | The root cause of the extreme logits, not a mitigation: the shared spec standardises *raw* counts, and standardising a heavy-tailed column does not bound it. Measured on the sample's largest windows, maximum |x| falls from 109.9 to 40.4 (L = 24) and 158.5 to 42.2 (L = 48), and on `out_degree` alone from 156.6 to 15.3. A tree splits identically under any monotone transform, so XGBoost is unaffected even in principle. It reduces but does not *bound* the inputs - `n_counterparties` still reaches 40 - so LayerNorm is kept as well | user decision, 2026-11-10; `tests/test_gnn.py` |
+| 2026-11-10 | **`log1p` on the heavy-tailed node counts (`in_degree`, `out_degree`, `n_counterparties`, `n_currencies`), applied INSIDE THE GNN ONLY**, before standardising, with the GNN's own statistics fitted on training windows. The shared feature spec is unchanged and the stage 3.3 results stand | The root cause of the extreme logits, not a mitigation: the shared spec standardises *raw* counts, and standardising a heavy-tailed column does not bound it. Measured on the sample's largest windows, maximum \|x\| falls from 109.9 to 40.4 (L = 24) and 158.5 to 42.2 (L = 48), and on `out_degree` alone from 156.6 to 15.3. A tree splits identically under any monotone transform, so XGBoost is unaffected even in principle. It reduces but does not *bound* the inputs - `n_counterparties` still reaches 40 - so LayerNorm is kept as well | user decision, 2026-11-10; `tests/test_gnn.py` |
 | 2026-11-10 | **Early stopping on validation edge-level average precision**, computed every epoch over the **validation detection split** only. Campaign-F1 is not used for stopping; tau is still chosen once at the end by validation campaign-F1 on the model grid | AUPRC is threshold-free, so it does not need a tau that has not been chosen, and it is the right summary at a 0.1% positive rate. Campaign-F1 per epoch needs cluster extraction at several thresholds and moves in steps of 1/26 over 26 validation campaigns, so it would be both slow and noisy. The detection-split restriction matters: edge-level AUPRC reads every label in a window, and the validation *evaluation horizon* reaches into the test detection split, so stopping on it would select on test-period edges | user decision, 2026-11-10; `tests/test_gnn.py` |
 | 2026-11-10 | **DECIDED: full-batch training for both lookbacks**, closing the sampling decision reopened earlier the same day. Inference runs unchunked | Measured, not estimated: the largest L = 48 training window peaks at **10.70 GB reserved** of 15.6 GB and L = 24 at 6.39 GB, both inside the 12 GB rule fixed before the run; the largest evaluation windows need 2.71 and 4.75 GB. Steps take 0.28s and 0.45s. Full-batch removes three parameters the comparison does not need - fanouts, batch size and a sampler's bias - and sees every edge of a window at every step, which is what the frozen matching rule evaluates against. The 2026-10-10 sampling choice rested on a shape-based ~16.6 GB that the measurement halved | user decision, 2026-11-10; `gpu_probe_windows.*` |
 | 2026-11-10 | **Measured: full-batch training fits both lookbacks** - the largest L = 48 window peaks at **10.70 GB reserved** on a 15.6 GB T4 against the 12 GB rule fixed before the run, and L = 24 at 6.39 GB. Inference needs no chunking (4.75 GB, 0.18s for the largest evaluation window). The regime choice itself is 3.4.1's to propose on this evidence | The 2026-10-10 estimate was ~16.6 GB, the measurement is 10.70. Real windows came in ~25% heavier than `gpu-check`'s synthetic graphs (5.73 vs 4.6 MB per 1,000 edges), so the synthetic projection of 8.6 GB would have understated it - which is exactly why the probe ran real windows before anything was decided. Host memory peaks at 14.1 GB during the feature-spec fit, not on the GPU | `gpu_probe_windows.*`, 2026-11-10 |
@@ -1662,6 +1913,11 @@ project-root/
       evaluate_baseline_operating.csv recall vs false alarms, for plotting
       gpu_check.{md,json}             stage 3.4.0: GPU, RAM, PyG install, GINEConv smoke test
       gpu_probe_windows.{md,json}     stage 3.4.1: real windows through the real model
+      evaluate_gnn.{md,csv,json}      stage 3.4.3 quick check: one GNN, L = 24, seed 0
+      evaluate_gnn_paired.csv         that model against the ceiling, paired
+      evaluate_gnn_tau_curve.csv      its per-tau precision/recall/F1 on validation
+      evaluate_gnn_inference.csv      measured featurise and forward cost per edge
+      evaluate_gnn_partial.csv        the partial report, written per configuration
   backend/
     requirements.txt               Python dependencies: pandas, numpy, pyarrow, pyyaml, pytest, fastapi, uvicorn, pydantic
     pyproject.toml                 setuptools packaging for `fraudcamp` (src/ layout) + pytest `fulldata` marker
@@ -1689,7 +1945,11 @@ project-root/
       evaluation/
         __init__.py               the public evaluation API
         clusters.py               extraction, the matching rule, outcome classification
-        evaluate.py               the detection-time loop, lead time, metrics, bootstrap CIs
+        evaluate.py               the detection-time loop, lead time, metrics, bootstrap CIs,
+                                    per-campaign records, cluster-size distributions
+        edge_metrics.py           edge-level average precision: the diagnostic, and the GNN's
+                                    early-stopping metric, one definition for both
+        compare.py                two detectors compared directly from their saved records
         scorers.py                the oracle and random sanity scorers
         diagnose.py               why the oracle misses a campaign; what its false alarms are
     app/
@@ -1714,7 +1974,8 @@ project-root/
         run_on_kaggle.md          the exact notebook cells for running this repo on Kaggle
         kaggle_runner.py          verify / pipeline / features-smoke / evaluate-scorers /
                                   oracle-diagnose / make-sample / train / evaluate /
-                                  gpu-check / gpu-probe-windows / train-gnn / evaluate-gnn
+                                  gpu-check / gpu-probe-windows / train-gnn / evaluate-gnn /
+                                  compare-models
     tests/
       conftest.py                 src/ on sys.path + the `mini_dataset` synthetic-dataset fixture
       test_load_data.py           leading-zero banks, account IDs, timestamp parsing, cutoff
@@ -1731,6 +1992,8 @@ project-root/
       test_evaluation.py          extraction, matching, outcomes, lead time, metrics, bootstrap CIs
       test_tau_and_budgets.py     the deterministic tau tie-break and the alert budgets
       test_oracle_diagnose.py     the four oracle-miss reasons, each on a hand-built case
+      test_compare_models.py      the saved records, the round trip, the direct comparison,
+                                    edge-level AP, false-alarm cluster shape
       test_paired_comparison.py   the paired lead-time method, incl. the misleading-medians case
       test_xgb_baseline.py        the baseline: rule 3, score alignment, identity, save/load
       test_gnn.py                 the GNN: causality, identity, log1p, the loss, resumability
@@ -2575,6 +2838,34 @@ campaign_id)`:
   a saved model reloads to identical scores while a half-written one is not
   counted as finished; and that `max |logit|` stays under 100 through
   training, which is the fix working.
+- **Backend cross-model comparison tests** (`test_compare_models.py`, 22
+  tests): the three that matter are the ones whose failure would be
+  invisible. That a per-campaign record survives a CSV round trip with
+  `detected` intact — the string `"False"` is truthy, so a careless parse
+  reports every campaign detected and a recall of 1.0, and because pandas
+  usually infers a real boolean column and would hide that, the guard is
+  tested through a file read as text and through records whose flag is
+  already a string. That a comparison run from two files is **identical** to
+  the same comparison in process, median and CI bound for bound, so rule 3
+  holds across sessions and machines rather than only inside one run. And
+  that two detectors tagged into one match key are **refused** rather than
+  silently mixed into one paired set, which is how an ablation arm or a
+  variant would otherwise disappear into a mixture. Then the sign
+  convention (`b − a`, so positive means the second detected earlier,
+  checked by swapping the inputs), that unmatched seeds are not compared and
+  are reported instead, that the two ablation arms are compared arm by arm,
+  and that coverage is reported by campaign id each way. Then the edge
+  metrics: average precision against hand-computed values, NaN rather than
+  0.0 where a window holds no positive, a lift of about 1 for a random
+  ranker at a 0.1% positive rate, that the pooled row is **recomputed**
+  rather than averaged over windows, that a scorer returning the wrong
+  number of scores raises, and that the GNN's early-stopping metric and this
+  diagnostic are the *same function object*. Then cluster shape: that it
+  counts only its own kind, that two runs matching on false-alarm count can
+  differ entirely in size distribution — the case the measure exists for —
+  and that an empty distribution reports no clusters rather than failing.
+  Each of the three leading guards was confirmed to fail with the guard
+  removed.
 - **Backend baseline tests** (`test_xgb_baseline.py`, 20 tests): the
   things that would quietly invalidate a result rather than the model's
   accuracy, which is measured on the full data and not asserted in a unit
@@ -2759,7 +3050,7 @@ campaign_id)`:
     stubbed in these tests.
 
 **Current pass status (2026-10-17):**
-- Backend: `python -m pytest tests/` from `backend/` → 309 passed, 25
+- Backend: `python -m pytest tests/` from `backend/` → 331 passed, 25
   skipped, 0 failed. The skips are the full-data suite, which needs the
   dataset that only exists on Kaggle; all 24 of its numbers passed there on
   2026-10-08/09.
@@ -2889,6 +3180,86 @@ Tagged points in the repository, newest first. Check one out with
 | `v0.1-data-pipeline` | 2026-10-08 | Phase 2 complete, plus the stage 3.0 Kaggle runner. The research pipeline (campaign ground truth, splits, topology groups, institutions, visibility), the artifact export, the read-only FastAPI server, and the full React frontend — 69 backend tests and 48 frontend tests passing. **No models and no experiment results**: the four conditions are defined and the result schema is fixed, but nothing has been trained or run, and the full-data regression numbers are still unverified (that is what stage 3.0's Kaggle run is for). |
 
 ## Changelog
+
+- **2026-11-10 (3.4.3 + the evaluation gaps)** — **the quick check ran; the
+  GNN is behind; four gaps in the evaluation closed and the full-run plan
+  written.**
+
+  *The quick check* (Kaggle, `8d8929c`, both sessions exit 0; evidence in
+  `docs/reference/evaluate_gnn.*`). One model, L = 24, full variant, seed 0.
+  Training behaved as designed: first epoch's loss ~0.69 (`ln 2`, so the
+  loss scale is right), `max |logit|` 1.2 → 14 against the 10⁴–10⁵ the
+  unnormalised probe implied, peak GPU memory **7.43 GB flat across epochs**
+  against the probe's 6.39 GB for the largest window alone — 16% above it,
+  in the expected direction, and flat, so nothing leaks — ~7s an epoch, best
+  epoch 45, stopped at 55 with patience 10. Validation AP is 0.419 on the
+  full data against 0.94 on the 1% sample, which is the positive rate
+  (0.102% against ~6%), not a regression: the sample's figure was never
+  comparable.
+
+  *The result, provisional on one seed.* Test recall 0.661 (37/56, 0.804 of
+  the ceiling) at tau 0.995 — the same recall as XGBoost at the same
+  lookback and seed, **at 33.3 false alarms a day against 3.4**. Equal
+  recall at ten times the alert volume is not equal. The comparable readings
+  favour XGBoost: best validation campaign-F1, which is what tau selection
+  maximises, 0.418 against 0.543; validation recall at ~4 alerts a day 0.231
+  against 0.423. So the GNN is behind by roughly a factor of two in recall
+  at a comparable alert volume on this configuration. **It is not being
+  tuned to close that gap** — equal tuning effort is what makes the
+  comparison a comparison of models, and only a demonstrated bug, a named
+  defect with evidence, justifies a change.
+
+  *Gap 1, the alert budgets.* `evaluate-gnn` was missing them, and they are
+  required by the frozen design. Added: 10, 50 and 100 a day, tau per budget
+  chosen on **validation** from the same curve the F1 tau comes from. This
+  is the fair head-to-head, exactly because the F1-chosen points sit an
+  order of magnitude apart in alert volume.
+
+  *Gap 2, no direct comparison was possible at all.* Rule 3 requires A and B
+  be compared to each other, which needs both models' per-campaign detection
+  times at a matched seed, lookback and operating point — and **stage 3.3
+  saved none of them**: summaries, tau curves, budget rows and its own
+  comparisons against the oracle, but not one row per campaign. So every
+  evaluation now writes `*_outcomes.csv`, and a new **`compare-models`**
+  subcommand reads two such files and nothing else — no model, no features,
+  no transactions — pairing on split, lookback, seed, operating point and
+  ablation arm, reporting earliness over the campaigns both detect with a
+  bootstrap CI and coverage each way by campaign id, and **refusing** to run
+  if two detectors collapse into one key. Stage 3.3's records are
+  regenerated by re-running `evaluate`: CPU only, 1.59h measured, no
+  retraining. Reading files rather than live models is also what lets the
+  Phase 4+ federated conditions be compared across sessions.
+
+  *Gap 3, two diagnostics that select nothing.* Edge-level average precision
+  over the raw scores, for both models on the **same** four
+  validation-detection-split windows the GNN early-stops on and on each
+  horizon — if the campaign-level gap is there too it is a ranking gap, and
+  if it is not it lives in what survives clustering. And the size
+  distribution of false-alarm clusters at each operating point, because a
+  hundred three-account components is not the same alert load as a hundred
+  forty-account ones. The GNN's early stopping and the diagnostic call one
+  function, so the two numbers cannot drift.
+
+  *Gap 4.* The quick-check numbers are recorded above as provisional.
+
+  *Code.* New `evaluation/edge_metrics.py` and `evaluation/compare.py`, both
+  model-agnostic; per-campaign records and cluster-size distributions in
+  `evaluate.py`; the budget loop and both diagnostics in `evaluate` and
+  `evaluate-gnn`; `windows.full_lookback_detection_times` so the GNN's
+  early-stopping window set has one definition; the `compare-models`
+  subcommand; runbook §5k for the full run.
+
+  *Verified end to end on the real 1% sample* — development numbers only:
+  both models trained and evaluated at L = 24 seed 0, then `compare-models`
+  pairing all four operating points on both splits. The GNN's
+  `val_detection` edge AP there is 0.9406, **the same number training
+  reported as its best epoch's validation AP**, which is the check that the
+  diagnostic computes the quantity early stopping used.
+
+  *Tests:* backend 331 passed, 25 skipped (`test_compare_models.py`, 22 new).
+  The three leading guards — the boolean round trip, in-process-versus-file
+  identity, and the refusal to mix two detectors under one key — were each
+  confirmed to fail with the guard removed.
 
 - **2026-11-10 (3.4.2)** — **3.4.1 approved with four additions; the GNN is
   implemented, tested and smoke-run.**

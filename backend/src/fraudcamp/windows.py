@@ -82,6 +82,27 @@ def has_full_lookback(
     return pd.Timestamp(t) - pd.Timedelta(hours=lookback_h) >= pd.Timestamp(data_start)
 
 
+def full_lookback_detection_times(
+    split: str,
+    lookback_h: int = constants.DEFAULT_LOOKBACK_H,
+) -> list[pd.Timestamp]:
+    """A detection split's times that have their full lookback (rule 3).
+
+    The **detection** split, not the evaluation horizon: the two differ, and
+    for validation the difference matters. The horizon runs to Sept 8 so a
+    validation campaign can finish, and therefore contains detection times
+    that belong to the test split; the detection split stops at Sept 6.
+    Anything that reads every label in a window - edge-level average
+    precision, and so the GNN's early stopping - must use this, or it
+    selects on test-period edges.
+    """
+    return [
+        t
+        for t in detection_times_for_split(split)
+        if has_full_lookback(t, lookback_h)
+    ]
+
+
 def training_detection_times(
     lookback_h: int = constants.DEFAULT_LOOKBACK_H,
     start: _dt.datetime = constants.DATA_START,
