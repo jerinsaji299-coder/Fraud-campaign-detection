@@ -38,6 +38,7 @@ git clone https://github.com/jerinsaji299-coder/Fraud-campaign-detection.git
     - [Oracle ceiling](#oracle-ceiling)
     - [Stage 3.3: the XGBoost baseline](#stage-33-the-xgboost-baseline)
     - [Stage 3.4: the centralized GNN](#stage-34-the-centralized-gnn)
+    - [3.4.1 design proposal](#341-design-proposal--proposed-awaiting-approval)
     - [Comparing two configurations: the paired method](#comparing-two-configurations-the-paired-method)
     - [Recall against the ceiling](#recall-against-the-ceiling)
 19. [Version history](#version-history)
@@ -80,14 +81,14 @@ bank).
 (extraction, matching with other-split hits, horizons, lead time, metrics,
 bootstrap CIs) and the oracle/random sanity scorers are in place and
 validated.
-**Next step:** the stage 3.4.1 design proposal. Its evidence is in:
-**full-batch training fits both lookbacks** (6.39 GB at L = 24, 10.70 GB at
-L = 48, against a 12 GB rule on a 15.6 GB card), inference needs no
-chunking, and the host peaks at 14.1 GB of 33.7. The proposal must also
-settle the **activation explosion** the probe exposed — losses of 10,615
-and 356,394 from random init, consistent with GINEConv's sum aggregation
-over high-degree accounts going unnormalised — which is an addition to the
-frozen design and needs approval. Stage 3.3
+**Next step:** approve or amend the
+§[3.4.1 design proposal](#341-design-proposal--proposed-awaiting-approval).
+Full-batch training is decided and recorded. The proposal's one addition to
+the frozen design is **layer normalisation** between GINEConv layers, to
+stop the activation explosion the probe exposed; the rest sizes epochs,
+early stopping, memory safeguards, seeding, resumability and the split
+between a GPU training session and a CPU evaluation session against
+measurements. Nothing is implemented until it is approved. Stage 3.3
 is complete: the non-graph baseline reaches **0.679 test recall at L = 48,
 0.760 of the oracle**, and that is the number the GNN has to beat. Two
 things 3.4 must carry: both lookbacks (L = 48's validation margin mostly
@@ -758,9 +759,13 @@ Not trained yet. The design was frozen on 2026-10-10 and nothing here
 changes it: GINEConv edge classification, 2–3 layers, hidden 64, message
 passing **in both directions** (every edge also inserted reversed, with a
 direction flag), and an edge readout MLP on `[h_src, h_dst, edge_features]`.
-Neighbour sampling at **both** lookbacks so the L comparison is not
-confounded by the training method; inference scores full windows, chunked
-if needed.
+**Full-batch training at both lookbacks** — one whole window per step —
+decided 2026-11-10 on the measurement below, replacing the neighbour
+sampling frozen on 2026-10-10 when the memory estimate was twice the truth.
+One regime for both lookbacks either way, so the L comparison is never
+confounded by the training method. Inference scores full windows
+**unchunked**: the largest evaluation window needs 4.75 GB of a 15.6 GB
+card.
 
 Everything around the model is shared with stage 3.3 rather than
 reimplemented — the same window features, labels, rule-3 training times,
@@ -775,7 +780,7 @@ It runs in sub-stages, each stopping for approval:
 | | Sub-stage | Status |
 |---|---|---|
 | 3.4.0 | GPU environment check — no model, no data | **done** (Kaggle, `2755139`, exit 0) |
-| 3.4.1 | Design proposal: full-batch or sampling, epochs, early stopping, optimizer, class weight, chunked inference, seed control — sized against measurements | **evidence measured** (full-batch fits both lookbacks: 6.39 / 10.70 GB); proposal outstanding, and must also address the activation explosion the probe exposed |
+| 3.4.1 | Design proposal | **proposed, awaiting approval** — full-batch decided; balanced-mean loss and LayerNorm proposed; see §[the proposal](#341-design-proposal--proposed-awaiting-approval) |
 | 3.4.2 | Implementation, tests, resumability, local CPU smoke run | not started |
 | 3.4.3 | Kaggle quick check: 1 seed, L = 24, full variant | not started |
 | 3.4.4 | Full-run plan against the 9-hour session and weekly GPU quota | not started |
@@ -955,6 +960,170 @@ another remedy — with the reasoning, as a change to be approved rather than
 assumed. Nothing is trained until that is settled: a model whose activations
 explode on the busiest windows would train, report numbers, and mean
 nothing.
+
+#### 3.4.1 design proposal — **proposed, awaiting approval**
+
+Nothing below is implemented or frozen. Every number is measured unless it
+says otherwise.
+
+##### 1. The loss scale, and why it was 34× worse at L = 48
+
+The probe reported initial losses of **10,615 (L = 24)** and **356,394
+(L = 48)** from random initialisation. Three candidate causes, two of which
+the arithmetic rules out:
+
+- **Not the reduction.** It is already `mean`. A `sum` reduction would have
+  given ~6.7 × 10¹¹, not 3.6 × 10⁵.
+- **Not the class weight.** With `pos_weight = n_neg / n_pos`, the positive
+  block's weights sum to `n_pos × pos_weight = n_neg ≈ N`, so after mean
+  reduction it contributes ≈ 1, whatever the window. Measured: 322 × 3,461
+  = 1,114,600 against N = 1,114,921 (ratio **0.9997**), and 730 × 2,560 =
+  1,868,639 against 1,869,370 (**0.9996**). The weighting is self-normalising
+  and is not the cause.
+- **The logits.** With both of the above neutral, the loss is close to the
+  mean |logit| of the mis-signed side, so **logits are of order 10⁴–10⁵**.
+
+Why they get that large: **GINEConv aggregates by sum**, and the inputs are
+already extreme. Measured on the 1% sample's largest windows, *after* the
+feature spec's standardisation, node features reach **|x| = 110 (L = 24)
+and 159 (L = 48)** — hub accounts sit a hundred-plus standard deviations
+out, because degree and amount are heavy-tailed and standardising a
+heavy-tailed column does not make it bounded. Edge features are well
+behaved (max 4.6). Three layers of summing 64-dimensional messages over
+high-degree accounts then compound that, with nothing in between to rescale
+it. The ratio between the two windows follows: the sample's maximum degree
+is 231 at L = 24 and 463 at L = 48, and a cube of that ratio is ~8, in the
+same direction as the measured 34× on full data, where the degrees are far
+larger.
+
+**Proposed fix, two parts.**
+
+*(a) A balanced-mean loss*, so every window contributes comparably by
+construction rather than approximately:
+
+```
+L = ½ · mean over positives of BCE  +  ½ · mean over negatives of BCE
+```
+
+**How the class weight enters:** each positive carries weight
+`1 / (2 · n_pos)` and each negative `1 / (2 · n_neg)`, so the ratio of
+per-positive to per-negative weight is exactly **`n_neg / n_pos`** — the
+frozen class-weighting principle, unchanged. This is the same objective as
+`pos_weight = n_neg/n_pos` under mean reduction, up to the factor
+`n_neg / N` measured above at 0.9996–0.9997 and a constant 2 that the
+learning rate absorbs. It is adopted not to change the objective but to
+make window-invariance exact and the number readable: at initialisation it
+is **ln 2 ≈ 0.693** for any window, so a loss that is not ≈ 0.69 on the
+first step is a bug rather than a mystery.
+
+*(b) Layer normalisation after each GINEConv*, which is an **addition to
+the frozen design** and the thing most needing approval. Alternatives
+considered:
+
+| Option | Why not |
+|---|---|
+| **LayerNorm per node, after each conv** (recommended) | Degree- and size-independent, no train/test statistics, keeps sum aggregation and so keeps GINEConv's expressiveness. Smallest change that removes the compounding. |
+| BatchNorm over nodes (as the original GIN paper) | Its running statistics are fitted on training windows and applied to evaluation windows whose size and degree distribution differ by up to 3×. A train/test mismatch introduced by the fix. |
+| Mean instead of sum aggregation | Fixes the scale but discards the injectivity that makes GIN a GIN; a different model, not a normalisation. |
+| Clamping logits or shrinking the init | Treats the symptom; the activations still compound. |
+
+The training loop will log **max |logit| and the per-layer activation norm
+on the first step of each epoch**, so if the explanation is wrong that is
+visible immediately rather than inferred from a loss curve.
+
+##### 2. Memory safety
+
+10.70 GB of 15.6 is a 4.9 GB margin, held across many epochs rather than
+one step, so:
+
+- `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True`, set by the runner
+  before torch is imported, so the allocator grows a segment instead of
+  fragmenting into unusable blocks over hundreds of differently-sized
+  windows.
+- `torch.cuda.empty_cache()` between windows, and `reset_peak_memory_stats()`
+  at each epoch boundary.
+- **Peak allocated and reserved logged per epoch**, written into the
+  training report, so drift is visible rather than discovered by an OOM in
+  hour three.
+- **On OOM: fail loudly.** Report the window, its edge count, the epoch and
+  the peak, write the partial report, exit non-zero. **Never fall back to
+  sampling, smaller batches or chunking silently** — a run that quietly
+  changed training regime partway would produce numbers that cannot be
+  compared with anything, including themselves.
+
+##### 3. Two GPUs: stagger the expensive part, then parallelise safely
+
+The 14.1 GB host peak is **the feature-spec fit**, not training: it pools
+every rule-3 training window's transactions to build vocabularies and
+scaler statistics. Two concurrent processes doing that would need ~28 GB of
+33.7 before counting the dataframes, which is why naive two-process
+parallelism is the risk here.
+
+**Recommended:** fit each lookback's spec **once** in a short step, save it
+to disk (it is a small JSON of vocabularies and scaler statistics — the
+format `FeatureSpec.save` already writes), and have every training process
+**load** it. A training process then holds the dataframe (~3.9 GB) plus one
+window's features (~0.25 GB) rather than a 14.1 GB pool, so two processes
+fit comfortably and `CUDA_VISIBLE_DEVICES=0` / `=1` can run two seeds at
+once.
+
+**But it is probably unnecessary**, which is the more useful finding. At
+the measured step times, an epoch is 13 × 0.28s = **3.6s** at L = 24 and
+9 × 0.45s = **4.1s** at L = 48. Even at 100 epochs that is under 7 minutes
+of compute per model, and the whole 20-model matrix is ~2 hours on **one**
+GPU — inside a single 9-hour session. The proposal is therefore: **run
+sequentially on one GPU, with the spec pre-fitted and shared**, and keep
+two-process parallelism as a contingency if the epoch count turns out much
+larger. Parallelism that is not needed is a host-RAM risk taken for
+nothing.
+
+##### 4. Train on GPU, evaluate on CPU — and featurise once
+
+Training needs the GPU; evaluation does not. Measured on this laptop (not
+Kaggle, so the absolute number will differ), full-window CPU inference runs
+at **~1.7 µs per edge** — 0.51s for 300k edges — which puts the largest
+evaluation window (1,137,240 edges) at roughly **2 seconds** and all 44
+evaluation windows at L = 48 (41.0M edges) at **~70 seconds per model**.
+GPU inference is 0.18s for that window, so the GPU buys nothing here worth
+a session's quota.
+
+**Evaluation runs window-major, not model-major.** Stage 3.3 re-featurised
+every evaluation window for every model, which — at the measured 7s per
+million edges — cost roughly **1.2 of its 1.59 hours**. Instead: for each
+(lookback, detection time), featurise the window **once**, score it with
+**all ten models** at that lookback, and keep only the scores. Scores are
+one float per edge per model: 41.0M × 10 × 4 B = **1.6 GB** for L = 48,
+against ~14 GB to cache the features themselves. The existing per-model tau
+sweep, budgets and paired comparisons then run from cached scores exactly
+as they do now.
+
+Estimated evaluation cost: ~5 minutes of featurisation per lookback,
+~20 minutes of GNN inference across all 20 models, and the clustering the
+tau sweep already pays — call it **under an hour on CPU**, against 1.59
+hours for stage 3.3's XGBoost.
+
+##### 5. Everything else
+
+| | Proposed | Why |
+|---|---|---|
+| **Optimizer** | Adam, lr 1e-3, no schedule | Frozen across variants, lookbacks and seeds for the same reason stage 3.3's hyperparameters were: otherwise a comparison becomes a comparison of tuning effort. With the balanced loss starting at 0.69, 1e-3 is a conventional starting point; a schedule is an optimisation to consider only if training is unstable. |
+| **Epochs** | Max 100, early stopping with patience 10 | At ~4s an epoch the ceiling costs minutes, so it is set by patience, not by budget. |
+| **Early-stopping metric** | **Validation campaign-F1**, probed at taus {0.9, 0.99, 0.999}, best taken | It is the quantity this project selects on everywhere else, and it is what tau selection itself maximises. Validation *loss* is rejected: under a 2,500× class weight it is dominated by a few hundred positives and can fall while campaign-level recall does not move — the two are not interchangeable here. The probe grid is the high end because that is where stage 3.3's class-weighted model actually lived (chosen taus 0.99 and 0.995), and few edges survive those thresholds, so the clustering is cheap. |
+| **Checkpoint kept** | The epoch with the best validation campaign-F1, not the last | Standard, and it makes early stopping a selection rather than just a stop. |
+| **Window order** | Shuffled each epoch by `numpy.random.default_rng(seed * 1000 + epoch)` | Full-batch means one window per step, so order is the only stochasticity besides initialisation; seeding it per (seed, epoch) keeps a run reproducible and the shuffle independent across seeds. |
+| **Seed control** | `torch.manual_seed`, `torch.cuda.manual_seed_all`, `numpy` and Python seeds, all from the run seed; `CUBLAS_WORKSPACE_CONFIG=:4096:8` and `torch.use_deterministic_algorithms(True)` **attempted** and the result recorded | Honest limit: GPU scatter accumulates in nondeterministic order and floating-point addition is not associative, so if PyG's kernel has no deterministic variant the call raises and determinism is reported as unavailable rather than claimed. Two mitigations make this acceptable: the five seeds' spread is reported and will dwarf last-bit drift, and **evaluation is exactly reproducible regardless**, because it runs from saved weights. |
+| **Resumability** | Each finished (variant, lookback, seed) saved to `/kaggle/working/models/gnn/<variant>_L<L>_s<seed>/` immediately; on restart, existing models are skipped. `evaluate` writes a partial report per configuration | An interrupted session loses at most the model in flight. Evaluation runs in a later CPU session from the saved models, so the two halves never have to fit in one session. |
+
+##### Estimated cost of the full run
+
+| | Estimate | Basis |
+|---|---|---|
+| Training, 20 models | **~2 h GPU**, one session | 3.6s/epoch (L = 24) and 4.1s (L = 48) measured × up to 100 epochs, + ~1 min per model of setup |
+| Featurising training windows | ~2 min per lookback, cached in ~2 GB host RAM and reused across all epochs and seeds | 7s per million edges measured; without the cache, re-featurising each epoch would cost 70s against 4s of compute and would dominate training by ~20× |
+| Evaluation, 20 models | **< 1 h CPU**, separate session | ~1.7 µs/edge inference + window-major featurisation, against stage 3.3's 1.59 h |
+
+Both halves fit single sessions with room, and the GPU session is the only
+one spending quota.
 
 #### Development checks on the 1% sample
 
@@ -1283,6 +1452,7 @@ transactions.
 | 2026-10-17 | **Every model configuration is trained at seeds 0-4**, and results are reported per seed and as mean [min, max] across seeds | A single run cannot distinguish an effect from seed noise. XGBoost's `subsample` and `colsample_bytree` make the fit genuinely stochastic, so the spread is real and worth carrying | user decision, 2026-10-17 |
 | 2026-10-17 | A **score cache** is used for the tau sweep and warmed before it | A scorer's output does not depend on tau, so a 16-point grid would otherwise re-featurise every million-edge window sixteen times for sixteen identical answers. It cannot change the curve and the cached and uncached curves are pinned equal in a test. Warming it first keeps the per-tau seconds comparable instead of letting the first tau absorb all the featurisation | implementation, stage 3.3 |
 | 2026-10-17 | **False alarms report which of the rule's two conditions failed** — purity < 0.5 vs coverage < 3 campaign accounts — with counts, replacing a single "best overlap" number | The old summary line said "best overlap 0.667 (below the 0.5 the rule requires)", which contradicts itself. Those clusters passed purity and failed coverage. On the sample 21 of 22 fail coverage, so the oracle's false alarms are mostly fragments of real campaigns too small to claim — a different problem from pollution by unrelated traffic, and one the three-account floor creates by design | user-reported, 2026-10-17 |
+| 2026-11-10 | **DECIDED: full-batch training for both lookbacks**, closing the sampling decision reopened earlier the same day. Inference runs unchunked | Measured, not estimated: the largest L = 48 training window peaks at **10.70 GB reserved** of 15.6 GB and L = 24 at 6.39 GB, both inside the 12 GB rule fixed before the run; the largest evaluation windows need 2.71 and 4.75 GB. Steps take 0.28s and 0.45s. Full-batch removes three parameters the comparison does not need - fanouts, batch size and a sampler's bias - and sees every edge of a window at every step, which is what the frozen matching rule evaluates against. The 2026-10-10 sampling choice rested on a shape-based ~16.6 GB that the measurement halved | user decision, 2026-11-10; `gpu_probe_windows.*` |
 | 2026-11-10 | **Measured: full-batch training fits both lookbacks** - the largest L = 48 window peaks at **10.70 GB reserved** on a 15.6 GB T4 against the 12 GB rule fixed before the run, and L = 24 at 6.39 GB. Inference needs no chunking (4.75 GB, 0.18s for the largest evaluation window). The regime choice itself is 3.4.1's to propose on this evidence | The 2026-10-10 estimate was ~16.6 GB, the measurement is 10.70. Real windows came in ~25% heavier than `gpu-check`'s synthetic graphs (5.73 vs 4.6 MB per 1,000 edges), so the synthetic projection of 8.6 GB would have understated it - which is exactly why the probe ran real windows before anything was decided. Host memory peaks at 14.1 GB during the feature-spec fit, not on the GPU | `gpu_probe_windows.*`, 2026-11-10 |
 | 2026-11-10 | **The probe exposed an activation explosion that 3.4.1 must resolve**: losses of 10,615 (L = 24) and 356,394 (L = 48) after one step from random init, where class-weighted BCE should start near 1-2. No training happens until a normalisation is proposed and approved | GINEConv aggregates by **sum**, and these windows hold accounts of very high degree; summing thousands of 64-dim messages three layers deep with nothing between them compounds beyond what a linear readout can map to sensible logits. The largest window being 34x worse than the smaller one is the pattern that explanation predicts. The frozen design names GINEConv, 2-3 layers and hidden 64 but says nothing about normalisation, so adding one is a change to approve rather than assume. A model whose activations explode on the busiest windows would still train and still report numbers | `gpu_probe_windows.*`, 2026-11-10 |
 | 2026-11-10 | **Every GPU subcommand installs `torch_geometric` itself** when the session lacks it, via one shared `ensure_torch_geometric`. Only `gpu-check` also attempts the optional extensions | A Kaggle session starts clean, and `gpu-probe-windows` failed on a fresh one with "No module named 'torch_geometric'" because only `gpu-check` installed it. The alternative was a documented rule that `gpu-check` must run first, which is a rule that gets forgotten - as it just was. The extensions stay exclusive to `gpu-check` because they are not required and a training command should not spend session minutes on wheels it can run without | user-reported, 2026-11-10 |
@@ -2594,6 +2764,55 @@ Tagged points in the repository, newest first. Check one out with
 | `v0.1-data-pipeline` | 2026-10-08 | Phase 2 complete, plus the stage 3.0 Kaggle runner. The research pipeline (campaign ground truth, splits, topology groups, institutions, visibility), the artifact export, the read-only FastAPI server, and the full React frontend — 69 backend tests and 48 frontend tests passing. **No models and no experiment results**: the four conditions are defined and the result schema is fixed, but nothing has been trained or run, and the full-data regression numbers are still unverified (that is what stage 3.0's Kaggle run is for). |
 
 ## Changelog
+
+- **2026-11-10 (3.4.1 proposal)** — **Full-batch training decided; the
+  design proposal written, awaiting approval.**
+
+  *Decided:* full-batch at **both** lookbacks, closing the sampling
+  decision reopened the same day. The largest L = 48 window peaks at 10.70
+  GB of 15.6 against the 12 GB rule, L = 24 at 6.39 GB, and inference runs
+  unchunked at 4.75 GB. Full-batch removes three parameters the comparison
+  does not need — fanouts, batch size, sampler bias — and the 2026-10-10
+  estimate that argued for sampling was twice the measurement.
+
+  *The loss scale is explained, and two of the three candidate causes are
+  ruled out by arithmetic.* The reduction is already `mean` (a `sum` would
+  have given ~6.7 × 10¹¹, not 3.6 × 10⁵), and the class weight is
+  self-normalising: `n_pos × pos_weight = n_neg ≈ N`, measured at 0.9997
+  and 0.9996 of N, so it contributes ≈ 1 whatever the window. What is left
+  is the logits, of order 10⁴–10⁵. Measured support: after the feature
+  spec's standardisation, node features on the sample's largest windows
+  still reach **|x| = 110 and 159** — standardising a heavy-tailed degree
+  column does not bound it — and three layers of **sum** aggregation over
+  high-degree accounts compound from there. Edge features are fine (max
+  4.6).
+
+  *Proposed:* a **balanced-mean loss** (½ mean over positives + ½ mean over
+  negatives), which keeps the frozen class weight exactly — per-positive to
+  per-negative weight is `n_neg / n_pos` — makes window-invariance exact
+  rather than approximate, and starts at ln 2 ≈ 0.693 for any window, so a
+  wrong first step is obvious. And **layer normalisation** after each
+  GINEConv, the proposal's one addition to the frozen design: chosen over
+  BatchNorm (its running statistics would be fitted on training windows and
+  applied to evaluation windows up to 3× different in size) and over mean
+  aggregation (which would discard what makes a GIN a GIN).
+
+  *Also proposed:* `expandable_segments:True` and per-epoch peak logging
+  with a loud failure on OOM and **no silent fallback**; pre-fitting each
+  spec once and sharing it, since the 14.1 GB host peak is the spec fit
+  rather than training — which makes two-GPU parallelism safe but also
+  unnecessary, as the whole 20-model matrix is ~2 h on one GPU; evaluation
+  in a separate CPU session, **window-major** so each evaluation window is
+  featurised once and scored by all ten models at that lookback, keeping
+  1.6 GB of scores instead of ~14 GB of features and saving roughly 1.2 of
+  the 1.59 hours stage 3.3 spent; early stopping on **validation
+  campaign-F1** rather than loss, with the reasons; seeded window shuffling;
+  and an honest statement that GPU scatter may not be bit-reproducible,
+  mitigated by reporting the five-seed spread and by evaluation running from
+  saved weights.
+
+  Nothing is implemented. 3.4.2 starts once the proposal is approved or
+  amended.
 
 - **2026-11-10 (3.4.1 evidence)** — **`gpu-probe-windows` ran on one T4,
   and full-batch training fits both lookbacks.**
