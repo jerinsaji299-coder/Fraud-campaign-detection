@@ -1,0 +1,41 @@
+{
+  "params": {
+    "layers": 3,
+    "hidden": 64,
+    "dropout": 0.0,
+    "learning_rate": 0.001,
+    "weight_decay": 0.0,
+    "max_epochs": 100,
+    "patience": 10,
+    "seed": 0
+  },
+  "variants": [
+    "gnn_centralized"
+  ],
+  "lookbacks": [
+    24
+  ],
+  "seeds": [
+    0
+  ],
+  "device": "cuda:0",
+  "skipped_already_trained": [],
+  "models": [
+    {
+      "variant": "gnn_centralized",
+      "lookback_h": 24,
+      "seed": 0,
+      "model_dir": "/kaggle/working/models/gnn/gnn_centralized_L24_s0",
+      "epochs_run": 56,
+      "best_epoch": 45,
+      "best_val_average_precision": 0.418922,
+      "final_train_loss": 0.140908,
+      "max_abs_logit": 14.14,
+      "peak_reserved_mb": 7432.3,
+      "cached_graph_memory_mb": 5924.0,
+      "deterministic": true,
+      "n_training_windows": 13,
+      "n_validation_windows": 4
+    }
+  ]
+}

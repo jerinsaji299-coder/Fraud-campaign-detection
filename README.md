@@ -89,9 +89,11 @@ validated on the full data.
 two GPU sessions, one per lookback, then one CPU session that evaluates all
 20 GNN models, regenerates the XGBoost per-campaign records and runs the
 direct comparison (§5k of `backend/scripts/kaggle/run_on_kaggle.md` has the
-cells). One thing to confirm with it: whether the stage 3.3 training
-session's output still exists, since that decides whether the CPU session is
-3.5–5 hours or 5–6.5. The 3.4.3 quick check is done and is **provisional, one
+exact cells). The CPU session also **retrains the XGBoost baseline**: stage
+3.3 ran interactively, so its 20 boosters were discarded with the session.
+That makes session B ~4.8–7.1 hours of a 12-hour commit-mode run, and the
+retrain doubles as a regression check against the recorded stage 3.3
+numbers. The 3.4.3 quick check is done and is **provisional, one
 seed**: the GNN matches XGBoost's test recall (0.661, 0.804 of the ceiling)
 but at **33.3 false alarms a day against 3.4**, and at a comparable alert
 volume on validation it reaches 0.231 recall against XGBoost's 0.423. It is
@@ -1240,8 +1242,8 @@ sharply.
 
 One model on the full data: L = 24, the full variant, seed 0. GPU training
 in one session, CPU evaluation in another, both exit 0 (Kaggle, commit
-`8d8929c`). Evidence: `docs/reference/evaluate_gnn.{md,csv,json}` and the
-four companion CSVs.
+`8d8929c`). Evidence: `docs/reference/train_gnn.{md,csv,json}`,
+`evaluate_gnn.{md,csv,json}` and the four companion CSVs.
 
 **Training behaved as designed.**
 
@@ -1249,9 +1251,12 @@ four companion CSVs.
 |---|---|---|
 | First epoch's loss | ~0.69 | `ln 2`, which the balanced-mean loss gives for any window whatever its class ratio. The loss scale is right. |
 | `max \|logit\|` | 1.2 → 14 over training | Single and low double digits, against the 10⁴–10⁵ the unnormalised probe implied. `log1p` on the node counts plus LayerNorm hold on the full data, not only on the sample. |
-| Peak GPU memory | **7.43 GB, flat across epochs** | The probe measured 6.39 GB for the largest L = 24 window forward+backward; training adds optimizer state and allocator fragmentation across 13 windows, so 16% above the probe is the expected direction and size. Flat is the part that matters: no epoch-over-epoch climb, so nothing leaks. Half of one 15.6 GB card. |
-| Epoch time | ~7s | 13 full-batch steps. The 100-epoch ceiling therefore costs ~12 minutes, so patience decides the runtime, not the budget. |
-| Early stopping | best epoch 45 (val AP 0.419), stopped at 55 | Patience 10, fired as designed. |
+| Peak GPU memory | **7.43 GB, flat across epochs** | One window at a time: the graphs are cached on the **host** (5.92 GB there) and moved to the device per step. The probe measured 6.39 GB for the largest L = 24 window forward+backward, and training adds the optimizer state and the fragmentation of cycling windows of different sizes, so 16% above it is the expected direction and size. Flat is the part that matters: no epoch-over-epoch climb, so nothing leaks. Half of one 15.6 GB card. |
+| Epoch time | ~7s | 13 full-batch steps. |
+| Early stopping | best epoch 45 (val AP 0.4189), 56 epochs run | Patience 10, fired as designed. |
+| Whole model | **463.4s** | ~95s to featurise and cache the 17 window graphs on the host, then ~7s an epoch. This, not the epoch time, is what sizes the full run. |
+| Feature-spec + node-preprocessor fit | 54.4s, host peak 10.6 GB | Once per lookback, shared by every variant and seed. The probe measured 14.1 GB for the L = 48 fit; both are far inside the notebook's 33.7 GB. |
+| Determinism | `deterministic: true` | `use_deterministic_algorithms` took effect, so the run is reproducible from the seed. |
 
 **Validation average precision is 0.419 on the full data against 0.94 on
 the 1% sample.** That is not a regression — it is the positive rate. The
@@ -1398,34 +1403,48 @@ check that the diagnostic computes the quantity early stopping used.
 #### 3.4.4 the full-run plan — proposed, awaiting approval
 
 Two variants × two lookbacks × five seeds = **20 GNN models**, plus the
-XGBoost records to compare them with. Every estimate below is extrapolated
-from a measurement, and says which.
+XGBoost baseline, which has to be **retrained**: stage 3.3 ran in an
+interactive session, so its `/kaggle/working` was discarded and the 20
+boosters no longer exist. Three sessions — two GPU, one CPU. The cells are
+§5k of `backend/scripts/kaggle/run_on_kaggle.md`.
 
-**GPU, training.** Measured: ~7s an epoch at L = 24 (13 full-batch steps),
-55 epochs to stop with patience 10, 7.43 GB peak. L = 48 has 9 windows of
-roughly twice the edges, so ~1.4× the edges an epoch → ~10s, and the probe
-measured 10.70 GB peak there.
+**GPU, training.** Measured on the 3.4.3 quick check: pipeline build 30.6s,
+feature-spec and node-preprocessor fit 54.4s, then **463.4s for one model
+of 56 epochs** — which decomposes into ~95s to featurise and cache the 17
+window graphs on the host plus ~7s an epoch. Peak reserved GPU memory
+7,432 MB, flat. L = 48 has 9 training windows against 13, each about twice
+the edges, so ~1.4× the edges an epoch.
 
-| | Per model | 10 models | At the 100-epoch cap |
+| | Per model | Ten models | At the 100-epoch cap |
 |---|---:|---:|---:|
-| L = 24 | ~6.5 min | ~1.1 h | ~2.0 h |
-| L = 48 | ~9 min | ~1.5 h | ~2.8 h |
+| L = 24 | ~8.1 min (measured) | **~1.4 h** | ~2.2 h |
+| L = 48 | ~11.4 min (×1.4) | **~1.9 h** | ~3.1 h |
 
-Plus, per lookback, the feature spec and node-preprocessor fit — once,
-shared by all ten models of that lookback — and the pipeline build (~33s
-measured).
+Both fit a 9-hour session with hours to spare. The feature spec is fitted
+**once per lookback** and shared by all ten models, because that is the
+expensive step — 14.1 GB of host RAM at L = 48, 10.6 GB measured at L = 24,
+against the notebook's 33.7 GB. The window graphs are rebuilt per model,
+which costs ~16 minutes across ten models and is the one thing here worth
+optimising later.
 
-**Proposed split: one GPU session per lookback.** Each is ~1.5–3 hours
-inside a 9-hour limit, so neither is near the wall even if every model runs
-to the cap; and because a finished model is skipped on restart, a lost
-session costs at most the model in flight rather than the lookback. Running
-both lookbacks in one session would also fit the 9 hours on these numbers,
-but it spends the whole estimate in one place against a weekly quota, and
-the only thing it buys is one pipeline build.
+**One GPU session per lookback**, not one for both. Both would fit the 9
+hours on these numbers, but a finished model is skipped on restart, so
+splitting means a lost session costs at most the model in flight rather than
+the lookback — and it does not spend the whole estimate in one place against
+a weekly quota. The only thing the single session saves is one pipeline
+build.
 
-**CPU, evaluation and comparison — one 12-hour session.** Measured on the
-quick check at L = 24 over 24 windows and 11.17M edges: 92.6s to featurise
-all of them once (8.28 µs/edge) and 56.4s for one model's forward passes
+**The tightest point of the stage is L = 48's GPU memory.** The probe
+measured 10.70 GB reserved for the largest L = 48 window; training added
+1.16× at L = 24 (7.43 against the probe's 6.39), so expect **~12.4 GB of a
+15.6 GB card**, about 80%. It is expected to fit, it is extrapolated rather
+than measured, and the failure mode is explicit: on out-of-memory
+`train-gnn` reports the window, epoch and peak, writes a partial report and
+exits 4, with no silent fall back to sampling or chunking.
+
+**CPU, everything else — one 12-hour session, in commit mode.** Measured on
+the quick check at L = 24 over 24 windows and 11.17M edges: 92.6s to
+featurise them once (8.28 µs/edge) and 56.4s for one model's forward passes
 (5.08 µs/edge), with tau selection over the 16-value grid at 37.3s a model.
 
 | Step | L = 24 | L = 48 (≈2× the edges) | Basis |
@@ -1434,43 +1453,52 @@ all of them once (8.28 µs/edge) and 56.4s for one model's forward passes
 | Forward passes, 10 models | ~9 min | ~19 min | measured |
 | Tau selection, 10 models | ~6 min | ~12 min | measured |
 | Evaluate: 3 splits × 4 operating points × 10 models | ~15–60 min | ~30–120 min | measured at the F1 tau; the range is the risk below |
-| **`evaluate-gnn` total** | **~35–80 min** | **~70–160 min** | |
-| `evaluate` (XGBoost, for the records) | — | — | 1.59 h measured, both lookbacks |
+| **`evaluate-gnn`** | **~35–80 min** | **~70–160 min** | |
+| `train` (XGBoost, 20 boosters) | — | — | **1.44 h measured** |
+| `evaluate` (XGBoost, writes the records) | — | — | **1.59 h measured** |
 | `compare-models` | — | — | under a minute; it reads two CSVs |
 
-So **~3.5–5 hours** of CPU, inside one 12-hour session, for everything:
-both lookbacks of `evaluate-gnn`, the XGBoost re-run that regenerates the
-per-campaign records, and the direct comparison. If the stage 3.3 models are
-gone, add the measured 1.44h to retrain them — still one session, still no
-GPU.
+**~4.8–7.1 hours in total**, inside a 12-hour session, so 5–7 hours of
+margin. It runs in **commit mode** ("Save & Run All") rather than
+interactively, which is also what cost stage 3.3 its models.
+
+**The retrain doubles as a regression check.** Same seeds, same code, same
+data, so the re-evaluated numbers must reproduce the recorded stage 3.3
+results — the full model at L = 48 with test recall **0.679** and **0.760**
+of the ceiling, and no tau at a grid edge. If they do not, something changed
+that should not have, and that is worth more than the comparison it was run
+for.
 
 **The one real risk, named.** Clustering cost scales with the edges kept, so
 a *low* budget tau is the expensive case: at L = 24 on test, stage 3.3 spent
 194s on a single model at its 10/day tau against 3.7s at its F1 tau, a 50×
 spread. The GNN alerts more freely at its F1 tau, so its 10/day tau will be
 *higher* and cheaper — but its 50 and 100/day taus will be lower and dearer,
-and they are new work that stage 3.3's total does not cover. The upper end
-of each range above assumes every budget behaves like stage 3.3's worst
-case. Nothing silently degrades if it is slow: `evaluate-gnn` writes a
-partial report after every configuration, so a session that runs out of time
-loses no completed work and the rest resumes from the saved models.
+and they are new work no measurement covers. The upper end of each range
+above assumes every budget behaves like stage 3.3's worst case. Nothing
+silently degrades if it is slow: `evaluate-gnn` writes a partial report
+after every configuration, and because the session saves its own output, a
+later CPU session can attach it and finish from the saved models — no GPU,
+no retraining.
 
 **Sequence.**
 
-1. GPU session, L = 24: `train-gnn --lookbacks 24` (both variants, five
-   seeds). Save the output.
-2. GPU session, L = 48: the same at `--lookbacks 48`. Save the output.
-3. CPU session, with both GPU outputs and the stage 3.3 models as inputs:
-   `evaluate-gnn` over both lookbacks, then `evaluate` for the XGBoost
-   records, then `compare-models`.
-4. Stage 3.4.5, the Phase 3 gate report, is written from the three output
-   sets — by paired comparisons only, per lookback, per seed, at the
-   F1-chosen taus and at every budget, with coverage reported separately.
-
-**One thing to confirm before step 3:** whether the stage 3.3 training
-session's output (`models/<variant>_L<L>_s<seed>/`, 20 boosters) still
-exists as a Kaggle notebook output. It decides whether step 3 is 3.5–5
-hours or 5–6.5.
+1. **GPU session A1:** `train-gnn --lookbacks 24` — ten models. Save the
+   output.
+2. **GPU session A2:** `train-gnn --lookbacks 48` — ten models. Save the
+   output.
+3. **CPU session B, commit mode**, with A1's and A2's outputs attached as
+   inputs. In order: locate both `models/gnn` trees under `/kaggle/input`
+   with `find` and copy them into one directory, asserting 20 models and
+   both specs are present — a one-minute check that fails before hours are
+   spent; then `train`; then `evaluate`; then `evaluate-gnn`; then
+   `compare-models`. XGBoost goes first because its cost is known to within
+   a percent, which leaves the whole remaining margin for the one uncertain
+   step.
+4. **Stage 3.4.5**, the Phase 3 gate report, is written from session B's
+   output — by paired comparisons only, per lookback, per seed, at the
+   F1-chosen taus and at every budget, with coverage reported separately. It
+   needs no further session.
 
 #### Development checks on the 1% sample
 
@@ -1799,6 +1827,7 @@ transactions.
 | 2026-10-17 | **Every model configuration is trained at seeds 0-4**, and results are reported per seed and as mean [min, max] across seeds | A single run cannot distinguish an effect from seed noise. XGBoost's `subsample` and `colsample_bytree` make the fit genuinely stochastic, so the spread is real and worth carrying | user decision, 2026-10-17 |
 | 2026-10-17 | A **score cache** is used for the tau sweep and warmed before it | A scorer's output does not depend on tau, so a 16-point grid would otherwise re-featurise every million-edge window sixteen times for sixteen identical answers. It cannot change the curve and the cached and uncached curves are pinned equal in a test. Warming it first keeps the per-tau seconds comparable instead of letting the first tau absorb all the featurisation | implementation, stage 3.3 |
 | 2026-10-17 | **False alarms report which of the rule's two conditions failed** — purity < 0.5 vs coverage < 3 campaign accounts — with counts, replacing a single "best overlap" number | The old summary line said "best overlap 0.667 (below the 0.5 the rule requires)", which contradicts itself. Those clusters passed purity and failed coverage. On the sample 21 of 22 fail coverage, so the oracle's false alarms are mostly fragments of real campaigns too small to claim — a different problem from pollution by unrelated traffic, and one the three-account floor creates by design | user-reported, 2026-10-17 |
+| 2026-11-13 | **Session B of the 3.4.4 run retrains the XGBoost baseline** (`train` then `evaluate`, 1.44h + 1.59h measured, CPU), because the stage 3.3 boosters no longer exist: that run was an **interactive** session, so its `/kaggle/working` was discarded. Session B therefore runs in **commit mode** | Nothing is lost that cannot be recreated - the models are a deterministic function of the seeds, the code and the data - but it has to be recreated in the same session that evaluates them, because `evaluate` reads the boosters `train` writes. The retrain is also worth having as a **regression check**: the re-evaluated numbers must reproduce the recorded stage 3.3 results (L = 48 full model, test recall 0.679, 0.760 of the ceiling, no edge taus), and a disagreement would matter more than the comparison it was run for | user-reported, 2026-11-13; `backend/scripts/kaggle/run_on_kaggle.md` section 5k |
 | 2026-11-10 | **The GNN is not tuned in response to the 3.4.3 quick check.** It matched XGBoost's test recall at ~10x the alert volume and reached a lower validation campaign-F1 (0.418 against 0.543); the configuration stays frozen anyway. Only a **demonstrated bug** - a named defect with evidence - justifies a change | Equal tuning effort is the condition that makes the comparison a comparison of models. Tuning the GNN because its number came out low, and only then, would make the final table a record of how much search each model received, and the asymmetry would be invisible in it. An underwhelming metric is not evidence of a defect | user decision, 2026-11-10 |
 | 2026-11-10 | **Alert budgets (10/50/100 a day) added to `evaluate-gnn`**, tau per budget chosen on validation from the same curve the F1 tau comes from | Required by the frozen design, and the only fair head-to-head: the two models' F1-chosen operating points sit an order of magnitude apart in alert volume (33.3 against 3.4 a day), so comparing recall at those points compares a cheap detector with an expensive one. No test information enters the operating point | user decision, 2026-11-10 |
 | 2026-11-10 | **Every evaluation now writes per-campaign records (`*_outcomes.csv`), and the new `compare-models` subcommand is the only place a cross-model earliness claim may come from.** Stage 3.3 saved none, so its records are regenerated by re-running `evaluate` - CPU only, 1.59h measured, no retraining | Rule 3 requires A and B be compared directly, which needs both models' per-campaign detection times at a matched seed, lookback and operating point. Those existed only inside a running process, so the GNN-versus-XGBoost comparison could not be assembled from stage 3.3's files at all. Reading two files rather than two live models also means the comparison runs in a cheap CPU session across runs days apart, which is what Phase 4+ needs for the federated conditions | user decision, 2026-11-10; `tests/test_compare_models.py` |
@@ -1913,6 +1942,7 @@ project-root/
       evaluate_baseline_operating.csv recall vs false alarms, for plotting
       gpu_check.{md,json}             stage 3.4.0: GPU, RAM, PyG install, GINEConv smoke test
       gpu_probe_windows.{md,json}     stage 3.4.1: real windows through the real model
+      train_gnn.{md,csv,json}         stage 3.4.3: the trained GNN, epochs, memory, determinism
       evaluate_gnn.{md,csv,json}      stage 3.4.3 quick check: one GNN, L = 24, seed 0
       evaluate_gnn_paired.csv         that model against the ceiling, paired
       evaluate_gnn_tau_curve.csv      its per-tau precision/recall/F1 on validation
@@ -3180,6 +3210,45 @@ Tagged points in the repository, newest first. Check one out with
 | `v0.1-data-pipeline` | 2026-10-08 | Phase 2 complete, plus the stage 3.0 Kaggle runner. The research pipeline (campaign ground truth, splits, topology groups, institutions, visibility), the artifact export, the read-only FastAPI server, and the full React frontend — 69 backend tests and 48 frontend tests passing. **No models and no experiment results**: the four conditions are defined and the result schema is fixed, but nothing has been trained or run, and the full-data regression numbers are still unverified (that is what stage 3.0's Kaggle run is for). |
 
 ## Changelog
+
+- **2026-11-13 (3.4.4 plan revised)** — **the stage 3.3 boosters are gone,
+  so the full run needs three sessions and session B retrains them.**
+
+  The stage 3.3 run was an *interactive* Kaggle session, so its
+  `/kaggle/working` was discarded when the session ended: the 20 boosters do
+  not exist any more. Session B of the 3.4.4 plan therefore runs `train`
+  (1.44h measured) before `evaluate` (1.59h), because `evaluate` reads the
+  models `train` writes in the same session, and the whole session runs in
+  **commit mode** rather than interactively. Nothing is lost that cannot be
+  recreated — the boosters are a deterministic function of the seeds, the
+  code and the data — and the retrain doubles as a **regression check**: the
+  re-evaluated numbers must reproduce test recall 0.679 and 0.760 of the
+  ceiling for the L = 48 full model, with no tau at a grid edge.
+
+  *Session B, in order:* locate both GPU sessions' `models/gnn` trees under
+  `/kaggle/input` with `find`, copy them into one directory and **assert**
+  20 models and both specs are there — a one-minute check that fails before
+  hours are spent, rather than `evaluate-gnn` exiting 2 after the XGBoost
+  work; then `train`, `evaluate`, `evaluate-gnn`, `compare-models`. XGBoost
+  first because its cost is known to within a percent, which leaves the
+  whole remaining margin for the one uncertain step. **~4.8–7.1 hours** of a
+  12-hour session. The copy cell was run against a fake `/kaggle/input` tree
+  in all three states — both sessions attached, one attached, none — and
+  stops with a named assertion in the last two.
+
+  *The GPU estimates are now anchored on measurement* rather than on the
+  live log's epoch time. `train_gnn.md` from the quick check gives **463.4s
+  for one model of 56 epochs** — ~95s to featurise and cache the 17 window
+  graphs on the host, then ~7s an epoch — plus a 54.4s feature-spec fit per
+  lookback at a 10.6 GB host peak, and `deterministic: true`. So ten models
+  is **~1.4h at L = 24** and **~1.9h at L = 48** (~2.2h and ~3.1h if every
+  one runs the 100-epoch cap), each inside a 9-hour session. The tightest
+  point of the stage is L = 48's GPU memory: the probe's 10.70 GB for the
+  largest window plus the 1.16× training added at L = 24 projects **~12.4 GB
+  of a 15.6 GB card**, which is extrapolated, not measured, and fails loudly
+  (exit 4 with the window, epoch and peak) rather than silently.
+
+  *Evidence committed:* `docs/reference/train_gnn.{md,csv,json}`.
 
 - **2026-11-10 (3.4.3 + the evaluation gaps)** — **the quick check ran; the
   GNN is behind; four gaps in the evaluation closed and the full-run plan

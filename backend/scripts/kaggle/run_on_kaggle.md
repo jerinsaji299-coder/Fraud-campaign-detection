@@ -765,122 +765,245 @@ Those four numbers are what section 5k's estimates are built from.
 
 ## 5k. Stage 3.4.4: the full run, and the direct comparison
 
-Two variants x two lookbacks x five seeds = **20 GNN models**, then one CPU
-session that evaluates all of them, regenerates the XGBoost per-campaign
-records and runs the comparison. **Three sessions**, in this order.
+**Three sessions.** Two GPU training sessions, one per lookback, then one
+CPU session that does everything else: 20 GNN models evaluated, the XGBoost
+baseline **retrained and re-evaluated**, and the direct comparison.
 
-### Sessions A1 and A2 - training, Accelerator: GPU, one per lookback
+### Why session B retrains XGBoost
+
+Stage 3.3 ran in an **interactive** session, so its `/kaggle/working` was
+discarded when the session ended - the 20 boosters no longer exist. Two
+things follow:
+
+1. Session B runs `train` before `evaluate`: **1.44h + 1.59h measured**, CPU
+   only. The GPU is not wanted for either; stage 3.3's reasons still hold
+   (the cost is pandas and scipy, and the quota belongs to the GNN).
+2. The retrain is also a **regression check**. Same seeds, same code, same
+   data, so the re-evaluated numbers must reproduce the recorded stage 3.3
+   results: the full model at L = 48 with test recall **0.679** and
+   **0.760** of the ceiling, and no tau at a grid edge. If they differ,
+   stop and report it - something changed that should not have.
+
+Session B is run in **commit mode** ("Save & Run All"), not interactively,
+so nothing depends on the browser staying open. Its own
+`/kaggle/working` is then saved as a notebook output, which is what keeps
+the GNN models, the XGBoost boosters and every report.
+
+---
+
+### Session A1 - GNN training at L = 24
+
+**Session options:** Internet **ON**, Accelerator **GPU** (T4 x2 or P100;
+only `cuda:0` is used - a window has to fit on one card). Input: the IBM
+dataset, as in section 1.
 
 ```python
-# session A1
-!cd /kaggle/temp/repo/backend && python scripts/kaggle/kaggle_runner.py train-gnn \
-    --lookbacks 24
+!ls /kaggle/input/datasets/ealtman2019/ibm-transactions-for-anti-money-laundering-aml/ | head
 ```
 
 ```python
-# session A2
-!cd /kaggle/temp/repo/backend && python scripts/kaggle/kaggle_runner.py train-gnn \
-    --lookbacks 48
+!rm -rf /kaggle/temp/repo
+!git clone --depth 1 https://github.com/jerinsaji299-coder/Fraud-campaign-detection.git /kaggle/temp/repo
+%cd /kaggle/temp/repo/backend
 ```
 
-No `--variants` or `--seeds`, so each trains all ten models of its
-lookback. Expect **~1.1h at L = 24** and **~1.5h at L = 48** from the
-measured 7s and projected 10s an epoch at 55 epochs, rising to ~2.0h and
-~2.8h if every model runs the 100-epoch cap. Either way each session is
-well inside the 9-hour GPU limit.
-
-**One session per lookback rather than one for both**, even though both
-would fit: a finished model is skipped on restart, so a lost session costs
-at most the model in flight, and splitting does not spend the whole
-estimate in one place against a weekly quota. The only thing the single
-session would save is one pipeline build (~33s).
-
-Watch the same three things as in 5j, now also at L = 48: the first epoch's
-loss near 0.693, `max |logit|` in single or low double digits, and peak
-reserved memory near the probe's **10.70 GB** for L = 48 - flat, not
-climbing. On out-of-memory it reports the window, epoch and peak, writes a
-partial report and **exits 4**, with no fallback to sampling.
-
-**Save both notebook outputs.**
-
-### Session B - evaluation and comparison, CPU (no accelerator)
-
-Add as notebook inputs: A1's output, A2's output, **and the stage 3.3
-training session's output** (the 20 boosters under
-`models/<variant>_L<L>_s<seed>/`). Then four cells:
-
 ```python
-# 0. put both lookbacks' models in one place first. Each model is four
-#    small files and each spec is one, so this copy takes seconds.
-!mkdir -p /kaggle/working/models/gnn
-!cp -r /kaggle/input/<A1-output>/models/gnn/* /kaggle/working/models/gnn/
-!cp -r /kaggle/input/<A2-output>/models/gnn/* /kaggle/working/models/gnn/
-!ls /kaggle/working/models/gnn
+!pip install -q -r requirements.txt
 ```
 
-That listing should show **20 model directories** - `gnn_centralized_L24_s0`
-through `gnn_centralized_no_format_L48_s4` - plus `spec_L24` and `spec_L48`.
-If it does not, stop and check the inputs: a missing model is retrained
-rather than skipped, and a CPU session cannot train one.
+```python
+!cd /kaggle/temp/repo/backend && python scripts/kaggle/kaggle_runner.py train-gnn --lookbacks 24
+```
 
 ```python
-# 1. all 20 GNN models, both lookbacks, from the copied tree
+!ls /kaggle/working/models/gnn/ && du -sh /kaggle/working/models/gnn/
+```
+
+No `--variants` or `--seeds`, so this trains **all ten models** of this
+lookback: both variants x five seeds. `torch_geometric` installs itself on
+the first GPU command of the session (~30s).
+
+**Expected cost**, from the 3.4.3 measurements (pipeline 30.6s, feature-spec
+and node-preprocessor fit 54.4s, then 463.4s for one model of 56 epochs -
+which is ~95s to featurise and cache 17 window graphs on the host plus ~7s
+an epoch):
+
+| | Ten models at 56 epochs | If every model runs the 100-epoch cap |
+|---|---:|---:|
+| L = 24 | **~1.4h** | ~2.2h |
+
+Either way it is well inside the 9-hour GPU limit. The graphs are rebuilt
+per model, which is ~16 minutes of the total across ten models; the feature
+spec is fitted **once** and shared, because that is the expensive step
+(14.1 GB of host RAM at L = 48, 10.6 GB measured at L = 24).
+
+**What to watch**, per epoch:
+
+- the loss starts near **0.693** (`ln 2`), which the balanced-mean loss
+  gives for any window - 3.4.3 measured ~0.69;
+- `max |logit|` stays in single or low double digits - 3.4.3 went 1.2 to
+  14.1 over 56 epochs;
+- peak reserved memory sits near **7.4 GB** (measured at L = 24) and does
+  **not** climb epoch over epoch, which would mean fragmentation.
+
+Models are saved the moment each finishes, under
+`/kaggle/working/models/gnn/<variant>_L<L>_s<seed>/`, and one already there
+is skipped on a re-run - so an interrupted session loses at most the model
+in flight. `--retrain` forces a rebuild. On out-of-memory it reports the
+window, epoch and peak, writes a partial report and **exits 4**; it does
+not fall back to sampling or chunking.
+
+**Save the notebook output.** Session B needs it.
+
+### Session A2 - GNN training at L = 48
+
+Identical to A1 except the lookback:
+
+```python
+!cd /kaggle/temp/repo/backend && python scripts/kaggle/kaggle_runner.py train-gnn --lookbacks 48
+```
+
+| | Ten models at 56 epochs | At the 100-epoch cap |
+|---|---:|---:|
+| L = 48 | **~1.9h** | ~3.1h |
+
+L = 48 has 9 training windows against 13, each about twice the edges, so
+~1.4x the edges an epoch. Two numbers differ from A1 and both matter:
+
+- **Peak GPU memory ~12.4 GB**, extrapolated from the probe's 10.70 GB for
+  the largest L = 48 window and the 1.16x that training added at L = 24.
+  That is ~80% of a 15.6 GB card. It is expected to fit and it is the
+  tightest point of the whole stage, so watch the peak column; an OOM is
+  reported as exit 4 with the window and epoch, not a crash.
+- **Host RAM ~14.1 GB** during the feature-spec fit (measured by the
+  probe), against the notebook's 33.7 GB.
+
+**Save this output too.**
+
+### Session B - evaluation, retraining and comparison (CPU, commit mode)
+
+**Session options:** Internet **ON**, Accelerator **None**. Inputs: the IBM
+dataset, **A1's output**, and **A2's output**. Then **Save Version → Save &
+Run All (Commit)** rather than running interactively - the whole thing is
+~5-7 hours.
+
+```python
+# B1 - dataset path, as always
+!ls /kaggle/input/datasets/ealtman2019/ibm-transactions-for-anti-money-laundering-aml/ | head
+```
+
+```python
+# B2 - clone and install
+!rm -rf /kaggle/temp/repo
+!git clone --depth 1 https://github.com/jerinsaji299-coder/Fraud-campaign-detection.git /kaggle/temp/repo
+%cd /kaggle/temp/repo/backend
+!pip install -q -r requirements.txt
+```
+
+```python
+# B3 - find the two training sessions' model trees and put them in one place.
+#      `--model-dir` takes a single path, and A1 and A2 are separate inputs.
+import pathlib, shutil, subprocess
+
+found = sorted(
+    subprocess.run(
+        ["find", "/kaggle/input", "-maxdepth", "6", "-type", "d",
+         "-path", "*/models/gnn"],
+        capture_output=True, text=True, check=True,
+    ).stdout.split()
+)
+print("GNN model trees found under /kaggle/input:")
+for path in found:
+    print("  ", path)
+assert found, "no models/gnn directory under /kaggle/input - attach A1 and A2"
+
+dest = pathlib.Path("/kaggle/working/models/gnn")
+dest.mkdir(parents=True, exist_ok=True)
+for path in found:
+    for child in sorted(pathlib.Path(path).iterdir()):
+        target = dest / child.name
+        if target.exists():
+            print("   already present, left alone:", child.name)
+            continue
+        shutil.copytree(child, target)
+
+models = sorted(d.name for d in dest.iterdir() if d.name.startswith("gnn_"))
+specs = sorted(d.name for d in dest.iterdir() if d.name.startswith("spec_"))
+print(f"{chr(10)}{len(models)} models, {len(specs)} specs in {dest}")
+for name in models:
+    print("  ", name)
+print("  ", specs)
+
+# Fail here rather than three hours in: a missing model would be retrained,
+# and a CPU session cannot train one.
+assert len(models) == 20, f"expected 20 GNN models, found {len(models)}"
+assert specs == ["spec_L24", "spec_L48"], specs
+```
+
+```python
+# B4 - retrain the XGBoost baseline. ~1.44h. The stage 3.3 boosters are gone
+#      (that run was interactive), and `evaluate` needs them in this session.
+!cd /kaggle/temp/repo/backend && python scripts/kaggle/kaggle_runner.py train
+```
+
+```python
+# B5 - evaluate XGBoost. ~1.59h. This is what writes evaluate_outcomes.csv,
+#      the per-campaign records stage 3.3 never saved.
+!cd /kaggle/temp/repo/backend && python scripts/kaggle/kaggle_runner.py evaluate
+```
+
+```python
+# B6 - evaluate all 20 GNN models, both lookbacks, from the tree B3 built.
+#      ~35-80 min at L = 24 and ~70-160 min at L = 48.
 !cd /kaggle/temp/repo/backend && python scripts/kaggle/kaggle_runner.py evaluate-gnn
 ```
 
 ```python
-# 2. the XGBoost records - re-evaluation, NOT retraining
-!cd /kaggle/temp/repo/backend && python scripts/kaggle/kaggle_runner.py evaluate \
-    --model-dir /kaggle/input/<stage-3.3-output>/models
-```
-
-```python
-# 3. the direct comparison, which reads only the two outcome files
+# B7 - the direct comparison. Seconds: it reads the two outcome files.
 !cd /kaggle/temp/repo/backend && python scripts/kaggle/kaggle_runner.py compare-models
 ```
 
-Cell 0 exists because `--model-dir` takes one path while the two training
-sessions are two separate notebook inputs. Copying both trees into
-`/kaggle/working/models/gnn/` - the default location - lets cell 1 run once
-over all 20 models, with one report covering all of them. Running cell 1
-twice instead, with `--lookbacks 24` and `--lookbacks 48` against each
-input in turn, also works but writes each lookback's report over the
-other's.
+```python
+# B8 - what to download
+!ls -lh /kaggle/working/
+!du -sh /kaggle/working/models/
+```
 
-Cell 2 is there because **stage 3.3 never saved per-campaign records** - its
-files hold summaries, tau curves, budget rows and its own comparisons
-against the oracle, but not one row per campaign, and rule 3 needs those to
-compare two models directly. Re-running `evaluate` regenerates them from
-the unchanged boosters: **1.59h measured**, CPU, no training. If the stage
-3.3 output no longer exists, insert `train` before it (1.44h measured, also
-CPU) - the session still fits.
+**The order is forced**, cell by cell:
 
-Expect **~35-80 min** for L = 24 and **~70-160 min** for L = 48 of
-`evaluate-gnn`, plus the 1.59h for `evaluate`: **~3.5-5 hours** in a
-12-hour session. The width of those ranges is one thing: clustering cost
-scales with the edges kept, so a *low* budget tau is the expensive case -
+- B3 before everything, because it is the cheap check. If A1 or A2 was not
+  attached, this fails in a minute instead of after three hours of XGBoost.
+- B4 before B5: `evaluate` reads the boosters `train` writes, and exits 2
+  rather than guessing if they are missing. Both default to
+  `/kaggle/working/models/`, and the GNN models sit in the `gnn/`
+  subdirectory of it, so nothing collides.
+- B5 and B6 in either order, but both before B7: `compare-models` reads
+  `evaluate_outcomes.csv` and `evaluate_gnn_outcomes.csv` and **exits 2** if
+  either is missing or if the two share no configuration. XGBoost first
+  because its cost is known to 1%, which leaves the whole remaining margin
+  for the one uncertain step.
+
+**Total: ~4.8-7.1 hours** in a 12-hour session, so there is 5-7 hours of
+margin. Where the range comes from, and the one real risk: clustering cost
+scales with the edges kept, so a **low** budget tau is the expensive case -
 stage 3.3 spent 194s on one model at its 10/day tau against 3.7s at its F1
-tau. Nothing is lost if it runs long: both commands write a partial report
-after every configuration, and a later session resumes from the saved
-models.
+tau, a 50x spread. The GNN alerts more freely at its F1 tau, so its 10/day
+tau will be higher and cheaper, but its 50 and 100/day taus will be lower
+and dearer, and those are new work no measurement covers yet.
 
-`compare-models` takes seconds. It reads `evaluate_outcomes.csv` and
-`evaluate_gnn_outcomes.csv`, pairs on split, lookback, seed, operating point
-and ablation arm, and reports earliness over the campaigns both detect with
-a bootstrap CI, coverage each way by campaign id, edge-level average
-precision for both models on the same windows, and the false-alarm cluster
-size distribution at each operating point. It **exits 2** rather than
-guessing if either outcomes file is missing or if the two files share no
-configuration.
+Nothing is lost if B6 runs out of time: it writes a partial report after
+every configuration, and because session B saves its own output, a later
+CPU session can attach it and finish from the saved models - no GPU, no
+retraining.
 
 ### What to send back
 
-From A1 and A2: `train_gnn.md` for each - the per-epoch tables, the peak
-memory column, and how much GPU time each session consumed. From B:
-`evaluate_gnn.md`, `evaluate_gnn_budgets.csv`,
-`evaluate_gnn_edge_metrics.csv`, `evaluate_gnn_clusters.csv`,
-`evaluate_baseline.md` and the three `compare_models.*` files. Plus every
-exit code.
+From A1 and A2: `train_gnn.md` from each - the per-epoch tables, the peak
+memory column, and the GPU time each session used. From B: `evaluate_gnn.md`
+with `evaluate_gnn_budgets.csv`, `evaluate_gnn_edge_metrics.csv` and
+`evaluate_gnn_clusters.csv`; `train_baseline.md` and `evaluate_baseline.md`
+(the regression check against stage 3.3); and the three `compare_models.*`
+files. Plus every exit code.
 
 Stage 3.4.5, the Phase 3 gate report, is written from those - by paired
 comparisons only, per lookback, per seed, at the F1-chosen taus and at every
