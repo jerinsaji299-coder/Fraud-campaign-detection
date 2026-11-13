@@ -1,0 +1,291 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Demo Checklist</title>
+<style>
+  :root{
+    --bg:#ffffff; --surface:#f7f8fa; --surface2:#eef0f4; --grid:#d9dde4;
+    --ink:#11151b; --ink2:#3d454f; --muted:#6b7480;
+    --ok:#1a7f4b; --warn:#9a6200; --bad:#b3261e; --accent:#2a78d6;
+    --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,"Liberation Mono",monospace;
+  }
+  @media (prefers-color-scheme: dark){
+    :root:not([data-theme="light"]){
+      --bg:#0d1117; --surface:#161b22; --surface2:#1f242c; --grid:#2d333b;
+      --ink:#e6edf3; --ink2:#b3bdc8; --muted:#8b949e;
+      --ok:#4ac57f; --warn:#e3b341; --bad:#ff7b72; --accent:#58a6ff;
+    }
+  }
+  :root[data-theme="dark"]{
+    --bg:#0d1117; --surface:#161b22; --surface2:#1f242c; --grid:#2d333b;
+    --ink:#e6edf3; --ink2:#b3bdc8; --muted:#8b949e;
+    --ok:#4ac57f; --warn:#e3b341; --bad:#ff7b72; --accent:#58a6ff;
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0; background:var(--bg); color:var(--ink);
+    font:15px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+    padding:0 16px 64px;
+  }
+  .wrap{max-width:900px;margin:0 auto}
+  header{padding:28px 0 8px}
+  h1{font-size:1.6rem;margin:0 0 4px;letter-spacing:-.01em}
+  .sub{color:var(--muted);font-size:.9rem;margin:0}
+  h2{font-size:1.05rem;margin:28px 0 10px;padding-bottom:6px;border-bottom:1px solid var(--grid)}
+  code,kbd{font-family:var(--mono);font-size:.86em}
+  pre{
+    background:var(--surface);border:1px solid var(--grid);border-radius:8px;
+    padding:10px 12px;overflow-x:auto;margin:8px 0;font-family:var(--mono);font-size:.84rem;line-height:1.5
+  }
+  pre .c{color:var(--muted)}
+  .panel{background:var(--surface);border:1px solid var(--grid);border-radius:10px;padding:14px 16px;margin:10px 0}
+  .warnbox{border-left:3px solid var(--warn)}
+  .badbox{border-left:3px solid var(--bad)}
+  ol.steps{list-style:none;counter-reset:s;padding:0;margin:0}
+  ol.steps>li{
+    counter-increment:s; position:relative; background:var(--surface);
+    border:1px solid var(--grid); border-radius:10px;
+    padding:12px 14px 12px 50px; margin:8px 0;
+  }
+  ol.steps>li::before{
+    content:counter(s); position:absolute; left:12px; top:11px;
+    width:26px;height:26px;border-radius:50%;background:var(--surface2);
+    color:var(--ink2);font:600 .82rem/26px var(--mono);text-align:center;
+  }
+  ol.steps>li.done{opacity:.5}
+  .route{font-family:var(--mono);font-size:.82rem;color:var(--accent);font-weight:600}
+  .do{margin:2px 0 6px}
+  .expect{color:var(--ink2);font-size:.92rem;margin:0}
+  .expect b{color:var(--ink)}
+  .tick{position:absolute;right:10px;top:10px;width:20px;height:20px;cursor:pointer;accent-color:var(--accent)}
+  table{border-collapse:collapse;width:100%;font-size:.85rem;margin:8px 0}
+  th,td{border:1px solid var(--grid);padding:6px 9px;text-align:left}
+  th{background:var(--surface2);font-weight:600}
+  td.n{font-family:var(--mono);text-align:right}
+  .pill{display:inline-block;padding:1px 7px;border-radius:99px;font-size:.72rem;font-weight:600;border:1px solid var(--grid);background:var(--surface2);color:var(--ink2)}
+  .ok{color:var(--ok);font-weight:600}
+  .bad{color:var(--bad);font-weight:600}
+  .say{border-left:3px solid var(--ok);padding-left:10px;margin:6px 0}
+  .dont{border-left:3px solid var(--bad);padding-left:10px;margin:6px 0;color:var(--ink2)}
+  .bar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:10px}
+  button{
+    font:inherit;font-size:.82rem;padding:5px 11px;border-radius:7px;
+    border:1px solid var(--grid);background:var(--surface2);color:var(--ink);cursor:pointer
+  }
+  button:hover{border-color:var(--accent)}
+  footer{color:var(--muted);font-size:.8rem;margin-top:36px;border-top:1px solid var(--grid);padding-top:12px}
+  @media print{
+    body{padding:0;font-size:11pt}
+    .bar,.tick{display:none}
+    ol.steps>li,.panel,pre{break-inside:avoid}
+    ol.steps>li.done{opacity:1}
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <h1>Faculty demo &mdash; run sheet</h1>
+  <p class="sub">Fraud campaign discovery from fragmented cross-institution evidence &middot; ~10 minutes &middot; campaigns <strong>211</strong>, <strong>241</strong>, <strong>219</strong></p>
+  <div class="bar">
+    <button onclick="document.documentElement.dataset.theme=(document.documentElement.dataset.theme==='dark'?'light':'dark')">Toggle theme</button>
+    <button onclick="document.querySelectorAll('.tick').forEach(t=>{t.checked=false;t.dispatchEvent(new Event('change'))})">Reset ticks</button>
+    <button onclick="window.print()">Print</button>
+  </div>
+</header>
+
+<h2>Start both servers</h2>
+
+<div class="panel warnbox">
+  <strong>First, kill any backend left running from an earlier session.</strong>
+  Artifacts are read <em>once at startup</em> and cached, and <code>--reload</code> restarts on code
+  changes only &mdash; never on data. A stale process serves whatever it loaded whenever it started.
+</div>
+
+<pre><span class="c"># 0. clear port 8000</span>
+netstat -ano | findstr ":8000"      <span class="c"># note the PID in the last column</span>
+taskkill /PID &lt;pid&gt; /F</pre>
+
+<pre><span class="c"># Terminal 1 — backend</span>
+cd "C:\Users\ASUS\Downloads\FRAUD CAMPAIGN DETECTION PROJECT\backend"
+python -m uvicorn app.main:app --reload --port 8000</pre>
+
+<pre><span class="c"># Terminal 2 — frontend</span>
+cd "C:\Users\ASUS\Downloads\FRAUD CAMPAIGN DETECTION PROJECT\frontend"
+npm run dev</pre>
+
+<p class="expect">
+  The frontend hard-defaults to <code>http://localhost:8000</code>, so the backend
+  <b>must</b> be on port 8000. No <code>.env</code> is needed. App opens at
+  <code>http://localhost:5173</code>.
+</p>
+
+<h2>Campaign quick reference <span class="pill">seed 0</span></h2>
+
+<table>
+  <thead>
+    <tr><th>ID</th><th>Type</th><th>Role in the story</th><th class="n">Txn</th><th class="n">Acc</th><th>Visibility 100 / 75 / 50 / 25</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>211</code></td><td>FAN-OUT <span class="pill">hub</span></td><td>Control: cannot be fragmented</td><td class="n">16</td><td class="n">17</td><td class="n">1.00 / 1.00 / 1.00 / 1.00</td></tr>
+    <tr><td><code>241</code></td><td>BIPARTITE</td><td>Structural blind spot + dose&ndash;response</td><td class="n">13</td><td class="n">26</td><td class="n">1.00 / 0.77 / 0.46 / 0.23</td></tr>
+    <tr><td><code>219</code></td><td>CYCLE</td><td>Time replay (clean on every flag)</td><td class="n">7</td><td class="n">7</td><td class="n">1.00 / 0.71 / 0.57 / 0.29</td></tr>
+  </tbody>
+</table>
+
+<p class="expect">All three are <b>test</b> split, <b>uncensored</b>, and <b>evaluable</b>.
+Campaign 219 was chosen over 192 because 192 has <code>shares_train_account = True</code>,
+which invites a leakage question mid-demo.</p>
+
+<h2>The checklist</h2>
+
+<ol class="steps">
+
+  <li><input type="checkbox" class="tick" aria-label="step done">
+    <div class="do"><span class="route">http://localhost:8000/api/health</span></div>
+    <p class="expect">Expect <b><code>core_artifacts_available: true</code></b> and
+    <b><code>nested_artifacts_dir: null</code></b>. Then open the app &mdash; top-right chip must read
+    <b>&ldquo;API ready&rdquo;</b> (green).</p>
+  </li>
+
+  <li><input type="checkbox" class="tick" aria-label="step done">
+    <div class="do"><span class="route">/dataset</span></div>
+    <p class="expect">Four cards: <b>5,078,345</b> transactions &middot; <b>30,470</b> banks &middot;
+    <b>370</b> campaigns &middot; <b>258</b> evaluable, with &ldquo;3,209 transactions&rdquo; and
+    &ldquo;152 can be fragmented&rdquo;. The transactions-per-day chart shows a dashed
+    <b>Cutoff</b> line with the tail after it <b>shaded</b>.</p>
+  </li>
+
+  <li><input type="checkbox" class="tick" aria-label="step done">
+    <div class="do"><span class="route">/campaigns</span> &mdash; filter, then clear</div>
+    <p class="expect"><b>25 rows</b> by default. Set <b>Pattern = BIPARTITE</b> and
+    <b>Split = Test</b>: removable chips appear and the live count drops. Clear both.
+    <span class="pill">rows open on click or Enter</span></p>
+  </li>
+
+  <li><input type="checkbox" class="tick" aria-label="step done">
+    <div class="do"><span class="route">/campaigns/211</span> &mdash; the hub control</div>
+    <p class="expect">A <b>clean star with the hub account dead centre</b>. Sidebar: Group
+    <b>Hub</b>. Now set <b>View = Target 25% visibility</b> &mdash; the badge must <b>stay
+    100% / bin 100%</b> and show the note &ldquo;never reassigned (hub-shaped or too
+    small)&rdquo;. <em>This is the control-group proof: one bank always sees everything.</em></p>
+  </li>
+
+  <li><input type="checkbox" class="tick" aria-label="step done">
+    <div class="do"><span class="route">/campaigns/241</span> &mdash; the structural blind spot</div>
+    <p class="expect">Renders as <b>13 separate sender&rarr;receiver pairs</b>, nothing joined to
+    anything else. Sidebar: Evaluated <b>Yes</b>, Finished before cutoff <b>Yes</b>.
+    <em>Say: the matching rule needs 3 connected accounts; this campaign never connects
+    more than 2, so the oracle misses it at both lookbacks &mdash; which is why
+    <code>oracle_reachable</code> exists.</em></p>
+  </li>
+
+  <li><input type="checkbox" class="tick" aria-label="step done">
+    <div class="do">Still on <span class="route">/campaigns/241</span> &mdash; step the View control</div>
+    <p class="expect">Target 100 &rarr; 75 &rarr; 50 &rarr; 25 gives badges
+    <b>100% (bin 100%)</b> &rarr; <b>77% (bin 75%)</b> &rarr; <b>46% (bin 50%)</b> &rarr;
+    <b>23% (bin Low)</b>. <em>The whole dose&ndash;response in one control.</em></p>
+  </li>
+
+  <li><input type="checkbox" class="tick" aria-label="step done">
+    <div class="do">Still on <span class="route">/campaigns/241</span> &mdash; bank&rsquo;s-eye view</div>
+    <p class="expect">Click bank tab <b>I0</b>, then one or two others. The header reads
+    <b>&ldquo;This bank sees N of 13 transactions&rdquo;</b> and everything that bank cannot see
+    <b>fades out</b>. At target 25% the best bank sees <b>3 of 13</b>.</p>
+  </li>
+
+  <li><input type="checkbox" class="tick" aria-label="step done">
+    <div class="do"><span class="route">/campaigns/219</span> &mdash; time replay</div>
+    <p class="expect">Press <b>Play</b>: transactions appear one at a time, the counter runs
+    <b>&ldquo;Showing k of 7&rdquo;</b>, and it stops at the end. Press <b>Show all</b>.
+    Drag a node, then press <b>Reset view</b>. The deadline and cutoff marks sit on the
+    time strip below.</p>
+  </li>
+
+  <li><input type="checkbox" class="tick" aria-label="step done">
+    <div class="do"><span class="route">/visibility</span> &mdash; the toy, then the real data</div>
+    <p class="expect">Drag or click accounts between Bank I0 / I1 / I2 and watch the
+    percentage recompute live. Then the real figures below:
+    <b>152</b> fragmented &middot; <b>219</b> landed in bin 100 &middot;
+    <b>2</b> unfragmentable. <em>This is the only number on the whole site the frontend
+    computes itself &mdash; and only for the scenario you just invented.</em></p>
+  </li>
+
+  <li><input type="checkbox" class="tick" aria-label="step done">
+    <div class="do"><span class="route">/results</span>, then <span class="route">/methodology</span>, then the theme toggle</div>
+    <p class="expect">Results: <b>&ldquo;Experiment results are not available yet&rdquo;</b>, the four
+    conditions legend, five outlined figures, and <b>no numbers at all</b>.
+    Methodology: <b>10</b> definition cards, each with its reason and values.
+    Finally toggle <b>light/dark</b> (top right) while on campaign 241 and confirm the
+    graph stays legible.</p>
+  </li>
+
+</ol>
+
+<h2>Say this, not that</h2>
+
+<div class="panel badbox">
+  <p style="margin:0 0 8px"><strong>Do not claim a CYCLE &ldquo;looks like a ring&rdquo;.</strong>
+  The <code>circle</code> layout orders nodes alphabetically by account id, not by cycle
+  traversal, so most edges cut across the middle as chords rather than following the rim
+  (campaign 219: only <b>5 of 7</b> edges join circle-neighbours).</p>
+  <p class="say" style="margin:0 0 6px"><strong>Say:</strong> &ldquo;The layout is deterministic, so
+  the same campaign draws identically every time &mdash; which is what we need for figures in
+  the paper. The hub shapes in particular are unmistakable.&rdquo;</p>
+  <p class="dont" style="margin:0"><strong>Don&rsquo;t say:</strong> &ldquo;You can see at a glance
+  that this is a ring.&rdquo;</p>
+</div>
+
+<p class="expect">Lead the topology story with <b>211</b> (a genuinely perfect star) and
+<b>241</b> (13 visibly isolated pairs). Both carry the point without needing the ring.</p>
+
+<h2>If something goes wrong</h2>
+
+<table>
+  <thead><tr><th>Symptom</th><th>Cause and what to do</th></tr></thead>
+  <tbody>
+    <tr><td>Chip reads <b>&ldquo;API unreachable&rdquo;</b>; pages say &ldquo;Could not reach the API&rdquo;</td>
+        <td>Backend is down or not on port 8000. Restart Terminal 1. Pages recover on their own &mdash; no reload needed.</td></tr>
+    <tr><td><code>/api/health</code> says artifacts are <b>missing</b></td>
+        <td>Read its <code>hint</code> field: it detects artifacts extracted one folder too deep. Fix the folder, then <b>restart the server</b> &mdash; artifacts are cached at startup.</td></tr>
+    <tr><td>A campaign page shows <b>&ldquo;Could not load this view&rdquo;</b></td>
+        <td>That id does not exist (valid ids are <b>0&ndash;369</b>). Expected behaviour, not a crash.</td></tr>
+    <tr><td>The main panel is <b>blank</b> with the sidebar still showing</td>
+        <td>A non-numeric id was typed in the URL, e.g. <code>/campaigns/abc</code>. Navigate to a real campaign. <span class="pill">known, cosmetic</span></td></tr>
+    <tr><td>Results page says &ldquo;Could not check for results&rdquo;</td>
+        <td>Backend unreachable. It is deliberately <em>not</em> claiming results are missing &mdash; only that it cannot tell.</td></tr>
+  </tbody>
+</table>
+
+<footer>
+  Verified 2026-11-14 against the real artifacts (370 campaigns, 258 eval_ok, 5 visibility
+  seeds, all digests matching). Every page rendered in Chrome with no exceptions; heaviest
+  campaign reached first render in 198&nbsp;ms. Expected values above come from
+  <code>backend/artifacts/</code> and <code>docs/reference/oracle_diagnose.csv</code>, not from this page.
+</footer>
+
+</div>
+<script>
+  // Tick state survives a reload, so a dry run and the real run stay separate only if you reset.
+  (function(){
+    var K='demo-checklist-ticks';
+    var ticks=[].slice.call(document.querySelectorAll('.tick'));
+    var saved={};
+    try{ saved=JSON.parse(localStorage.getItem(K)||'{}'); }catch(e){ saved={}; }
+    ticks.forEach(function(t,i){
+      t.checked=!!saved[i];
+      t.closest('li').classList.toggle('done',t.checked);
+      t.addEventListener('change',function(){
+        t.closest('li').classList.toggle('done',t.checked);
+        var out={};
+        ticks.forEach(function(x,j){ out[j]=x.checked; });
+        try{ localStorage.setItem(K,JSON.stringify(out)); }catch(e){ /* private window */ }
+      });
+    });
+  })();
+</script>
+</body>
+</html>

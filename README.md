@@ -1919,6 +1919,10 @@ project-root/
   .gitignore                       data/, artifacts/ contents, node_modules, .venv, __pycache__, .env
   docs/
     PROJECT_OVERVIEW.md           readable summary of the whole project + improvement roadmap
+    demo_checklist.html           standalone run sheet for a live demo: startup commands,
+                                    a 10-step browser checklist with the expected value at
+                                    each step, and the campaigns to show. No dependencies,
+                                    no network, opens from the filesystem
     reference/
       01_data_verification.ipynb   read-only: verified Kaggle exploration behind every definition above
       verify_report.md             stage 3.0 Kaggle run: all 24 regression numbers
@@ -2692,6 +2696,17 @@ In practice the layout is chosen per `base_type`: `circle` for CYCLE,
 `concentric` for the hub shapes (which puts the hub account in the middle by
 degree), and `breadthfirst` for chains, bipartite and random patterns.
 
+> **Half of that motivation is not delivered, measured 2026-11-14.** The
+> FAN-OUT claim holds: `concentric` puts the hub account in the centre and the
+> campaign reads as an unmistakable star. **The CYCLE claim does not.**
+> `circle` places nodes in collection order, which here is
+> `[...accounts].sort()` — alphabetical by account id, not cycle traversal —
+> so consecutive accounts in the cycle land on opposite sides of the circle and
+> most edges cross the interior as chords instead of following the rim. The
+> determinism claim is unaffected, and nothing is broken; the graph is simply
+> not self-describing for this one topology. See
+> §[Known limitations](#known-limitations-and-open-questions) for the counts.
+
 ### Pages
 
 | Page | Route | What it shows | Status |
@@ -3087,15 +3102,41 @@ campaign_id)`:
 - Frontend: `npm run test` from `frontend/` → 48 passed, 0 failed.
   `npm run build` (tsc + bundle) and `npm run lint` both clean.
 
-**Not verified:** the pages have not been opened in a real browser from this
-environment — there is no browser tooling available here. Rendering is
-covered by the jsdom render tests above, every endpoint the pages depend on
-was confirmed to answer correctly over HTTP (including the results 404 that
-drives the empty state), and both servers were confirmed to talk to each
-other including the CORS header. But visual layout, chart appearance, dark
-mode, and in particular the **Cytoscape graph** (which the tests stub,
-because jsdom has no canvas) have not been seen running. The campaign graph
-is the one piece that most warrants a look in a browser before the demo.
+**Browser verification (2026-11-14).** The pages have now been opened in a
+real browser — headless Chrome driven over the DevTools protocol, which needs
+no new dependency — and the **Cytoscape graph has been seen rendering**. What
+was checked, and what it found:
+
+- All six pages render with **no exceptions and no failed requests**. First
+  render: Campaign Explorer with no filters **153 ms**, the heaviest campaign
+  (239 — 45 accounts, 30 transactions) **198 ms**, Visibility Lab **272 ms**.
+- The graph was rendered for eight hand-picked cases: a cycle, a fan-out, the
+  largest campaign, the smallest (1 transaction, 2 accounts), a post-cutoff
+  campaign whose `split` is `null`, and campaigns carrying a **self-transfer**
+  (`src == dst`) and a **duplicate account pair**. All drew correctly;
+  self-loops render as loop arcs and reciprocal edges separate under
+  `curve-style: bezier`.
+- Separately, **all 370 campaigns** were built headlessly through the same
+  element construction and per-`base_type` layout the component uses: no
+  throw, no non-finite position, no overlapping nodes, correct node and edge
+  counts, mean layout 1.16 ms and worst 18.6 ms. The three layouts are
+  discrete and synchronous with `animate: false`, so there is no force
+  simulation that could fail to settle.
+- Error and empty states were exercised against a live backend: a 404 campaign
+  gives a clean alert in ~1.1 s, a **fully unreachable backend** puts "Could
+  not reach the API at http://localhost:8000" on every page within ~150 ms with
+  the status chip reading "API unreachable", the results 404 gives the empty
+  state, and a slow API shows "Loading campaign...".
+- **Two defects found**, both recorded under
+  §[Known limitations](#known-limitations-and-open-questions): a CYCLE does not
+  read as a ring, and a non-numeric id in the URL (`/campaigns/abc`) leaves the
+  main panel empty with no message, because `Number('abc')` is `NaN`, the query
+  is disabled, and `CampaignDetailPage` returns `null`.
+
+Still not verified: human visual judgement on a real display (projector colour,
+and edge contrast in light mode), and any browser other than Chrome. The jsdom
+tests continue to stub the graph because jsdom has no canvas, so this evidence
+is recorded here rather than in the suite.
 
 ## Known limitations and open questions
 
@@ -3173,9 +3214,27 @@ is the one piece that most warrants a look in a browser before the demo.
   be read as "investigate", not automatically "the search broke". The
   `unfragmentable` count and the achieved-visibility values are the
   environment-independent things to compare.
-- The frontend has not been visually inspected in a browser from the
-  development environment used so far (no browser tooling available); the
-  Cytoscape campaign graph in particular is covered only by stubbed tests.
+- **A CYCLE does not read as a ring, so the topology rationale for Cytoscape
+  is only half met.** Measured 2026-11-14 on the real artifacts: `circle`
+  layout orders nodes by collection order — `[...accounts].sort()`, i.e.
+  alphabetical by account id — rather than by cycle traversal, so most of a
+  cycle's edges cut across the interior as chords. Counting edges that join
+  two *circle-adjacent* nodes: **campaign 192 5 of 8, campaign 219 5 of 7,
+  campaign 181 4 of 10, campaign 37 3 of 7, campaign 62 2 of 6** (steps apart
+  per edge for 192: `[1,1,1,1,1,3,3,3]`). The **FAN-OUT star claim holds** —
+  `concentric` centres the hub account and the shape is unmistakable — and so
+  does the determinism claim, since the same campaign still draws identically
+  every time. Fixing it means ordering a cycle's nodes by traversal before
+  handing them to `circle`; until then, a demo should not claim the ring is
+  visible. Recorded rather than fixed, by decision of 2026-11-14.
+- The frontend **has** now been inspected in a real browser (headless Chrome
+  over CDP, 2026-11-14): all six pages and eight hand-picked campaign graphs
+  render with no exceptions, no failed requests and no layout collapse, and
+  all 370 campaigns build finite, non-overlapping Cytoscape layouts headlessly.
+  What remains unverified is **human visual judgement** on a real display —
+  colour rendition on a projector, and the low-contrast edge styling in light
+  mode — plus every browser other than Chrome. The jsdom tests still stub the
+  graph, so the browser evidence lives in this README, not in the suite.
 - `backend/artifacts/` is empty on a fresh clone. Both the API and the
   frontend handle that deliberately (503 with the command to run, and an
   honest empty state), but the app shows nothing real until the pipeline has
@@ -3210,6 +3269,47 @@ Tagged points in the repository, newest first. Check one out with
 | `v0.1-data-pipeline` | 2026-10-08 | Phase 2 complete, plus the stage 3.0 Kaggle runner. The research pipeline (campaign ground truth, splits, topology groups, institutions, visibility), the artifact export, the read-only FastAPI server, and the full React frontend — 69 backend tests and 48 frontend tests passing. **No models and no experiment results**: the four conditions are defined and the result schema is fixed, but nothing has been trained or run, and the full-data regression numbers are still unverified (that is what stage 3.0's Kaggle run is for). |
 
 ## Changelog
+
+- **2026-11-14 (demo readiness)** — **the frontend was audited in a real
+  browser for the first time; the campaign graph works, and the "a CYCLE reads
+  as a ring" claim does not.**
+
+  *The audit.* Artifacts re-verified against the reference digests (370
+  campaigns, 258 eval_ok, 152 reassignable, 3,209 campaign transactions, five
+  seeds × 14,384 rows, **all five SHA-256 digests byte-identical** to
+  §[Verified numbers](#verified-numbers), nothing nested). Every `/api`
+  endpoint exercised over HTTP across 45 calls: no unexpected status, every
+  non-200 an expected 404 or 422, and the slowest response **50 ms**. Every
+  TypeScript response type in `src/api/types.ts` diffed field-by-field against
+  the **live** responses rather than the schema — 17 interfaces, no drift.
+  `npm run build`, `tsc -b`, `oxlint` and the 48 frontend tests are all clean
+  (and oxlint was confirmed able to fail, by injecting a constant condition).
+
+  *The browser.* Headless Chrome over the DevTools protocol — no new
+  dependency — rendered all six pages and eight hand-picked campaign graphs
+  with **no exceptions**, and all 370 campaigns were built headlessly through
+  the component's own element construction and layout choice without a single
+  throw, non-finite position or collapsed layout. Self-transfers (11 rows in
+  11 campaigns, all GATHER-SCATTER) draw as loop arcs; the 68 campaigns with
+  reciprocal pairs separate under `curve-style: bezier`; the heaviest campaign
+  reaches first render in 198 ms. Error states were exercised too: a dead
+  backend puts an honest message on every page in ~150 ms. Details in
+  §[Testing](#testing).
+
+  *What it found.* **A CYCLE does not read as a ring** — `circle` layout orders
+  nodes alphabetically by account id rather than by cycle traversal, so most
+  edges cross the interior as chords (campaign 192 joins 5 of 8 circle-adjacent
+  pairs, 219 5 of 7, 181 4 of 10, 37 3 of 7, 62 2 of 6). The **FAN-OUT star
+  claim holds** and so does determinism. **Decided 2026-11-14: recorded, not
+  fixed** — this is a presentation flaw, not a correctness one, and it is
+  handled by not claiming the ring. Also found: `/campaigns/<non-numeric>`
+  leaves the main panel empty with no message. Both are in
+  §[Known limitations](#known-limitations-and-open-questions); the remaining
+  findings were cosmetic and are deferred.
+
+  *Added:* `docs/demo_checklist.html` — a standalone, dependency-free run sheet
+  with the startup commands, the campaigns to show (211, 241, 219) and the
+  expected value at every step. **No code changed.**
 
 - **2026-11-13 (3.4.4 plan revised)** — **the stage 3.3 boosters are gone,
   so the full run needs three sessions and session B retrains them.**
