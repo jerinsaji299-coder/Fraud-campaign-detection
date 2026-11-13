@@ -41,8 +41,12 @@ git clone https://github.com/jerinsaji299-coder/Fraud-campaign-detection.git
     - [3.4.1 design proposal](#341-design-proposal--proposed-awaiting-approval)
     - [Comparing two configurations: the paired method](#comparing-two-configurations-the-paired-method)
     - [Recall against the ceiling](#recall-against-the-ceiling)
-19. [Version history](#version-history)
-20. [Changelog](#changelog)
+19. [Phase 4 definitions](#phase-4-definitions-the-federated-conditions)
+    - [Frozen scope](#phase-4-frozen-scope)
+    - [The four conditions](#the-four-conditions)
+    - [Stage 4.0: institution-split data](#stage-40-institution-split-data--done)
+20. [Version history](#version-history)
+21. [Changelog](#changelog)
 
 ## Research question, hypothesis, and contribution
 
@@ -77,14 +81,22 @@ bank).
 
 ## Project status
 
-**Current stage:** Phase 3, stage **3.4** — the centralized GNN, in
-sub-stages. 3.4.0 to 3.4.3 are done: the environment measured, full-batch
+**Current stage:** **Phase 4**, stage **4.0 done** — the institution-split
+data layer is built and tested, and the per-institution training loads are
+measured on the 1% sample. **Next step: approve or amend the stage 4.1
+design proposal**, which has to define what "FedAvg" and "embedding
+exchange" mean for a tree model; nothing federated is implemented until
+that is settled. See §[Phase 4 definitions](#phase-4-definitions-the-federated-conditions).
+
+Phase 3 runs **in parallel and is not blocked by Phase 4**: stage 3.4.4, the
+full GNN run, is still planned and awaiting approval, and its outcome does
+not change Phase 4, which uses XGBoost only (see the Decision log,
+2026-11-14). 3.4.0 to 3.4.3 are done: the environment measured, full-batch
 training decided on the probe, the design approved with four additions, the
 model implemented and tested, and the one-seed quick check run on the full
-data. 3.4.4, the full run, is planned and awaiting approval. Stages 3.0-3.3
-are complete, including the evaluation module and the oracle ceiling
-validated on the full data.
-**Next step:** approve or amend the
+data. Stages 3.0-3.3 are complete, including the evaluation module and the
+oracle ceiling validated on the full data.
+**Phase 3's next step:** approve or amend the
 §[3.4.4 full-run plan](#344-the-full-run-plan--proposed-awaiting-approval) —
 two GPU sessions, one per lookback, then one CPU session that evaluates all
 20 GNN models, regenerates the XGBoost per-campaign records and runs the
@@ -140,11 +152,24 @@ no visibility reassignment is used in this phase.
 | 3.4 | GNN centralized (GINEConv edge classification) | **in progress**, in sub-stages. 3.4.0-3.4.3 **done**: the environment measured (2 x T4, 33.7 GB RAM, all PyG extensions), full-batch training decided on the probe, the design approved with four additions, the model implemented with 25 tests, and the quick check run (L = 24, seed 0: test recall 0.661 at 33.3 FA/day against XGBoost's 0.661 at 3.4 - **provisional, one seed, and the GNN is behind at a comparable alert volume**). 3.4.4, the full run, is planned and awaiting approval; 3.4.5, the gate report, has its machinery built and its inputs not yet generated |
 | 3.5 | Gate report + results files + frontend Results page wired to real baseline results | not started |
 
+**Phase 4 — federated conditions (in progress)**
+
+Scope deliberately cut to fit a two-week finish: **XGBoost only, the full
+feature set only, three seeds, one lookback**. See
+§[Phase 4 frozen scope](#phase-4-frozen-scope).
+
+| Stage | Description | Status |
+|---|---|---|
+| 4.0 | Institution-split data: per-institution views of every window, and the account features each institution can compute from its own view alone | **done** — `federation/views.py`, 31 tests, per-institution training loads measured on the sample, visibility cross-check exact on all 370 campaigns |
+| 4.1 | Design proposal: what "FedAvg" and "embedding exchange" mean for a tree model, tau per condition, per-institution class weights, the starved-institution rule, seeds, runtime | **not started** — the next step, and no code until it is approved |
+| 4.2 | Implementation and tests, reusing the Phase 3 evaluation code unchanged | not started |
+| 4.3 | The gate: centralized vs `fedavg_exchange` at the 100 bin, full data. A failed gate stops the sweep | not started |
+| 4.4 | Kaggle runner subcommands, resumable per (condition, bin, seed) | not started |
+
 **Later phases (not started)**
 
 | Phase | Description |
 |---|---|
-| 4 | Federated conditions: FedAvg-only, FedAvg + boundary embedding exchange |
 | 5 | Core experiment: all four conditions across visibility bins and seeds |
 | 6 | Extensions: imperfect alignment, adversarial fragmentation, DP noise |
 | 7 | Analysis and paper |
@@ -1788,10 +1813,165 @@ if any non-training window is passed in. Arithmetic is float64; matrices are
 stored float32, which matters because a busy 24h window holds ~1M
 transactions.
 
+## Phase 4 definitions (the federated conditions)
+
+Additive to the frozen Phase 2 and Phase 3 definitions; nothing in either
+changed. Phase 4 answers the research question itself: **how does the benefit
+of collaboration change as each bank's visibility of a campaign shrinks, and
+does that depend on topology?**
+
+### Phase 4 frozen scope
+
+Cut deliberately to fit a two-week finish, and **frozen on 2026-11-14**. Each
+cut is a stated limitation, not an oversight:
+
+| | Phase 4 uses | Not used, and why |
+|---|---|---|
+| **Model** | **XGBoost only** | No GNN in any federated condition. On the full data at L = 24, seed 0, the GNN matched XGBoost's test recall (0.661) while raising **33.3 false alarms a day against 3.4** — ten times the alert volume for the same recall, and at a matched ~4 alarms a day it reached 0.231 validation recall against XGBoost's 0.423. The federated comparison therefore uses the baseline model; the GNN stays as the Phase 3 **centralized** comparison only |
+| **Variant** | **the full feature set only** | No `no_format` arm in federated conditions. The payment-format ablation stands as a **centralized** result (format buys coverage, not earliness); re-running it four times over would double the matrix for a question already answered |
+| **Seeds** | **0, 1, 2** | Not 0-4. Three seeds give **wider confidence intervals** than Phase 3's five, and that is recorded as a limitation rather than hidden |
+| **Lookback** | **one, L = 48** | Chosen by the frozen Phase 3 protocol, which selects on **validation**: recall 0.531 at L = 48 against 0.385 at L = 24. Carrying both lookbacks would double a matrix that is already 4 conditions × 4 bins × 3 seeds. **Stated honestly:** that validation margin shrank to ~1.4 of 56 campaigns on test and cost 3× the false alarms, so L = 48 is the protocol's answer rather than a comfortable one |
+| **Institutions** | **K = 8, unchanged** | Reducing K would raise the structural visibility floor from ~`2/8` to ~`2/4` — about 25% to 50% — and flatten the very dose-response the experiment measures |
+
+Everything else is frozen exactly as Phase 2 and Phase 3 left it: campaign
+definition, splits, detection horizons, windows, features, cluster
+extraction, the matching rule, the model tau grid, alert budgets, the four
+test subsets, paired-comparison rules 1-3, and equal tuning effort.
+
+### The four conditions
+
+| | Condition | Training | At detection time | What its difference measures |
+|---|---|---|---|---|
+| 1 | `isolated` | each institution on its own visible transactions only | each institution scores only its **own** visible edges; a cluster can only form inside one institution's view | the baseline every advantage is measured against |
+| 2 | `fedavg` | institutions train locally, model state combined each round | each institution still scores only its **own** visible edges | the **knowledge** advantage: `fedavg − isolated` |
+| 3 | `fedavg_exchange` | as `fedavg` | plus boundary-account information shared at detection time, so a cluster can **span** institutions | the **evidence** advantage: `exchange − fedavg` |
+| 4 | `centralized` | the existing Phase 3 model, full visibility | scores everything | the upper bound |
+
+XGBoost is not a neural network, so conditions 2 and 3 need concrete
+definitions for a tree model — "averaging the weights" of a forest is not a
+meaningful operation. **Stage 4.1 proposes both and stops for approval.**
+Whatever is approved, the **same** extraction, matching and evaluation code
+runs for all four conditions, so a difference between them can only come
+from the scores.
+
+### Stage 4.0: institution-split data — done
+
+The substrate every condition stands on. Given a `(seed, target)` assignment
+from Phase 2, `federation/views.py` produces each institution's **view**: the
+transactions it can see, and the account features it can compute from that
+view alone.
+
+**One definition of "sees", implemented once.** An institution sees a
+transaction if the sender's **or** the receiver's account belongs to it —
+the frozen Phase 2 rule, in `views.visible_mask`, and nothing else in Phase 4
+decides visibility. A test requires it to agree row for row with Phase 2's
+own `visibility.visible_transactions`, so Phase 4 cannot drift into a second
+notion of visibility.
+
+**A view is a `Window`, so no feature code is duplicated.**
+`institution_view` returns the same `windows.Window` type the central
+pipeline uses, which means `features.build_window_features(view, spec)`
+works on it **unchanged** and computes that institution's node features from
+its own view alone. There is no second featuriser to keep honest, and the
+Phase 3 leakage properties carry over untouched. A view is a *row subset*:
+which institution produced it is never written into the data, so a model
+trained on a view cannot learn "I am institution 3".
+
+**Both endpoints see a cross-institution transaction**, which is why the
+achievable visibility floor is ~`2/K` and not `1/K`. A transaction is
+therefore seen by exactly **two** institutions when its endpoints sit in
+different ones and exactly **one** when they do not — pinned as a test, and
+the reason the per-institution row counts below sum to ~188% of the central
+count rather than 100%.
+
+**The three properties the stage is defined by**, each checked over the whole
+fixture rather than a hand-picked row, and each **proven able to fail** by
+mutating the real source and watching the suite break:
+
+| Property | Mutation injected | Result |
+|---|---|---|
+| A view holds exactly the rows that institution is an endpoint of | `visible_mask` reduced to sender-only | **4 tests fail** |
+| The union of all views covers every transaction | `all_views` loops `range(k - 1)` | **2 tests fail** |
+| A campaign's visibility computed from the views equals the recorded achieved visibility | `max` over institutions replaced by `mean` | **13 tests fail** |
+
+The third is a genuine cross-check rather than a restatement: the pipeline
+computes achieved visibility from each campaign's **pattern edge list**,
+while the test counts rows of the **tagged transaction table** that land in
+each institution's view. Two independent paths to the same number, required
+to agree to within floating point for every campaign at every
+`(seed, target)`. Measured: **0 mismatches across all 370 campaigns in all
+26 runs** (3 seeds × 4 targets × 2 lookbacks, plus the natural split).
+
+#### What each institution has to train on
+
+**Measured on the real 1% sample, 2026-11-14 — a development check, not a
+result.** The sample keeps every campaign transaction and thins the
+background (and with it the unassigned laundering) to 1%, so its positive
+rate is **3.55%** against the full data's **0.102%**. Absolute row counts and
+class weights therefore do **not** transfer; the *relative* distribution
+across institutions does, because it is a property of the assignment rather
+than of the background density.
+
+Pooled over the 9 rule-3 training windows at L = 48, per institution:
+
+| Target | Rows per institution | Positives per institution (min / median / max) | Spread | Class weight | Starved institutions |
+|---|---|---|---:|---|---:|
+| natural (no reassignment) | 19,984-21,397 | 603 / — / 1,048 | 1.74× | 19-32 | 0 |
+| 1.00 | 19,763-21,424 | **274** / 536 / 857 | **3.13×** | 24-71 | 0 |
+| 0.75 | 20,041-21,514 | 538 / 761 / 1,095 | 2.04× | 18-37 | 0 |
+| 0.50 | 20,119-21,533 | 589 / 793 / 1,039 | 1.76× | 19-33 | 0 |
+| 0.25 | 20,120-21,494 | 599 / 762 / 959 | 1.60× | 20-33 | 0 |
+
+**No institution is starved of positives at any target, on the sample.** The
+thinnest cell is institution 2 at seed 1, target 1.0: **274 positives in
+19,803 rows**. Every institution has at least one positive in every training
+window, at every target and seed.
+
+**The finding worth carrying into 4.1: target 1.0 is the *most* imbalanced
+condition, not the easiest.** The positive spread across institutions is
+**3.1× at target 1.0 against 1.6× at target 0.25**, and each institution's
+share of the central positives falls to 0.082-0.256 from 0.179-0.287. The
+mechanism follows from the frozen definition: at target 1.0 all of a
+campaign's accounts are sent to **one** randomly chosen institution, so its
+laundering edges become intra-institution and are seen by that institution
+alone; at low targets the campaign is deliberately scattered, its edges
+cross institutions, and **more** institutions see each positive. So the
+isolated condition's weakest institution is weakest at the **100 bin** — the
+end of the sweep where collaboration is supposed to matter least. 4.1 has to
+say what the isolated condition does about that, and the effect is a
+candidate explanation for any flattening at the top of the dose-response
+curve.
+
+**Full-data figures are not yet measured.** Scaling the sample's positives by
+~1.6× (it retains all 3,209 campaign transactions but ~1% of the 1,968
+unassigned laundering rows) and its rows by ~97× puts each institution's
+pooled L = 48 training matrix at roughly 2M rows with several hundred to a
+couple of thousand positives, i.e. a class weight in the same 495-3,461 band
+stage 3.3 measured per window. That is an **extrapolation**; the real numbers
+land with the first Kaggle run in stage 4.4.
+
+Reproduce with:
+
+```
+cd backend
+python scripts/run_institution_split.py --config configs/local.yaml
+```
+
+It writes `artifacts/federation_dev/institution_split.csv` and
+`institution_split_checks.csv` (gitignored, development only) and takes about
+two minutes on the sample.
+
 ## Decision log
 
 | Date | Decision | Reason | Evidence |
 |---|---|---|---|
+| 2026-11-14 | **Phase 4 uses XGBoost only. No GNN in any federated condition**; the GNN remains the Phase 3 centralized comparison | On the full data at L = 24, seed 0, the GNN matched XGBoost's test recall (**0.661**, 0.804 of the ceiling) while raising **33.3 false alarms a day against 3.4** — ten times the alert volume for the same recall — and at a matched ~4 alarms a day reached **0.231** validation recall against XGBoost's **0.423**. Equal recall at ten times the alert load is worse, not equal, so the federated comparison is built on the baseline model. This also keeps Phase 4 inside a two-week finish: four conditions × four bins × three seeds is already 48 cells, and a GNN arm would need a GPU session per cell | user decision, 2026-11-14; §[3.4.3 quick check](#343-quick-check--done-provisional-one-seed) |
+| 2026-11-14 | **Phase 4 runs the full feature set only** — no `no_format` arm | The payment-format ablation is settled as a **centralized** result: format buys coverage, not earliness, with the direct paired earliness CI including zero in all ten test cells. Re-running it across four federated conditions would double the matrix for a question already answered. The limitation this leaves is explicit: Phase 4's absolute numbers inherit whatever the format shortcut contributes, so they are read as *differences between conditions*, which the shortcut affects equally | user decision, 2026-11-14 |
+| 2026-11-14 | **Phase 4 uses seeds 0, 1, 2 — three, not five** | Timeline. Recorded as a limitation: three seeds give wider confidence intervals than Phase 3's five, and any Phase 4 difference smaller than the seed spread is reported as undemonstrated rather than claimed | user decision, 2026-11-14 |
+| 2026-11-14 | **Phase 4 uses one lookback, L = 48**, chosen by the frozen Phase 3 protocol on validation (recall 0.531 against 0.385) | Carrying both lookbacks would double a 48-cell matrix. The protocol selects on validation and that is what was followed, but the margin is thin and is stated as such: it shrank to ~1.4 of 56 campaigns on test and cost ~3× the false alarms. Using the protocol's answer rather than re-litigating it keeps the selection rule consistent with Phase 3 | user decision, 2026-11-14; §[stage 3.3 results](#stage-33-results-full-data-five-seeds--complete) |
+| 2026-11-14 | **K = 8 institutions is unchanged in Phase 4** | Every transaction is visible to both endpoint banks' institutions, so the structural visibility floor is ~`2/K`. Halving K to 4 would raise that floor from ~25% to ~50% and flatten the dose-response curve the experiment exists to measure | user decision, 2026-11-14 |
+| 2026-11-14 | **Stage 4.0: an institution's view is a `windows.Window`, and the Phase 3 featuriser is reused on it unchanged** rather than given a federated variant | A second featuriser would be a second place for the leakage properties to be wrong, and the whole point of the comparison is that conditions differ only in what each party can see. Returning the same `Window` type means `features.build_window_features` computes an institution's node features from its own view by exactly the code that computes them centrally, and a view stays a pure row subset, so no institution identity can reach the model inputs | implementation, stage 4.0; `tests/test_federation_views.py` |
+| 2026-11-14 | **Stage 4.0 reporting threshold: an institution with fewer than 10 positive rows in its pooled training matrix is reported as "starved"** (`federation.MIN_POSITIVES_TO_TRAIN`) | Not a frozen research definition — a reporting threshold, so that an institution that cannot learn the positive class at all is a finding before a training session discovers it. What the `isolated` condition should *do* about a starved institution is a 4.1 decision, deliberately not pre-empted here. On the 1% sample no institution is starved at any target; the thinnest cell has 274 positives | implementation, stage 4.0 |
 | 2026-10-05 | Exclude data on/after Sept 11 (`CUTOFF`) from model input | Only 1,108 rows remain after the cutoff and 59.1% are laundering (vs. ~0.1% overall) — a model could learn "late = laundering" instead of real signal | notebook cell `280d9179` |
 | 2026-10-05 | Test split moved from Sept 8–10 to Sept 6–7 | With the old split, 74 of 76 eval_ok test campaigns were truncated by the cutoff before completing | notebook cells `280d9179`, `6b9b3892` |
 | 2026-10-05 | Size filter: `eval_ok` requires `n_txn >= 3` and `n_accounts >= 3` | About a quarter of campaigns have only 1–2 transactions, where lead time is not a meaningful concept | notebook cell `280d9179` |
@@ -1975,7 +2155,11 @@ project-root/
         __init__.py               the Phase 3 baselines
         xgb_baseline.py           stage 3.3: the non-graph control (no tau, no campaign knowledge)
         gnn.py                    stage 3.4: GINEConv edge classification, full-batch, resumable
-      federation/README.md        placeholder — Phase 4+ (not this session)
+      federation/
+        __init__.py               Phase 4: the public federation API
+        views.py                  stage 4.0: per-institution views of every window,
+                                    boundary accounts, and the per-institution
+                                    training-load report
       evaluation/
         __init__.py               the public evaluation API
         clusters.py               extraction, the matching rule, outcome classification
@@ -2003,6 +2187,8 @@ project-root/
       make_demo_data.py           seeded SYNTHETIC dev dataset (not the research sample)
       run_sanity_scorers.py       runs the oracle and random scorers through the real evaluation code
       run_xgb_baseline.py         stage 3.3 locally on the 1% sample: train, tau, evaluate, paired
+      run_institution_split.py    stage 4.0: per-institution training rows and positives at
+                                    every (seed, target), + the visibility cross-check
       run_pipeline.py             runs the pipeline end to end; prints every Verified-numbers value; --export writes artifacts
       kaggle/
         run_on_kaggle.md          the exact notebook cells for running this repo on Kaggle
@@ -2031,6 +2217,9 @@ project-root/
       test_paired_comparison.py   the paired lead-time method, incl. the misleading-medians case
       test_xgb_baseline.py        the baseline: rule 3, score alignment, identity, save/load
       test_gnn.py                 the GNN: causality, identity, log1p, the loss, resumability
+      test_federation_views.py    stage 4.0: a view is exactly what an institution sees,
+                                    the views cover everything, and they reproduce the
+                                    recorded achieved visibility
       test_features.py            feature shapes + the leakage properties (future, labels, identity)
       test_fulldata.py            @pytest.mark.fulldata, one test per regression number; skip if no data
     data/                         gitignored: raw/, sample/, processed/
@@ -2147,6 +2336,19 @@ project-root/
   `artifacts/baseline_dev/`. Development only — the sample's background is
   thinned to 1%, so precision and false alarms per day do not transfer. A
   couple of minutes end to end.
+- **Report the Phase 4 institution split (stage 4.0):**
+  ```
+  cd backend
+  python scripts/run_institution_split.py --config configs/local.yaml
+  ```
+  For every `(seed, target)` it builds each institution's view of the rule-3
+  training windows and reports its pooled rows, positives, positive rate and
+  class weight, flagging any institution with fewer than 10 positives; it
+  also cross-checks every campaign's visibility recomputed from the views
+  against the pipeline's own figure and reports the mismatch count, which
+  must be 0. `--lookbacks`, `--seeds` and `--targets` narrow the run. Writes
+  `artifacts/federation_dev/` (gitignored, development only). About two
+  minutes on the sample.
 - **Train and evaluate the baseline on the full data (on Kaggle):**
   ```
   cd backend
@@ -2468,6 +2670,19 @@ committed.
   `feature_importance` is report-only — selecting features from it would
   make the baseline's feature set differ from the GNN's, which is what the
   comparison holds fixed.
+- **`federation/`** — Phase 4. `views.py` (stage 4.0) turns a `(seed,
+  target)` visibility assignment into **per-institution views**:
+  `visible_mask` is the one implementation of the frozen "sees" rule (sender
+  **or** receiver), `institution_view` wraps a view as a
+  `windows.Window` so the Phase 3 featuriser runs on it unchanged,
+  `all_views` builds all `K` from a single endpoint pass,
+  `boundary_accounts` names the accounts visible to more than one
+  institution (what stage 4.1's exchange condition reasons about),
+  `campaign_visibility_from_views` recomputes achieved visibility from the
+  views as an independent check on the pipeline's own figure, and
+  `view_load_report` reports each institution's pooled training rows and
+  positives so a starved institution is a finding before training. Nothing
+  here trains or scores.
 - **`regression.py`** — the single source for the full-data expectations:
   `METRICS` (each with its expected value and the notebook cell it came
   from), `compute_actuals(result)`, `compare`, `format_table` /
@@ -2883,6 +3098,31 @@ campaign_id)`:
   a saved model reloads to identical scores while a half-written one is not
   counted as finished; and that `max |logit|` stays under 100 through
   training, which is the fix working.
+- **Backend federation-view tests** (`test_federation_views.py`, 31 tests,
+  stage 4.0): the three properties the stage is defined by — a view holds
+  **exactly** the rows that institution is an endpoint of (checked both ways:
+  every row inside the view qualifies, and every row outside does not), the
+  union of the views is the whole dataset, and a campaign's visibility
+  recomputed **from the views** equals the achieved visibility the pipeline
+  records, at every one of the 12 `(seed, target)` combinations. The last is a
+  genuine cross-check, because the pipeline reaches that number through a
+  campaign's pattern edge list and the test reaches it by counting rows of the
+  tagged transaction table. Then: that a view is a pure row subset adding no
+  column, so institution identity cannot become a feature; that a transaction
+  is seen by exactly two institutions when its endpoints differ and one when
+  they do not; that the fast `all_views` path and the per-institution path
+  agree frame for frame; that Phase 4 agrees row for row with **Phase 2's own**
+  `visibility.visible_transactions`, so there is only one notion of "sees" in
+  the project; that the Phase 3 featuriser accepts a view unchanged and that a
+  boundary account really does lose degree in a view, which is the deficiency
+  stage 4.1's exchange condition exists to repair; that `all_views` returns
+  all `K` entries even when some are empty; that views are reproducible from
+  the seed and that different seeds give different views; and that the load
+  report's per-institution rows sum back between 1× and 2× the central total.
+  **Proven able to fail** by mutating the real source, not a stand-in:
+  reducing `visible_mask` to sender-only breaks 4 tests, looping
+  `range(k - 1)` in `all_views` breaks 2, and replacing the `max` over
+  institutions with a `mean` breaks 13.
 - **Backend cross-model comparison tests** (`test_compare_models.py`, 22
   tests): the three that matter are the ones whose failure would be
   invisible. That a per-campaign record survives a CSV round trip with
@@ -3187,20 +3427,27 @@ is recorded here rather than in the suite.
 - No model, training, federated-learning or experiment code exists yet. The
   four experimental conditions are defined and the result schema is fixed,
   but nothing has been run, so the project has no findings of any kind.
-- **The 1% research sample is not available locally.** `backend/data/sample/`
-  is empty: `make_sample.py` has only ever been described, not run. Stage
-  3.2's sanity-scorer numbers therefore come from a seeded synthetic dataset
-  and validate the evaluation *code*, not the dataset. Fix with
-  `kaggle_runner.py make-sample` (§5e of the Kaggle guide); after that local
-  development uses the real sample and the synthetic generator is for unit
-  tests only.
-- **The evaluation module has not been run on full data.** Its behaviour is
-  known only on hand-made cases and synthetic data.
-  `kaggle_runner.py evaluate-scorers` is the check, and it carries a real
-  risk worth naming: if random scores well on the full data, the frozen
-  matching rule is too generous and no model result built on it would be
-  trustworthy. That is a stop-and-report outcome, not something to tune
-  away.
+- **Phase 4 is scoped down, and every cut is a limitation.** XGBoost only
+  (no federated GNN), the full feature set only (no `no_format` arm), **three
+  seeds rather than five**, and **one lookback**. The three-seed choice in
+  particular gives **wider confidence intervals** than Phase 3's five, so a
+  Phase 4 difference smaller than the seed spread must be reported as
+  undemonstrated rather than claimed. The single lookback rests on a
+  validation margin that did not survive to test. See
+  §[Phase 4 frozen scope](#phase-4-frozen-scope).
+- **Phase 4's per-institution training loads are measured on the 1% sample
+  only.** The *relative* distribution across institutions transfers (it is a
+  property of the assignment), but the absolute row counts, positive rates
+  and class weights do not — the sample's positive rate is 3.55% against the
+  full data's 0.102%. The full-data figures land with the first Kaggle run in
+  stage 4.4; until then, "no institution is starved" is a sample result with
+  a stated extrapolation behind it.
+- The **1% research sample is present locally** (`backend/data/sample/`), so
+  local development runs against the real sample rather than the synthetic
+  generator. Stage 3.2's sanity-scorer numbers in this README still come from
+  the seeded synthetic dataset and validate the evaluation *code*, not the
+  dataset; they have not been re-run on the sample, because the full-data
+  `evaluate-scorers` run superseded them.
 - The first full-data `features-smoke` run (commit `caae35f`) reported a
   "largest candidate window" that violated rule 3 and was silently clamped.
   Its other figures — 54 edge dims, 13/9/5 usable training times, build
@@ -3269,6 +3516,64 @@ Tagged points in the repository, newest first. Check one out with
 | `v0.1-data-pipeline` | 2026-10-08 | Phase 2 complete, plus the stage 3.0 Kaggle runner. The research pipeline (campaign ground truth, splits, topology groups, institutions, visibility), the artifact export, the read-only FastAPI server, and the full React frontend — 69 backend tests and 48 frontend tests passing. **No models and no experiment results**: the four conditions are defined and the result schema is fixed, but nothing has been trained or run, and the full-data regression numbers are still unverified (that is what stage 3.0's Kaggle run is for). |
 
 ## Changelog
+
+- **2026-11-14 (stage 4.0)** — **Phase 4 begins: the institution-split data
+  layer is built, tested and measured. Nothing federated is implemented yet.**
+
+  *Scope frozen first.* Phase 4 is cut to fit a two-week finish: **XGBoost
+  only** (no federated GNN — on full data it matched XGBoost's recall at ten
+  times the alert volume), **the full feature set only** (the format ablation
+  stands as a centralized result), **seeds 0-2** rather than 0-4, **one
+  lookback, L = 48** by the frozen Phase 3 protocol on validation, and
+  **K = 8 unchanged**, since halving K would raise the visibility floor from
+  ~25% to ~50% and flatten the sweep. Five Decision-log entries record each
+  cut with its reason, and the narrowing is listed under Known limitations —
+  three seeds mean wider confidence intervals, and that is reported rather
+  than hidden.
+
+  *Stage 4.0.* `federation/views.py` turns a `(seed, target)` assignment into
+  per-institution **views**. Two choices matter. The frozen "sees" rule —
+  sender **or** receiver — is implemented **once**, and a test requires it to
+  agree row for row with Phase 2's own `visibility.visible_transactions`, so
+  the project cannot acquire a second notion of visibility. And a view is
+  returned as a `windows.Window`, so `features.build_window_features` runs on
+  it **unchanged** and computes an institution's node features from its own
+  view alone — no second featuriser, and the Phase 3 leakage properties carry
+  over. A view is a pure row subset, so institution identity never reaches
+  the model inputs.
+
+  *Tests:* `tests/test_federation_views.py`, 31 tests, backend **362 passed,
+  25 skipped**. The three defining properties were each **proven able to fail
+  by mutating the real source**: sender-only visibility breaks 4 tests,
+  looping `range(k - 1)` breaks 2, and a `mean` in place of the `max` over
+  institutions breaks 13. The visibility check is a real cross-check — the
+  pipeline computes achieved visibility from each campaign's pattern edge
+  list, the test counts rows of the tagged transaction table landing in each
+  view — and it agrees exactly: **0 mismatches across all 370 campaigns in all
+  26 runs**.
+
+  *Measured on the 1% sample (a development check, not a result).* Pooled over
+  the 9 rule-3 training windows at L = 48, **no institution is starved of
+  positives at any target**; the thinnest cell is institution 2 at seed 1,
+  target 1.0, with **274 positives in 19,803 rows**. The finding worth
+  carrying into 4.1: **target 1.0 is the most imbalanced condition, not the
+  easiest** — the positive spread across institutions is **3.1× at target 1.0
+  against 1.6× at target 0.25**, because at target 1.0 a campaign's accounts
+  all go to one institution and its laundering edges stop crossing
+  boundaries, so fewer institutions see each positive. The isolated
+  condition's weakest institution is therefore weakest at the **100 bin**, and
+  that is a candidate explanation for any flattening at the top of the
+  dose-response curve.
+
+  *Added:* `federation/__init__.py`, `federation/views.py`,
+  `tests/test_federation_views.py`, `scripts/run_institution_split.py`, and a
+  new README section, §[Phase 4 definitions](#phase-4-definitions-the-federated-conditions).
+  Two stale Known-limitations entries removed on the evidence of this work:
+  the 1% sample **is** present locally, and the evaluation module **has** been
+  run on full data.
+
+  *Next:* stage **4.1**, the design proposal — what "FedAvg" and "embedding
+  exchange" mean for a tree model. No code until it is approved.
 
 - **2026-11-14 (demo readiness)** — **the frontend was audited in a real
   browser for the first time; the campaign graph works, and the "a CYCLE reads
