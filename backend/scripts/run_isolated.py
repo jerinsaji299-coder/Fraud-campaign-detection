@@ -246,12 +246,23 @@ def _print_cell(cell: dict, splits: list[str]) -> None:
                 (pooled["eval_split"] == split) & (pooled["operating_point"] == point)
             ]
             for row in pooled_rows.to_dict("records"):
+                binding = ""
+                if row.get("n_cells_with_a_budget"):
+                    binding = (
+                        f", budget binding in {row['n_binding_budgets']} of "
+                        f"{row['n_cells_with_a_budget']}"
+                        + (
+                            f" (non-binding: {row['non_binding_institutions']})"
+                            if row["non_binding_institutions"] else ""
+                        )
+                    )
                 print(
                     f"     POOLED {row['metric']}: "
                     f"over all institutions {row['mean_over_all_institutions']} "
                     f"(n = {row['n_institutions_in_mean']}), "
                     f"over trained only {row['mean_over_trained_institutions']} "
                     f"(n = {row['n_trained_in_mean']})"
+                    + binding
                     + (
                         f", untrained {row['untrained_institutions']}"
                         if row["untrained_institutions"] else ""

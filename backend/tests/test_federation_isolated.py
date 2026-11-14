@@ -1128,6 +1128,80 @@ def test_run_cell_separates_the_two_edges_in_its_flags(monkeypatch, _module_worl
 
 
 # ---------------------------------------------------------------------------
+# was the budget actually binding?
+# ---------------------------------------------------------------------------
+
+
+def test_binding_summary_counts_only_cells_that_have_a_budget():
+    summary = isolated.binding_summary({0: True, 1: False, 2: None, 3: True})
+    assert summary["n_cells_with_a_budget"] == 3
+    assert summary["n_binding_budgets"] == 2
+    assert summary["binding_fraction"] == pytest.approx(2 / 3)
+    assert summary["non_binding_institutions"] == "1"
+
+
+def test_binding_summary_of_an_f1_row_reports_no_fraction_rather_than_zero():
+    """The F1 point has no budget, so "0% binding" would be a false reading
+    of a number that does not apply."""
+    summary = isolated.binding_summary({0: None, 1: None})
+    assert summary["n_cells_with_a_budget"] == 0
+    assert summary["binding_fraction"] is None
+
+
+def test_a_budget_tau_at_the_bottom_of_the_grid_is_not_binding(
+    monkeypatch, trainable_world
+):
+    """The flag's definition: the budget did not set the threshold, because
+    the most sensitive tau on the grid already fits inside it."""
+    low = min(evaluation.MODEL_TAU_GRID)
+    ev = _evaluate_with_curve(monkeypatch, 0.5, low, trainable_world)
+    for point in ("budget_10", "budget_100", "total_10"):
+        assert ev.budget_binding[point] is False, point
+    assert "f1" not in ev.budget_binding, "the F1 point has no budget to bind"
+
+
+def test_a_budget_tau_inside_the_grid_is_binding(monkeypatch, trainable_world):
+    ev = _evaluate_with_curve(monkeypatch, 0.5, 0.9, trainable_world)
+    for point in ("budget_10", "budget_100", "total_10"):
+        assert ev.budget_binding[point] is True, point
+
+
+def test_every_pooled_budget_number_reports_its_binding_count(cell):
+    """The addition this stage made: a pooled "recall at B a day" that hides
+    how many of its cells were actually budgeted would compare a budgeted
+    operating point against an unbudgeted one."""
+    budget_rows = [
+        row for row in cell["pooled_rows"]
+        if row["operating_point"] != "f1"
+    ]
+    assert budget_rows
+    for row in budget_rows:
+        assert "n_binding_budgets" in row
+        assert "n_cells_with_a_budget" in row
+        assert row["n_cells_with_a_budget"] == row["n_institutions_in_mean"], (
+            "every institution in a budget mean has a budget, so the two "
+            "denominators must agree"
+        )
+        if row["n_cells_with_a_budget"]:
+            assert 0 <= row["n_binding_budgets"] <= row["n_cells_with_a_budget"]
+            assert row["binding_fraction"] == pytest.approx(
+                row["n_binding_budgets"] / row["n_cells_with_a_budget"]
+            )
+
+    for row in cell["pooled_rows"]:
+        if row["operating_point"] == "f1":
+            assert row["n_cells_with_a_budget"] == 0
+            assert row["binding_fraction"] is None
+
+
+def test_the_union_row_counts_binding_budgets_too(cell):
+    for row in cell["union_rows"]:
+        if row["operating_point"] == "f1":
+            continue
+        assert 0 <= row["n_binding_budgets"] <= row["n_institutions_operating"]
+
+
+# ---------------------------------------------------------------------------
 # the guards can fail
 # ---------------------------------------------------------------------------
 

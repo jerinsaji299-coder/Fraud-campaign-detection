@@ -545,6 +545,37 @@ def pooled_mean(values: dict[int, float | None], tiers: dict[int, str]) -> Poole
     )
 
 
+def binding_summary(flags: dict[int, bool | None]) -> dict:
+    """How many of a pooled budget number's cells had a **binding** budget.
+
+    A budget binds when it is what set the threshold. It does **not** bind
+    when the most sensitive tau on the grid already fits inside it, which is
+    common for an isolated institution: it sees a fraction of the traffic, so
+    a nominal 100 alarms a day may be far more than it could raise even at
+    its loosest setting. The centralized model at the same nominal budget is
+    usually in the opposite position. Pooling the two into one "recall at B a
+    day" would compare a budgeted operating point against an unbudgeted one,
+    so every pooled budget number carries this count and the README states it
+    whenever the binding fraction differs materially between conditions.
+
+    ``None`` entries are cells with no budget at all - the F1 point - and are
+    excluded from both the numerator and the denominator, so an F1 row
+    reports no binding fraction rather than a misleading 0.
+    """
+    with_budget = {i: value for i, value in flags.items() if value is not None}
+    n_binding = sum(1 for value in with_budget.values() if value)
+    return {
+        "n_cells_with_a_budget": len(with_budget),
+        "n_binding_budgets": n_binding,
+        "binding_fraction": (
+            n_binding / len(with_budget) if with_budget else None
+        ),
+        "non_binding_institutions": ",".join(
+            str(i) for i, value in sorted(with_budget.items()) if not value
+        ),
+    }
+
+
 def budget_share(budget: float, k: int = constants.K_INSTITUTIONS) -> float:
     """Each institution's slice of a matched **total** alert budget.
 
@@ -608,6 +639,11 @@ class InstitutionEvaluation:
     rejected_taus: dict[str, float] = field(default_factory=dict)
     #: operating point -> "low" or "high" for a tau at a grid edge
     tau_edges: dict[str, str] = field(default_factory=dict)
+    #: operating point -> was the budget BINDING? False when the budget tau
+    #: sits at the bottom of the grid, i.e. the most sensitive threshold
+    #: already fits the budget and the budget is therefore not what set the
+    #: operating point. ``None`` for the F1 point, which has no budget.
+    budget_binding: dict[str, bool] = field(default_factory=dict)
     #: ``(operating_point, split) -> outcomes``. Missing for an undefined point.
     outcomes: dict[tuple[str, str], list] = field(default_factory=dict)
     results: dict[tuple[str, str], object] = field(default_factory=dict)
@@ -732,6 +768,15 @@ def evaluate_institution(
             continue
         if edge == "low" and point["kind"] == "f1":
             out.tau_edges[name] = "low"
+        if point["kind"] != "f1":
+            # A budget tau at the bottom of the grid means the most sensitive
+            # threshold already fits the budget: the budget did not bind, so
+            # this is not really an operating point *at* B alarms a day. An
+            # isolated institution sees a fraction of the traffic and will
+            # often be here, while the centralized model at the same nominal
+            # budget will not - and pooling the two would compare a budgeted
+            # operating point against an unbudgeted one.
+            out.budget_binding[name] = edge != "low"
         out.taus[name] = chosen
 
     # --- every defined operating point, on every split ---
@@ -928,6 +973,7 @@ def run_cell(
                 "defined": evaluations[institution].taus.get(name) is not None,
                 "rejected_tau": evaluations[institution].rejected_taus.get(name),
                 "tau_edge": evaluations[institution].tau_edges.get(name),
+                "budget_binding": evaluations[institution].budget_binding.get(name),
                 "undefined_reason": evaluations[institution].undefined_reason.get(name),
                 "tier": tiers[institution],
             })
@@ -955,6 +1001,9 @@ def run_cell(
         for split in splits:
             recall_by_institution: dict[int, float | None] = {}
             relative_by_institution: dict[int, float | None] = {}
+            binding_by_institution: dict[int, bool | None] = {
+                i: ev.budget_binding.get(name) for i, ev in evaluations.items()
+            }
 
             for institution in sorted(models):
                 ev = evaluations[institution]
@@ -973,6 +1022,7 @@ def run_cell(
                             "test_subset": subset, "tier": ev.tier,
                             "tau": None, "defined": False,
                             "rejected_tau": ev.rejected_taus.get(name),
+                            "budget_binding": ev.budget_binding.get(name),
                             "undefined_reason": ev.undefined_reason.get(
                                 name, NO_AFFORDABLE_TAU
                             ),
@@ -997,6 +1047,7 @@ def run_cell(
                         **common, "institution": institution,
                         "operating_point": name, "eval_split": split,
                         "tier": ev.tier, "defined": True,
+                        "budget_binding": ev.budget_binding.get(name),
                         "undefined_reason": None, **row,
                     })
                     if subset == "all":
@@ -1012,16 +1063,33 @@ def run_cell(
 
             pooled_recall = pooled_mean(recall_by_institution, tiers)
             pooled_relative = pooled_mean(relative_by_institution, tiers)
-            pooled_rows.append({
-                **common, "operating_point": name, "eval_split": split,
-                "test_subset": "all", "metric": "campaign_recall",
-                **pooled_recall.as_row(),
-            })
-            pooled_rows.append({
-                **common, "operating_point": name, "eval_split": split,
-                "test_subset": "all", "metric": "recall_relative_to_own_ceiling",
-                **pooled_relative.as_row(),
-            })
+            # How many of the cells this mean is taken over actually had a
+            # BINDING budget. An isolated institution sees a fraction of the
+            # traffic and is often under its budget without the budget doing
+            # any work, while the centralized model at the same nominal
+            # budget is not; a pooled "recall at B a day" that hides this
+            # compares a budgeted operating point against an unbudgeted one.
+            for metric, pooled, values in (
+                ("campaign_recall", pooled_recall, recall_by_institution),
+                (
+                    "recall_relative_to_own_ceiling",
+                    pooled_relative,
+                    relative_by_institution,
+                ),
+            ):
+                # counted over the cells THIS mean is taken over, which is not
+                # always the same set: a cell with no operating point is out of
+                # both, and one whose own ceiling is 0 is out of the relative
+                # mean only
+                in_mean = [i for i, value in values.items() if value is not None]
+                pooled_rows.append({
+                    **common, "operating_point": name, "eval_split": split,
+                    "test_subset": "all", "metric": metric,
+                    **pooled.as_row(),
+                    **binding_summary(
+                        {i: binding_by_institution.get(i) for i in in_mean}
+                    ),
+                })
 
             # --- the union: a supervisory reader, not a bank ---
             operating = {
@@ -1077,6 +1145,10 @@ def run_cell(
                     "budget": point["budget"],
                     "per_institution_budget": point["per_institution_budget"],
                     "n_institutions_operating": len(operating),
+                    "n_binding_budgets": sum(
+                        1 for i in operating
+                        if evaluations[i].budget_binding.get(name) is True
+                    ),
                     "summed_false_alarms": accounting["summed_false_alarms"],
                     "summed_false_alarms_per_day": accounting["summed_per_day"],
                     "duplicate_clusters": accounting["duplicate_clusters"],

@@ -433,16 +433,41 @@ DEFAULT_TAU_GRID = (0.5, 0.75, 0.9, 0.95, 0.99)
 #:   that a linear grid cannot resolve the region where the decision
 #:   actually happens. Hence the near-1 tail.
 #:
-#: If a chosen tau ever lands on 0.9999, more nines are not the answer —
-#: that would mean the scores are saturated, and the thing to look at is the
-#: class weighting, which is a design decision rather than a grid detail.
+#: **Extended to 1 - 1e-7 on 2026-11-14, before the Phase 4 full-data run
+#: and not in response to any result.** The headroom was one grid point: the
+#: highest tau ever chosen on the full data was 0.9995, against a top of
+#: 0.9999, and stage 4.1 alone makes 672 (institution, operating point)
+#: choices. Six points continue the tail's own construction, each halving the
+#: remaining distance to 1.
+#:
+#: The tail **stops where float32 does**. XGBoost returns float32
+#: probabilities and the largest float32 below 1.0 is 0.99999994, i.e.
+#: 1 - 6.0e-8, so 1 - 1e-7 is the last threshold still distinguishable from
+#: 1.0 while 1 - 1e-8 *is* 1.0. **1.0 itself is deliberately excluded**:
+#: because the rule is `score >= tau`, a tau of 1.0 would keep whichever
+#: scores happen to round to exactly 1.0, which depends on the arithmetic,
+#: the library build and the hardware, and so is not reproducible.
+#:
+#: A finer tail gives threshold selection slightly more freedom. That is
+#: acceptable because the selection rule is **fixed in advance** - validation
+#: only, campaign F1, ties by `best_tau` - and applied **identically to every
+#: model and every condition**, so it is not a tuning advantage for any arm.
+#:
+#: A chosen tau at the **top** of this grid now means the optimum lies beyond
+#: what float32 can resolve: the operating point was not found, and Phase 4
+#: records that cell as undefined rather than scoring it 0. What to look at
+#: then is the class weighting, which is a design decision rather than a grid
+#: detail.
 #:
 #: Cost is asymmetric: clustering scales with the edges kept, so the low
-#: thresholds are expensive and the tail is nearly free. `select_tau`
-#: records the seconds each tau took and the reports carry them.
+#: thresholds are expensive and the tail is nearly free - measured on the
+#: full data at 9.1s for tau 0.05 against 2.6s for every point from 0.99 up,
+#: so the six new points cost ~16s per model. `select_tau` records the
+#: seconds each tau took and the reports carry them.
 MODEL_TAU_GRID = (
     0.05, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.95, 0.99,
     0.995, 0.999, 0.9995, 0.9999,
+    0.99995, 0.99999, 0.999995, 0.999999, 0.9999995, 0.9999999,
 )
 
 

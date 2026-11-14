@@ -44,10 +44,13 @@ Each step assumes the ones above it have passed. All of them are CPU-only;
 | 4 | `evaluate-scorers` | validate the evaluation module on full data | §5d |
 | 5 | `oracle-diagnose` | explain why the oracle misses what it misses | §5f |
 | 6 | `make-sample` | build the 1% sample for local development | §5e |
+| 7 | `train-isolated` | stage 4.1: one booster per institution per (target, seed) | §5l |
+| 8 | `evaluate-isolated` | stage 4.1: taus, per-institution ceilings, the two pooled numbers and the union | §5l |
 
 Steps 1–2 are done (2026-10-08/09), step 3 run and corrected, step 4 run
-(2026-10-15) — the evaluation is validated. Step 5 is new; step 6 is still
-outstanding and is what unblocks local development on real data.
+(2026-10-15) — the evaluation is validated. Step 5 is new; step 6 is done and
+the sample is present locally. Steps 7–8 are **proposed and not yet run**:
+the stage 4.1 session plan is in §5l.
 
 ## 1. Notebook settings
 
@@ -1032,3 +1035,260 @@ paired comparisons only, which is written from 5k's output and needs no
 further session.
 
 Everything in this document other than 5h runs on CPU.
+
+## 5l. Stage 4.1: the isolated condition on the full data — PROPOSED, not yet run
+
+The floor every federated condition is measured against: each institution
+trained on its own view, scoring its own view, clustering inside it. **CPU
+only** — no GPU, so no weekly quota is consumed. Everything here is the
+frozen Phase 4 scope and is the runner's default: targets 1.00 / 0.75 / 0.50
+/ 0.25, seeds 0 / 1 / 2, **L = 48 only**, which is **96 institution-cells**.
+
+### Why three sessions and not one
+
+Estimated **7-14 CPU hours** in total, against a 12-hour session limit. One
+session would fit the optimistic end and lose everything at the pessimistic
+end, so the work is split where it is already resumable:
+
+| Session | Command | Inputs | Estimate |
+|---|---|---|---:|
+| **A** | `train-isolated` (all 12 cells, 96 boosters) | IBM dataset | **2.5-4 h** |
+| **B** | `evaluate-isolated --targets 1.0,0.75` (6 cells) | dataset + **A** | **2.5-5.5 h** |
+| **C** | `evaluate-isolated` (no `--targets`: evaluates 0.50 and 0.25, **reloads** B's six) | dataset + **A** + **B** | **2.5-5.5 h** |
+
+All three in **commit mode** (Save Version → Save & Run All), Internet **ON**,
+Accelerator **None**.
+
+**C is the session that produces the complete report.** It runs with no
+`--targets` so the loop covers all four; the two targets B already did are
+found on disk and loaded in seconds, and the combined
+`phase4_isolated_*.csv` it writes therefore cover all twelve cells. If B
+comes in near the optimistic end, C can be started with all four targets
+anyway — it will simply evaluate the remaining six cells.
+
+**If any session runs out of time**, nothing finished is lost: `train-isolated`
+saves each booster as it completes and skips it next time, and
+`evaluate-isolated` writes each `(target, seed)` cell's rows as it completes
+and resumes past them. Re-run the same session with the previous attempt's
+output attached as an extra input and the copy cell below will pick it up.
+
+### Where the estimates come from
+
+Measured on the full data in stage 3.3, scaled by the measured per-institution
+view size of **~23.5%** of the central row count:
+
+| | Central, measured | Per institution, estimated |
+|---|---:|---:|
+| build pipeline | 35.7s (3.2 GB) | once per session |
+| build the training matrix, L = 48 | 114.0s (15.9 GB peak) | ~30s, ~1.5-4 GB |
+| train one booster, L = 48 | ~235s | ~60-110s |
+| evaluate one model, 3 splits | ~286s | ~150-280s, now over **7** operating points |
+
+Memory is not a constraint here: the central matrix peaked at 15.9 GB and an
+institution's is roughly a quarter of it, inside a 30 GB CPU notebook with
+room to spare.
+
+### Session A — training, CPU, commit mode
+
+**Inputs:** the IBM dataset only.
+
+```python
+# A1 - dataset path, as always
+!ls /kaggle/input/datasets/ealtman2019/ibm-transactions-for-anti-money-laundering-aml/ | head
+```
+
+```python
+# A2 - clone and install (~1-2 min)
+!rm -rf /kaggle/temp/repo
+!git clone --depth 1 https://github.com/jerinsaji299-coder/Fraud-campaign-detection.git /kaggle/temp/repo
+%cd /kaggle/temp/repo/backend
+!pip install -q -r requirements.txt
+!git -C /kaggle/temp/repo rev-parse --short HEAD
+```
+
+```python
+# A3 - pre-flight: fail in one minute rather than three hours in.
+#      Checks the frozen Phase 4 scope and the extended tau grid are the
+#      ones this run assumes.
+import sys
+sys.path.insert(0, "/kaggle/temp/repo/backend/src")
+from fraudcamp import constants, evaluation
+
+assert constants.PHASE4_SEEDS == [0, 1, 2], constants.PHASE4_SEEDS
+assert constants.PHASE4_LOOKBACK_H == 48, constants.PHASE4_LOOKBACK_H
+assert constants.K_INSTITUTIONS == 8
+assert constants.VISIBILITY_TARGETS == [1.0, 0.75, 0.5, 0.25]
+grid = evaluation.MODEL_TAU_GRID
+assert len(grid) == 22, len(grid)
+assert grid[-1] == 0.9999999 and 1.0 not in grid
+print("scope and grid OK:", len(grid), "taus, top", grid[-1])
+print("cells:", len(constants.VISIBILITY_TARGETS) * len(constants.PHASE4_SEEDS)
+      * constants.K_INSTITUTIONS)
+```
+
+```python
+# A4 - train 96 boosters. ~2.5-4 h. Resumable: a finished booster is skipped.
+#      subprocess rather than `!` so the exit code is visible in the log:
+#      0 = clean, anything else must be read before the numbers are used.
+import subprocess
+code = subprocess.run(
+    ["python", "scripts/kaggle/kaggle_runner.py", "train-isolated",
+     "--config", "configs/kaggle.yaml"],
+    cwd="/kaggle/temp/repo/backend",
+).returncode
+print("train-isolated exit code:", code)
+```
+
+```python
+# A5 - what to download, and the shape of what was produced
+!ls -la /kaggle/working/*.csv /kaggle/working/*.md /kaggle/working/*.json
+!find /kaggle/working/models/isolated -maxdepth 1 -type d | wc -l
+!python -c "import pandas as pd; d = pd.read_csv('/kaggle/working/train_isolated.csv'); print(d.groupby('tier').size()); print(d[['n_rows','n_positive']].describe().loc[['min','mean','max']])"
+```
+
+### Session B — evaluating the first two targets, CPU, commit mode
+
+**Inputs:** the IBM dataset **and session A's output**.
+
+```python
+# B1, B2 - identical to A1 and A2
+```
+
+```python
+# B3 - bring A's boosters into /kaggle/working, where the runner looks.
+#      `--model-dir` takes one path and the input is read-only, so copy.
+import pathlib, shutil, subprocess
+
+found = sorted(subprocess.run(
+    ["find", "/kaggle/input", "-maxdepth", "6", "-type", "d",
+     "-path", "*/models/isolated"],
+    capture_output=True, text=True, check=True).stdout.split())
+print("isolated model trees found:", found)
+assert found, "no models/isolated under /kaggle/input - attach session A's output"
+
+dest = pathlib.Path("/kaggle/working/models/isolated")
+dest.mkdir(parents=True, exist_ok=True)
+for tree in found:
+    for cell in sorted(pathlib.Path(tree).iterdir()):
+        target = dest / cell.name
+        if not target.exists():
+            shutil.copytree(cell, target)
+
+cells = sorted(d.name for d in dest.iterdir() if d.is_dir())
+print(len(cells), "institution-cells")
+# fail here rather than hours in: evaluate-isolated never trains, so a
+# missing booster stops the run instead of being quietly recreated
+assert len(cells) == 96, f"expected 96, found {len(cells)}"
+```
+
+```python
+# B4 - evaluate targets 1.00 and 0.75 (six cells). ~2.5-5.5 h.
+#      Exit 3 is NOT a crash: it means a chosen tau sat at an edge of the
+#      grid. Read the message before using anything.
+import subprocess
+code = subprocess.run(
+    ["python", "scripts/kaggle/kaggle_runner.py", "evaluate-isolated",
+     "--config", "configs/kaggle.yaml", "--targets", "1.0,0.75"],
+    cwd="/kaggle/temp/repo/backend",
+).returncode
+print("evaluate-isolated exit code:", code)
+```
+
+```python
+# B5 - what came out
+!ls -la /kaggle/working/phase4_isolated*  /kaggle/working/isolated_cells | head -40
+```
+
+### Session C — the remaining targets and the complete report, CPU, commit mode
+
+**Inputs:** the IBM dataset, **session A's output**, **session B's output**.
+
+```python
+# C1, C2, C3 - as A1, A2 and B3 (B3 copies the boosters again)
+```
+
+```python
+# C4 - bring B's finished cells across, so this session reloads them in
+#      seconds instead of re-evaluating them, and writes ONE complete report.
+import pathlib, shutil, subprocess
+
+found = sorted(subprocess.run(
+    ["find", "/kaggle/input", "-maxdepth", "6", "-type", "d",
+     "-name", "isolated_cells"],
+    capture_output=True, text=True, check=True).stdout.split())
+print("finished-cell directories found:", found)
+dest = pathlib.Path("/kaggle/working/isolated_cells")
+dest.mkdir(parents=True, exist_ok=True)
+for tree in found:
+    for item in sorted(pathlib.Path(tree).glob("*.csv")):
+        target = dest / item.name
+        if not target.exists():
+            shutil.copy2(item, target)
+done = sorted({p.name.split("_summary")[0] for p in dest.glob("*_summary.csv")})
+print(len(done), "cells already evaluated:", done)
+```
+
+```python
+# C5 - all four targets: the six from B load in seconds, the six at 0.50 and
+#      0.25 are evaluated. ~2.5-5.5 h. This writes the complete report.
+import subprocess
+code = subprocess.run(
+    ["python", "scripts/kaggle/kaggle_runner.py", "evaluate-isolated",
+     "--config", "configs/kaggle.yaml"],
+    cwd="/kaggle/temp/repo/backend",
+).returncode
+print("evaluate-isolated exit code:", code)
+```
+
+```python
+# C6 - the headline, read back from the files rather than from the log
+import pandas as pd
+pooled = pd.read_csv("/kaggle/working/phase4_isolated_pooled.csv")
+union = pd.read_csv("/kaggle/working/phase4_isolated_union.csv")
+print("cells:", pooled[["visibility_target", "seed"]].drop_duplicates().shape[0], "of 12")
+print(pooled[(pooled.eval_split == "test") & (pooled.metric == "campaign_recall")]
+      [["visibility_target", "seed", "operating_point",
+        "mean_over_all_institutions", "mean_over_trained_institutions",
+        "n_institutions_in_mean", "n_binding_budgets", "n_cells_with_a_budget"]]
+      .to_string(index=False))
+print(union[(union.eval_split == "test") & (union.test_subset == "all")]
+      [["visibility_target", "seed", "operating_point", "campaign_recall",
+        "oracle_recall", "false_alarms_per_day", "summed_false_alarms_per_day",
+        "duplicate_clusters", "n_institutions_operating"]].to_string(index=False))
+```
+
+### Exit codes, and what each one means
+
+| Code | Meaning | What to do |
+|---|---|---|
+| **0** | every cell finished, no tau at a grid edge | send the files back |
+| **3**, with `STOPPING, and NOT recording` | a chosen **F1** tau sat at the **bottom** of the grid. At 0.102% prevalence this should not happen; the cell was **not** recorded and the session stopped there | send the log back. Do **not** re-run with `--allow-low-edge-tau` — that flag exists for the thinned sample, and using it here would record a cell the policy says to investigate |
+| **3**, with cells `EXCLUDED` for a tau at the top | the optimum lies beyond the grid for those `(institution, operating point)` cells. They are **undefined**, excluded from the pooled means and listed with their rejected tau; every other cell is intact | send the files back. This is a reportable finding, not a failure |
+| anything else | a real error | send the log back |
+
+### What to send back
+
+From the final session: `phase4_isolated.md`, `phase4_isolated.json`, and the
+seven `phase4_isolated_*.csv` files, plus `train_isolated.{csv,json,md}` from
+session A. They go to `docs/reference/`, and
+`phase4_isolated_outcomes.csv` is what 4.2 and 4.3 are paired against.
+
+### What to expect, and what would be surprising
+
+* **No institution untrained.** Measured on the sample at every target; on
+  the full data each institution's pooled L = 48 matrix should hold roughly
+  2M rows with several hundred to a couple of thousand positives. An
+  `untrained` institution would be a real finding and is reported, not an
+  error.
+* **The thinnest positives at the 100 bin, not the 25 bin** — the stage 4.0
+  finding, which the full data should reproduce in shape if not in size.
+* **The union's oracle ceiling equal to the centralized ceiling**, exactly,
+  at every target. This is the stage 4.1 argument from the frozen visibility
+  rule, and this run is the first chance to confirm it on the full data. A
+  disagreement would mean the argument is wrong, and would matter more than
+  anything else in the report.
+* **Non-binding budgets.** An isolated institution sees a fraction of the
+  traffic, so the budget may not bind for many cells; every pooled budget
+  number prints how many of its cells were actually budgeted.
+* **Nothing quotable before this runs.** Every stage 4.1 figure currently in
+  the README is from the 1% sample and is marked development-only.

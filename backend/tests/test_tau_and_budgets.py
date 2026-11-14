@@ -6,6 +6,7 @@ can be inflated by alerting more — the random scorer reached 0.27 recall at
 L = 48 while raising about 47,000 alarms a day.
 """
 
+import numpy as np
 import pytest
 
 from fraudcamp import evaluation
@@ -146,6 +147,8 @@ def test_the_model_grid_is_frozen_and_reaches_both_ends():
     assert evaluation.MODEL_TAU_GRID == (
         0.05, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.95, 0.99,
         0.995, 0.999, 0.9995, 0.9999,
+        # extended 2026-11-14, before the Phase 4 full-data run
+        0.99995, 0.99999, 0.999995, 0.999999, 0.9999995, 0.9999999,
     )
     # the sanity scorers keep theirs: their scores are 0/1, so neither end
     # would change anything and the low end would only cost clustering time
@@ -162,19 +165,35 @@ def test_the_near_one_tail_resolves_where_the_linear_grid_could_not():
     """
     grid = evaluation.MODEL_TAU_GRID
     tail = [tau for tau in grid if tau > 0.99]
-    assert tail == [0.995, 0.999, 0.9995, 0.9999]
+    assert tail == [
+        0.995, 0.999, 0.9995, 0.9999,
+        0.99995, 0.99999, 0.999995, 0.999999, 0.9999995, 0.9999999,
+    ]
 
     # each step takes a bite out of what is left above it, which is the
     # point: the resolution is in the remaining distance to 1, not in tau
     remaining = [1 - tau for tau in grid if tau >= 0.99]
     assert remaining == sorted(remaining, reverse=True)
     for finer, coarser in zip(remaining[1:], remaining):
-        assert finer <= coarser / 2
+        # a relative epsilon, because `1 - tau` is not exact in float64 at
+        # these magnitudes: 1 - 0.999995 comes out 4e-13 above half of
+        # 1 - 0.99999. The property is about the grid's construction, not
+        # about binary representation
+        assert finer <= coarser / 2 * (1 + 1e-9)
 
     # 0.99 is no longer a boundary, so the full-data choice can be read as a
-    # maximum rather than an edge
+    # maximum rather than an edge - and after the 2026-11-14 extension
+    # neither is 0.9999, which the full data came within one step of
     assert not evaluation.tau_is_at_grid_edge(0.99, grid)
-    assert evaluation.tau_is_at_grid_edge(0.9999, grid)
+    assert not evaluation.tau_is_at_grid_edge(0.9999, grid)
+    assert evaluation.tau_is_at_grid_edge(0.9999999, grid)
+
+    # the tail stops where float32 does: 1 - 1e-7 is distinguishable from
+    # 1.0, 1 - 1e-8 is not, and 1.0 itself is excluded because `score >= 1.0`
+    # would keep whatever rounds to exactly 1.0, which is not reproducible
+    assert np.float32(1 - 1e-7) != np.float32(1.0)
+    assert np.float32(1 - 1e-8) == np.float32(1.0)
+    assert 1.0 not in grid
 
 
 def test_a_tau_at_either_end_of_the_grid_is_reported_as_an_edge():
@@ -182,7 +201,7 @@ def test_a_tau_at_either_end_of_the_grid_is_reported_as_an_edge():
     rather than extending the grid silently."""
     grid = evaluation.MODEL_TAU_GRID
     assert evaluation.tau_is_at_grid_edge(0.05, grid)
-    assert evaluation.tau_is_at_grid_edge(0.9999, grid)
+    assert evaluation.tau_is_at_grid_edge(max(grid), grid)
     assert not evaluation.tau_is_at_grid_edge(0.3, grid)
     assert not evaluation.tau_is_at_grid_edge(0.99, grid)
     # a single-point grid is both ends at once
