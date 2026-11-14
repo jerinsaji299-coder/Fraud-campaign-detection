@@ -256,12 +256,22 @@ def _print_cell(cell: dict, splits: list[str]) -> None:
                             if row["non_binding_institutions"] else ""
                         )
                     )
+                spread = ""
+                if row.get("min_over_institutions") is not None:
+                    # the panel is not exchangeable (institution 0 holds the
+                    # dataset's largest bank), so the mean never prints alone
+                    spread = (
+                        f", median {row['median_over_institutions']}, range "
+                        f"{row['min_over_institutions']} (i{row['min_institution']})"
+                        f"-{row['max_over_institutions']} (i{row['max_institution']})"
+                    )
                 print(
                     f"     POOLED {row['metric']}: "
                     f"over all institutions {row['mean_over_all_institutions']} "
                     f"(n = {row['n_institutions_in_mean']}), "
                     f"over trained only {row['mean_over_trained_institutions']} "
                     f"(n = {row['n_trained_in_mean']})"
+                    + spread
                     + binding
                     + (
                         f", untrained {row['untrained_institutions']}"

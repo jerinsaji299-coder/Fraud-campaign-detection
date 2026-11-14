@@ -498,6 +498,16 @@ class PooledMean:
     n_trained: int
     untrained: tuple[int, ...]
     undefined: tuple[int, ...]
+    #: dispersion over the SAME institutions as ``over_all``, because the
+    #: eight institutions are not exchangeable -- institution 0 always holds
+    #: the dataset's largest bank (see the README, "The institutions are not
+    #: exchangeable"). A mean alone invites the reading "what a typical bank
+    #: achieves", which this panel cannot support.
+    minimum: float | None = None
+    argmin: int | None = None
+    maximum: float | None = None
+    argmax: int | None = None
+    median: float | None = None
 
     def as_row(self) -> dict:
         return {
@@ -505,6 +515,11 @@ class PooledMean:
             "n_institutions_in_mean": self.n_all,
             "mean_over_trained_institutions": self.over_trained,
             "n_trained_in_mean": self.n_trained,
+            "median_over_institutions": self.median,
+            "min_over_institutions": self.minimum,
+            "min_institution": self.argmin,
+            "max_over_institutions": self.maximum,
+            "max_institution": self.argmax,
             "untrained_institutions": ",".join(str(i) for i in self.untrained),
             "undefined_institutions": ",".join(str(i) for i in self.undefined),
         }
@@ -523,6 +538,14 @@ def pooled_mean(values: dict[int, float | None], tiers: dict[int, str]) -> Poole
     A value of ``None`` is **undefined** and is excluded from both means and
     listed: that is a cell with no affordable tau on the grid, or no campaign
     in the subset. It is never silently read as 0.
+
+    Both means carry the **spread** they average over -- median, min and max
+    with the institutions that produced them -- because the eight
+    institutions are **not exchangeable**: institution 0 deterministically
+    holds the dataset's largest bank, and so sees more of every campaign than
+    the other seven. The mean is the mean over this fixed panel, not an
+    estimate of a typical bank, and the spread is what stops it being read as
+    one.
     """
     institutions = sorted(values)
     untrained = tuple(i for i in institutions if tiers.get(i) == TIER_UNTRAINED)
@@ -530,6 +553,12 @@ def pooled_mean(values: dict[int, float | None], tiers: dict[int, str]) -> Poole
 
     usable = [i for i in institutions if values[i] is not None]
     trained = [i for i in usable if tiers.get(i) != TIER_UNTRAINED]
+
+    # dispersion over `usable`, i.e. the same set `over_all` averages, so the
+    # spread and the mean always have the same denominator. Ties go to the
+    # lowest institution id, so the choice is deterministic.
+    lo = min(usable, key=lambda i: (values[i], i)) if usable else None
+    hi = max(usable, key=lambda i: (values[i], -i)) if usable else None
 
     return PooledMean(
         over_all=(
@@ -542,6 +571,13 @@ def pooled_mean(values: dict[int, float | None], tiers: dict[int, str]) -> Poole
         n_trained=len(trained),
         untrained=untrained,
         undefined=undefined,
+        minimum=float(values[lo]) if lo is not None else None,
+        argmin=lo,
+        maximum=float(values[hi]) if hi is not None else None,
+        argmax=hi,
+        median=(
+            float(np.median([values[i] for i in usable])) if usable else None
+        ),
     )
 
 

@@ -51,6 +51,9 @@ git clone https://github.com/jerinsaji299-coder/Fraud-campaign-detection.git
         - [Grid-edge policy](#12-grid-edge-policy-and-the-extension-of-model_tau_grid)
         - [What was built](#what-was-built)
         - [Measured on the 1% sample — development only](#measured-on-the-1-sample--development-only-not-for-quotation)
+        - [Session A: the 96 boosters](#the-full-data-run-session-a-the-96-boosters--done-2026-11-15)
+        - [What the 96 boosters say](#what-the-96-boosters-say-before-any-detection-is-run)
+        - [The institutions are not exchangeable](#the-institutions-are-not-exchangeable-institution-0-holds-the-hub-bank)
 20. [Version history](#version-history)
 21. [Changelog](#changelog)
 
@@ -161,7 +164,7 @@ feature set only, three seeds, one lookback**. See
 | Stage | Description | Status |
 |---|---|---|
 | 4.0 | Institution-split data: per-institution views of every window, and the account features each institution can compute from its own view alone | **done** — `federation/views.py`, 31 tests, per-institution training loads measured on the sample, visibility cross-check exact on all 370 campaigns |
-| 4.1 | **The `isolated` condition**: each institution trained and scoring on its own view alone, with its **own** oracle ceiling per target, and the two pooled numbers (per-institution mean, and the union over institutions) | **built and tested** — `federation/isolated.py`, 49 tests, backend 411 passed / 25 skipped; `train-isolated` and `evaluate-isolated` runner subcommands, resumable. Measured on the sample; the full-data run is a Kaggle session. §[stage 4.1](#stage-41-the-isolated-condition--approved-and-implemented-2026-11-14) |
+| 4.1 | **The `isolated` condition**: each institution trained and scoring on its own view alone, with its **own** oracle ceiling per target, and the two pooled numbers (per-institution mean, and the union over institutions) | **built and tested** — `federation/isolated.py`, 51 tests, backend 413 passed / 25 skipped; `train-isolated` and `evaluate-isolated` runner subcommands, resumable. Full-data **session A (training) done 2026-11-15**: 96 boosters, exit 0; sessions B and C (evaluation) next. Detection numbers so far are from the 1% sample only. §[stage 4.1](#stage-41-the-isolated-condition--approved-and-implemented-2026-11-14) |
 | 4.2 | `fedavg`: what "FedAvg" means for a tree model, then implementation and tests, reusing the Phase 3 evaluation code unchanged | not started — the design question moved here from 4.1 |
 | 4.3 | `fedavg_exchange`: what crosses the institution boundary, then the gate — centralized vs `fedavg_exchange` at the 100 bin, full data. A failed gate stops the sweep | not started |
 | 4.4 | Kaggle runner subcommands, resumable per (condition, bin, seed) | not started |
@@ -2490,7 +2493,12 @@ matters about a thin institution is what it achieves, which is measurable.
 An `untrained` cell is recall **0 and not undefined**, because "this bank has
 nothing to learn from and therefore catches nothing" is the honest answer to
 "what does a bank achieve alone" — an outcome of the condition, not missing
-data. The count of `untrained` cells is printed beside every pooled number
+data. **Measured on the full data, 2026-11-15: the tiers never fired** — 96 of
+96 cells are `normal` and the thinnest carries 1,003 positives, a hundred
+times the threshold. The scheme is kept as decided; see
+[what the 96 boosters say](#what-the-96-boosters-say-before-any-detection-is-run).
+
+The count of `untrained` cells is printed beside every pooled number
 that includes them, and per (5a) the per-institution mean is reported **both**
 over all 8 institutions and over trained institutions only, so that
 "cannot see it" and "had nothing to learn from" are never read as one
@@ -2530,8 +2538,9 @@ for the grid to hold no affordable tau.
 | `phase4_isolated.json` / `.md` | The evidence report: per-institution summaries, per-institution ceilings, the two pooled numbers with their denominators, the `untrained` / `thin` / no-affordable-tau lists, tau curves, timings |
 | `phase4_isolated_ceilings.csv` | The oracle ceiling per `(institution, target, seed, L, split, subset)` — the thing that must never be confused with the centralized ceiling |
 | `phase4_isolated_summary.csv` | One row per `(target, seed, L, split, operating_point, institution)`, plus the two pooled rows |
+| `phase4_isolated_pooled.csv` | The two pooled means per `(target, seed, L, split, operating_point, metric)`, each with its denominators, its binding count, and — added 2026-11-15 — its **median, min and max with the institutions that produced them**, because the eight institutions are [not exchangeable](#the-institutions-are-not-exchangeable-institution-0-holds-the-hub-bank) |
 
-All four go to `docs/reference/`. One integration point to settle in 4.2
+All five go to `docs/reference/`. One integration point to settle in 4.2
 rather than now: `compare-models` refuses to run when two detectors collapse
 into one pairing key, so it needs `institution` and `visibility_target` in
 its key before it can read these files — a small additive change to a command
@@ -2629,8 +2638,9 @@ is beyond what can be resolved, so the operating point was not found.
 |---|---|
 | `federation/isolated.py` | the condition: the masking scorer, per-institution training, the per-institution oracle ceiling, the union (outcomes, and the deduplicating cluster pass), the two pooled means, the seven operating points, and `run_cell`, which both runners call so the local and Kaggle reports come from one code path |
 | `constants.PHASE4_SEEDS`, `constants.PHASE4_LOOKBACK_H` | the frozen scope **in code** — `[0, 1, 2]` and `48` — so a runner cannot drift from this README. `evaluate-isolated` refuses more than one lookback outright |
-| `tests/test_federation_isolated.py` | **49 tests**, including the grid-edge policy, the budget-binding audit and the primary-point designation; backend suite **411 passed, 25 skipped** |
+| `tests/test_federation_isolated.py` | **51 tests**, including the grid-edge policy, the budget-binding audit, the primary-point designation and the pooled spread's denominator and tie-breaking; backend suite **413 passed, 25 skipped** |
 | `scripts/run_isolated.py` | the condition on the 1% sample, for development |
+| `scripts/run_institution_composition.py` | why institution 0 is not like the other seven: bank composition per institution, and campaign accounts owned against campaign accounts visible. The reproducible evidence for [not exchangeable](#the-institutions-are-not-exchangeable-institution-0-holds-the-hub-bank) |
 | `train-isolated` | one booster per institution per `(target, seed)`, saved as it finishes, **resumable per institution** |
 | `evaluate-isolated` | tau, ceilings, the per-institution and union reports, **resumable per `(target, seed)`**; it **never trains**, so a lost evaluation session cannot silently retrain on different boosters; exit 3 on an edge tau after every report is written |
 
@@ -2863,17 +2873,212 @@ rather than the clusters.
 a finding**, not treated as a failure to tune — the same rule Phase 3 applied
 to the GNN, declared here in advance for the same reason.
 
-#### The full-data run: proposed, not yet run
+#### The full-data run, session A: the 96 boosters — done 2026-11-15
+
+Ran in Kaggle commit mode on CPU, the IBM dataset as the only input. The
+pre-flight passed (`scope and grid OK: 22 taus, top 0.9999999`, `cells: 96`),
+`train-isolated` exited **0**, and `find`ing the model tree printed **97** —
+the 96 institution-cells plus their parent. Evidence committed:
+[`docs/reference/train_isolated.{md,csv,json}`](docs/reference/train_isolated.md).
+
+| | Estimated | Measured |
+|---|---:|---:|
+| wall time | 2.5-4 h | **2.25 h** — 8,094s over the instrumented steps, 8,130s in the session log |
+| per booster | 60-110s | **83.8s** mean, 79.1-111.1s |
+| peak memory | 1.5-4 GB | **5,353 MB** |
+| boosters written | 96 | **96**, none skipped |
+
+Training came in **below** the optimistic end of its estimate. That does not
+license merging sessions B and C: training was the half of the estimate
+anchored on a measured Phase 3 number (~235s per central booster, scaled by
+the measured 23.5% view), while evaluation is the half that is not, and it now
+runs over seven operating points rather than four. The memory figure is not an
+overrun either — the 1.5-4 GB estimate was for the training matrix alone, and
+the pipeline already holds 3,168 MB before the first booster starts; 5.35 GB
+of a 30 GB notebook is the two together.
+
+The 96 boosters are **~170 MB and stay out of the repo**, per the standing
+constraint. They live in session A's Kaggle version output and are attached as
+an input to sessions B and C — which is why B3/C3 assert all 96 are present in
+the first minute, before the scope and grid pre-flight.
+
+#### What the 96 boosters say, before any detection is run
+
+**1. The thin-positive machinery never fired, and was still the right
+decision.** All 96 cells are `normal`: **0 untrained**, **0 thin**, and the
+thinnest cell carries **1,003 positives** — a hundred times
+`MIN_POSITIVES_TO_TRAIN`. Mean positives per cell is 1,598 on a mean 1,999,169
+rows, a positive rate of 0.080%, with per-window class weights spanning
+**435-4,015**. The tiering decided in §8 is therefore recorded as **taken in
+advance and not binding on the full data**. It stays in the code: it cost
+nothing, it is what distinguishes "this bank caught nothing" from "this bank
+had nothing to learn from" if 4.2 or 4.3 ever produces such a cell, and the
+alternative was finding out at evaluation time that a booster had never seen a
+positive.
+
+**2. The stage 4.0 prediction holds in direction and is weaker in magnitude.**
+The prediction was that the **thinnest** per-institution positive count
+appears at target **1.0**, not at 0.25 — because at full visibility one
+institution must be an endpoint of every edge of a campaign, which
+concentrates that campaign in one view and starves the other seven, while at
+0.25 every campaign is spread across many views and no view is starved.
+Confirmed: the thinnest cell of all 96 is **target 1.0, seed 1, institution
+2** at 1,003 positives.
+
+Spread, as max/min of training positives within a target across all eight
+institutions and all three seeds — the widest definition, and the one used for
+every row here:
+
+| Target | Full data | 1% sample (stage 4.1, seed 0) | 1% sample (stage 4.0, 3 seeds) |
+|---:|---:|---:|---:|
+| 1.00 | **2.42** | 2.01 | 4.22 |
+| 0.75 | 1.93 | 1.86 | 2.84 |
+| 0.50 | 1.89 | 1.44 | 2.49 |
+| 0.25 | 1.91 | 1.53 | 2.26 |
+
+Two things to read off this rather than one. Target 1.0 **is** the outlier on
+the full data, as predicted. But 0.75, 0.50 and 0.25 come out at 1.93 / 1.89 /
+1.91 — **indistinguishable from each other**, where the sample showed a
+monotone decline across them. The honest statement is therefore narrower than
+the sample suggested: *full visibility concentrates campaigns and starves some
+views; below full visibility, the degree of fragmentation does not measurably
+change how unevenly positives are spread.* The full-data magnitude is also
+roughly half the stage 4.0 sample's (2.42 against 4.22 at target 1.0), the
+expected direction for a thinned background — 1% of the background makes every
+per-institution count small and its ratios volatile.
+
+#### The institutions are not exchangeable: institution 0 holds the hub bank
+
+Institution 0 has the most training positives in **12 of 12** cells — every
+target, every seed, no exception. That is not sampling noise and not an
+artefact of the visibility search. It is a deterministic consequence of the
+bank-to-institution assignment, and it has to be stated before any pooled
+number is built on it.
+
+**The mechanism.** `institutions.assign_institutions` sorts banks by
+pre-cutoff endpoint volume descending and walks each into the institution with
+the smallest current load, choosing `load.index(min(load))` — the **lowest
+index** on a tie. At the first step every load is 0, so **the single largest
+bank in the dataset goes to institution 0, always.** The assignment is also
+seed-independent: it is computed from pre-cutoff volume alone, and only
+campaign accounts are ever moved by the visibility search. That is exactly why
+the row counts wobble with the seed while the ranking does not.
+
+The objective is volume balance and it is met. What it does not equalize is
+structure. Measured on the sample, where the whole bank table is in reach:
+
+| Institution | Banks held | Load share | Largest bank | Its share of that institution's load |
+|---:|---:|---:|---:|---:|
+| **0** | 463 | 12.50% | **bank 70** | **33.6%** |
+| 1 | 475 | 12.50% | bank 12 | 9.9% |
+| 2 | 474 | 12.50% | bank 10 | 9.6% |
+| 3 | 474 | 12.50% | bank 1 | 7.8% |
+| 4 | 475 | 12.50% | bank 15 | 6.9% |
+| 5 | 476 | 12.50% | bank 220 | 6.2% |
+| 6 | 476 | 12.50% | bank 20 | 5.2% |
+| 7 | 476 | 12.50% | bank 3 | 4.7% |
+
+Loads are equal to within **one endpoint-slot** in 106,602. But bank 70 alone
+is 4.20% of all pre-cutoff volume — 3.4× the next largest bank — so
+institution 0 is *one hub bank plus 462 small ones*, while institutions 1-7
+are *many small ones*. Equal volume, different shape.
+
+**Why it surfaces in positives and not in rows.** On the full data institution
+0 holds **2.0%** more training rows than the cross-institution mean, and
+**44.2%** more positives:
+
+| Institution | Mean rows | vs mean | Mean positives | vs mean |
+|---:|---:|---:|---:|---:|
+| **0** | 2,039,593 | **1.020** | **2,304.8** | **1.442** |
+| 1 | 1,988,608 | 0.995 | 1,620.8 | 1.014 |
+| 2 | 1,994,870 | 0.998 | 1,368.8 | 0.857 |
+| 3 | 2,001,509 | 1.001 | 1,427.1 | 0.893 |
+| 4 | 1,987,610 | 0.994 | 1,467.4 | 0.918 |
+| 5 | 1,987,138 | 0.994 | 1,433.1 | 0.897 |
+| 6 | 1,998,644 | 1.000 | 1,611.1 | 1.008 |
+| 7 | 1,995,383 | 0.998 | 1,551.5 | 0.971 |
+
+The row spread across all 12 cells is only 1.026-1.030×; the positive spread
+is 1.89-2.42×. The asymmetry is the whole point: **reach, not ownership.**
+Measured on the sample, campaign-account *ownership* is not biased toward
+institution 0 at all — it owns 260 / 371 / 330 / 326 of the 3,114 campaign
+accounts in the four cells checked, mid-pack or below, because at target 1.0 a
+campaign's free accounts go to one uniformly drawn institution and at 0.25 the
+local search spreads them, and neither favours index 0. What is biased is
+*visible* campaign accounts per owned one — institution 0 against the other
+seven, in the four cells measured:
+
+| Cell | Institution 0 | The other seven |
+|---|---:|---:|
+| target 0.25, seed 1 | **2.80** | 2.36-2.63 |
+| target 0.25, seed 0 | **2.73** | 2.37-2.57 |
+| target 1.00, seed 0 | **2.03** | 1.51-1.85 |
+| target 1.00, seed 1 | 1.75 | 1.67-**1.90** |
+
+A hub bank is an endpoint of disproportionately many edges, so it sees campaign
+accounts that other institutions own. Visibility here is an endpoint rule, so
+**connectivity** — not volume, and not ownership — is what sets how much of the
+fraud an institution can see.
+
+The fourth row is the exception, and it is kept in view rather than dropped: at
+target 1.0, seed 1, institution 0 is **mid-pack** at 1.75 against institution
+2's 1.90. That is the expected interaction rather than a contradiction. At
+target 1.0 a whole campaign lands in one uniformly drawn institution, which adds
+seed-to-seed noise large enough to swamp the hub effect in a 1% sample; at 0.25
+every campaign is spread and the hub effect reads cleanly. On the **full** data,
+where the background is a hundred times denser, institution 0 is top in all
+three target-1.0 seeds as well as the other nine cells — 12 of 12. The sample
+shows the mechanism and the full data shows it dominating; neither on its own
+would have been enough.
+
+Reproduce both tables with `python scripts/run_institution_composition.py
+--config configs/local.yaml` (~4s), which writes
+`institution_composition.csv` and `institution_reach.csv` to
+`artifacts/federation_dev/`.
+
+**What this does and does not do to the per-institution mean.**
+
+- It **rules out one reading**: neither pooled mean is an estimate of "what a
+  typical bank achieves". There is no population of banks being sampled here
+  — K = 8 is a construction, and one of the eight is structurally unlike the
+  other seven. A mean over this panel is a mean over *this panel*.
+- It does **not** invalidate the mean as the floor, for one reason that
+  survives non-exchangeability: **the 4.2 and 4.3 comparisons are paired per
+  institution.** Institution 0 appears on both sides of every contrast, so its
+  atypicality cancels in the difference — which is the quantity the research
+  question asks about. Non-exchangeability biases the *level* of the floor, not
+  the *contrast* that is the result.
+- It does not corrupt an interval either, because nothing in Phase 4 treats
+  institutions as a random sample: the CIs are **per-seed bootstrap over
+  campaigns**, never over the eight institutions. No standard error is
+  computed across institutions anywhere, and none should be.
+- What it **requires**, added before sessions B and C so the CSVs carry it:
+  every pooled mean now prints its **median, min and max with the institutions
+  that produced them**, over exactly the institutions the mean averages (the
+  same denominator `n_institutions_in_mean` counts; undefined cells excluded
+  from the spread as they are from the mean, never read as 0). Institution 0 is
+  named as the hub holder in the report preamble, so the mean cannot be quoted
+  as a typical bank without its range beside it.
+
+A weighted mean was considered and rejected. Weighting by rows would move the
+figure by about 2% and would answer a question nobody asked ("what does the
+average *transaction* get?"); weighting by positives would weight each
+institution by how much fraud it already sees, which is the very thing the
+condition is measuring. The unweighted mean over a named, fixed panel,
+reported with its spread, is the honest estimator — and the union is reported
+beside it precisely because it does not average institutions at all.
+
+#### The full-data run, sessions B and C: proposed, not yet run
 
 Three CPU sessions in commit mode, cell by cell in
 [`scripts/kaggle/run_on_kaggle.md` §5l](backend/scripts/kaggle/run_on_kaggle.md),
 with the estimates below and no GPU quota consumed:
 
-| Session | Command | Inputs | Estimate |
-|---|---|---|---:|
-| **A** | `train-isolated` — 96 boosters | the IBM dataset | **2.5-4 h** |
-| **B** | `evaluate-isolated --targets 1.0,0.75` — 6 cells | dataset + A | **2.5-5.5 h** |
-| **C** | `evaluate-isolated` — evaluates 0.50 and 0.25, **reloads** B's six, writes the complete report | dataset + A + B | **2.5-5.5 h** |
+| Session | Command | Inputs | Estimate | Status |
+|---|---|---|---:|---|
+| **A** | `train-isolated` — 96 boosters | the IBM dataset | 2.5-4 h | **done, 2.25 h, exit 0** |
+| **B** | `evaluate-isolated --targets 1.0,0.75` — 6 cells | dataset + A | **2.5-5.5 h** | next |
+| **C** | `evaluate-isolated` — evaluates 0.50 and 0.25, **reloads** B's six, writes the complete report | dataset + A + B | **2.5-5.5 h** | after B |
 
 Three rather than one because the total is **7-14 CPU hours** against a
 12-hour session limit: one session would fit the optimistic end and lose
@@ -2895,9 +3100,11 @@ should take minutes hung. Each institution now owns one warm `CachingScorer`
 that the per-institution evaluation and the union pass **share**; the cell
 that hung now finishes in **151s** on the sample.
 
-Per **institution-cell** on the full data: one booster (~70-110s on a view of
-~2.1M rows), one evaluation across 3 splits and 7 operating points with the
-cache warm (~150-280s), and one oracle pass for its own ceiling (~40-90s).
+Per **institution-cell** on the full data: one booster (**measured 2026-11-15:
+83.8s mean, 79.1-111.1s** on a view of ~2.0M rows, against a 70-110s estimate),
+one evaluation across 3 splits and 7 operating points with the cache warm
+(~150-280s, still an estimate), and one oracle pass for its own ceiling
+(~40-90s, still an estimate).
 Across the frozen scope's **96 institution-cells** (8 institutions × 4 targets
 × 3 seeds, L = 48) that is **7-14 CPU hours** — one or two 12-hour sessions,
 resumable per institution in `train-isolated` and per `(target, seed)` in
@@ -2908,6 +3115,8 @@ rather than the run.
 
 | Date | Decision | Reason | Evidence |
 |---|---|---|---|
+| 2026-11-15 | **Recorded: the eight institutions are NOT exchangeable, and institution 0 is the hub holder by construction.** Neither pooled mean may be read as "what a typical bank achieves". The unweighted mean over the fixed panel is kept, and **every pooled mean now carries its median, min and max with the institutions that produced them**, over the same institutions the mean averages | Institution 0 held the most training positives in **12 of 12** full-data cells. The cause is deterministic, not stochastic: `assign_institutions` walks banks largest-volume-first into the least-loaded institution and breaks ties at the **lowest index**, so with every load at 0 the dataset's largest bank lands in institution 0 every time, and the assignment is seed-independent. Volume is balanced to within one endpoint-slot, but institution 0 is one hub bank plus small ones (bank 70 = 33.6% of its own load, against 4.7-9.9% elsewhere) and a hub is an endpoint of disproportionately many edges — so it holds 44.2% more positives on 2.0% more rows. **Reach, not ownership**: campaign-account ownership is not biased toward it. The mean survives as the floor because 4.2 and 4.3 are **paired per institution**, so institution 0 appears on both sides and its atypicality cancels in the contrast; it biases the level, not the result. No interval is affected, because the CIs are per-seed bootstrap over campaigns and no standard error is ever taken across institutions. Weighting was rejected: by rows it moves the figure ~2% and answers a question nobody asked, by positives it weights each institution by the fraud it already sees — the very quantity being measured | user question, 2026-11-15; `docs/reference/train_isolated.csv`; `federation.isolated.pooled_mean`; `tests/test_federation_isolated.py`; §[not exchangeable](#the-institutions-are-not-exchangeable-institution-0-holds-the-hub-bank) |
+| 2026-11-15 | **Recorded: the thin-positive tiers were the right decision in advance and did not bind on the full data.** They stay in the code unchanged | 96 of 96 cells came out `normal` — 0 `untrained`, 0 `thin` — and the thinnest cell carries 1,003 positives against a `MIN_POSITIVES_TO_TRAIN` of 10. Kept because the scheme cost nothing, because it is what separates "this bank caught nothing" from "this bank had nothing to learn from" should 4.2 or 4.3 produce such a cell, and because the alternative was discovering at evaluation time that a booster had never seen a positive. Recorded explicitly so the absence of `untrained` cells in the reports reads as a measured outcome rather than as machinery that was never built | `docs/reference/train_isolated.{md,csv}`; §[stage 4.1](#stage-41-the-isolated-condition--approved-and-implemented-2026-11-14) §8 |
 | 2026-11-14 | **PRIMARY comparison points for all of Phase 4, designated 2026-11-14 before any federated arm existed: `f1` and `total_10`.** Every condition-to-condition comparison is made at these two; the other five points are reported and are not comparison points. The designation travels in the data as a `primary` column | They are the only two points where the threshold is determined by something: `f1` by the frozen selection rule on validation, `total_10` by a budget that actually binds (5-7 of 8 institutions, against 0 of 8 at the per-institution budgets). Fixed in advance for the same reason equal tuning effort was — a comparison point chosen after seeing which arm it favoured is not a comparison point, and the choice would be invisible in the result | user decision, 2026-11-14; `federation.isolated.PRIMARY_POINTS`; §[stage 4.1](#stage-41-the-isolated-condition--approved-and-implemented-2026-11-14) §5 |
 | 2026-11-14 | **The per-institution full-budget points are renamed `uncapped_10/50/100`** (from `budget_*`) in the schema, the reports and every table, with the binding count kept beside them | For an isolated institution they are **not budgeted operating points**: an institution seeing a fraction of the traffic cannot raise 10 alarms a day even at the grid's most sensitive threshold, so the budget never binds and the threshold is set by the grid floor. Measured: binding in **0 of 8** institutions at every target. A name reading `budget_10` invites a reader to compare it against a centralized model's genuinely budgeted 10/day, which is the error the binding count exists to prevent; the name should not have to be corrected by a footnote | user decision, 2026-11-14; `phase4_isolated_taus.csv` |
 | 2026-11-14 | **Recorded before 4.2 is designed: any benefit from `fedavg` or `fedavg_exchange` must come from improving the SCORER** — not from assembling clusters that could not otherwise be assembled, and not from relieving alert pressure | Two stage 4.1 findings combine. The isolated **union** already reaches the centralized ceiling, by the argument from the frozen visibility rule, so there is no structural headroom. And isolated institutions are **evidence-limited, not alert-limited**: each reaches 0.6-0.9 of its own ceiling while holding a fraction of the evidence, and the alert budget binds in 0 of 8 at the per-institution budgets. Written down before the conditions are designed so the claim cannot be adjusted afterwards to fit a result; a null result stays an expected possible outcome, reported as a finding | user decision, 2026-11-14; §[stage 4.1](#stage-41-the-isolated-condition--approved-and-implemented-2026-11-14) |
@@ -3112,6 +3321,8 @@ project-root/
       compare_models_coverage.csv     which campaigns each model finds that the other misses
       compare_models_edge_ap.csv      edge ranking compared: where the GNN is and is not behind
       compare_models_clusters.csv     false-alarm cluster shape: the extraction mechanism
+      --- phase 4 stage 4.1, session A (2026-11-15) ---
+      train_isolated.{md,csv,json}    the 96 isolated boosters: rows, positives, class weights, tiers, timing
   backend/
     requirements.txt               Python dependencies: pandas, numpy, pyarrow, pyyaml, pytest, fastapi, uvicorn, pydantic
     pyproject.toml                 setuptools packaging for `fraudcamp` (src/ layout) + pytest `fulldata` marker
@@ -3173,6 +3384,9 @@ project-root/
                                     ceiling (upper bound on its oracle ceiling), and the union
       run_isolated.py             stage 4.1 locally on the 1% sample: the isolated condition
                                     end to end, per institution and pooled two ways
+      run_institution_composition.py  why institution 0 is not like the other seven: bank
+                                    composition per institution, and campaign accounts
+                                    owned against campaign accounts visible
       run_pipeline.py             runs the pipeline end to end; prints every Verified-numbers value; --export writes artifacts
       kaggle/
         run_on_kaggle.md          the exact notebook cells for running this repo on Kaggle
@@ -3352,6 +3566,16 @@ project-root/
   §[the 4.1 proposal](#stage-41-the-isolated-condition--approved-and-implemented-2026-11-14)).
   Writes `artifacts/federation_dev/structural_ceiling.csv`. Under 10 seconds
   on the sample.
+- **Why institution 0 is not like the other seven (stage 4.1):**
+  ```
+  cd backend
+  python scripts/run_institution_composition.py --config configs/local.yaml
+  ```
+  ~4s. Prints and writes the bank composition of each institution (institution
+  0 holds the dataset's largest bank, deterministically) and campaign accounts
+  owned against campaign accounts visible. Evidence for
+  [not exchangeable](#the-institutions-are-not-exchangeable-institution-0-holds-the-hub-bank);
+  the full-data counterpart is `docs/reference/train_isolated.csv`.
 - **Run the isolated condition on the sample (stage 4.1):**
   ```
   cd backend
@@ -4694,6 +4918,58 @@ Tagged points in the repository, newest first. Check one out with
 | `v0.1-data-pipeline` | 2026-10-08 | Phase 2 complete, plus the stage 3.0 Kaggle runner. The research pipeline (campaign ground truth, splits, topology groups, institutions, visibility), the artifact export, the read-only FastAPI server, and the full React frontend — 69 backend tests and 48 frontend tests passing. **No models and no experiment results**: the four conditions are defined and the result schema is fixed, but nothing has been trained or run, and the full-data regression numbers are still unverified (that is what stage 3.0's Kaggle run is for). |
 
 ## Changelog
+
+- **2026-11-15 (stage 4.1 — session A: 96 boosters trained on the full data)**
+  — the first full-data numbers of Phase 4, and one finding that had to be
+  settled before any pooled number is built.
+
+  *Session A ran clean.* Kaggle commit mode, CPU, the IBM dataset as the only
+  input: pre-flight passed, `train-isolated` exited **0**, 96 institution-cells
+  written in **2.25 h** (against a 2.5-4 h estimate) at a **5,353 MB** peak,
+  83.8s mean per booster. Evidence committed to
+  [`docs/reference/train_isolated.{md,csv,json}`](docs/reference/train_isolated.md);
+  the ~170 MB of boosters stays out of the repo and is attached to sessions B
+  and C from session A's Kaggle output. Coming in under the estimate does not
+  license merging B and C — training was the half of the estimate anchored on
+  a measured Phase 3 number, evaluation is the half that is not.
+
+  *The thin-positive tiers never fired, and are recorded as right in advance
+  and not binding:* 96 of 96 cells `normal`, 0 `untrained`, 0 `thin`, thinnest
+  cell 1,003 positives against a threshold of 10. Kept in the code unchanged.
+
+  *The stage 4.0 prediction is confirmed in direction, weaker in magnitude, and
+  narrower than the sample suggested.* The thinnest cell of all 96 is at target
+  **1.0** (seed 1, institution 2), not at 0.25, as predicted. But the spread
+  across institutions is 2.42× at target 1.0 and then 1.93 / 1.89 / 1.91 at
+  0.75 / 0.50 / 0.25 — flat, where the sample showed a monotone decline. So
+  full visibility concentrates campaigns and starves some views, and below full
+  visibility the degree of fragmentation does not measurably change how
+  unevenly positives are spread. Magnitudes run about half the stage 4.0
+  sample's, the expected direction for a 1% background.
+
+  *Recorded: the eight institutions are not exchangeable.* Institution 0 held
+  the most positives in **12 of 12** cells, deterministically —
+  `assign_institutions` breaks ties at the lowest index with every load at 0,
+  so the dataset's largest bank is always institution 0's, and the assignment
+  is seed-independent. Volume is balanced to one endpoint-slot, but institution
+  0 is one hub bank plus small ones and holds **44.2%** more positives on
+  **2.0%** more rows: reach, not ownership. Consequences, in full under
+  [not exchangeable](#the-institutions-are-not-exchangeable-institution-0-holds-the-hub-bank):
+  neither pooled mean may be read as "a typical bank"; the mean survives as the
+  floor because 4.2 and 4.3 are paired per institution, so the atypicality
+  cancels in the contrast; no interval is affected, since the CIs bootstrap
+  over campaigns and no standard error is ever taken across institutions; and
+  weighting was considered and rejected. New:
+  `scripts/run_institution_composition.py` makes both sample-measured tables
+  reproducible in ~4s.
+
+  *Added before B and C so the CSVs carry it:* every pooled mean now reports
+  its **median, min and max with the institutions that produced them**, over
+  exactly the institutions the mean averages, with undefined cells excluded
+  from the spread as they already are from the mean. Two tests pin the
+  denominator and the tie-breaking (backend **413 passed / 25 skipped**). A
+  stale `budget_*` in the report preamble was corrected to `uncapped_*` at the
+  same time.
 
 - **2026-11-14 (stage 4.1 — naming, primary points, and the 4.2 constraint)**
   — three things fixed before any federated arm exists.

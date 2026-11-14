@@ -838,6 +838,79 @@ def test_pooled_means_agree_with_the_per_institution_rows(cell):
         assert row["n_trained_in_mean"] == expected.n_trained
 
 
+def test_the_pooled_spread_averages_the_same_institutions_as_the_mean(cell):
+    """The eight institutions are not exchangeable -- institution 0 always
+    holds the dataset's largest bank -- so every pooled mean carries its
+    median, min and max. The spread would mislead worse than no spread at all
+    if it were taken over a different set from the mean, so it is pinned to
+    the same `usable` set that `n_institutions_in_mean` counts."""
+    per_institution = {}
+    for row in cell["summary_rows"]:
+        if row.get("test_subset") != "all":
+            continue
+        key = (row["metric"] if "metric" in row else "campaign_recall",
+               row["operating_point"], row["eval_split"])
+        if row.get("defined"):
+            per_institution.setdefault(key, {})[row["institution"]] = row.get(
+                "campaign_recall"
+            )
+
+    seen_a_spread = False
+    for row in cell["pooled_rows"]:
+        if row["metric"] != "campaign_recall":
+            continue
+        values = per_institution.get(
+            ("campaign_recall", row["operating_point"], row["eval_split"]), {}
+        )
+        values = {i: v for i, v in values.items() if v is not None}
+        if not values:
+            assert row["min_over_institutions"] is None
+            assert row["max_over_institutions"] is None
+            assert row["median_over_institutions"] is None
+            continue
+        seen_a_spread = True
+        # same denominator as the mean
+        assert row["n_institutions_in_mean"] == len(values)
+        assert row["min_over_institutions"] == min(values.values())
+        assert row["max_over_institutions"] == max(values.values())
+        # the named institutions really hold those values
+        assert values[row["min_institution"]] == row["min_over_institutions"]
+        assert values[row["max_institution"]] == row["max_over_institutions"]
+        # and the mean lies inside its own range
+        assert (
+            row["min_over_institutions"]
+            <= row["mean_over_all_institutions"]
+            <= row["max_over_institutions"]
+        )
+        assert (
+            row["min_over_institutions"]
+            <= row["median_over_institutions"]
+            <= row["max_over_institutions"]
+        )
+    assert seen_a_spread, "no pooled row carried a spread -- the fixture is wrong"
+
+
+def test_pooled_spread_breaks_ties_at_the_lowest_institution():
+    """Deterministic argmin/argmax, so a rerun names the same institution."""
+    tiers = {i: isolated.TIER_NORMAL for i in range(4)}
+    flat = isolated.pooled_mean({0: 0.5, 1: 0.5, 2: 0.5, 3: 0.5}, tiers)
+    assert flat.argmin == 0 and flat.argmax == 0
+    assert flat.minimum == flat.maximum == flat.median == 0.5
+
+    # an undefined cell is excluded from the spread as it is from the mean,
+    # never read as 0 -- otherwise the range would report a measurement that
+    # was never made
+    with_none = isolated.pooled_mean({0: 0.4, 1: None, 2: 0.8}, tiers)
+    assert with_none.n_all == 2
+    assert with_none.minimum == 0.4 and with_none.argmin == 0
+    assert with_none.maximum == 0.8 and with_none.argmax == 2
+    assert with_none.median == 0.6000000000000001 or abs(with_none.median - 0.6) < 1e-9
+
+    empty = isolated.pooled_mean({0: None}, tiers)
+    assert empty.over_all is None and empty.minimum is None
+    assert empty.argmin is None and empty.median is None
+
+
 def test_the_matched_total_budget_is_an_eighth_of_the_per_institution_one(cell):
     by_point = {row["operating_point"]: row for row in cell["tau_rows"]}
     for budget in evaluation.FALSE_ALARM_BUDGETS:

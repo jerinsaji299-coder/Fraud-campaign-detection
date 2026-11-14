@@ -1036,7 +1036,7 @@ further session.
 
 Everything in this document other than 5h runs on CPU.
 
-## 5l. Stage 4.1: the isolated condition on the full data — PROPOSED, not yet run
+## 5l. Stage 4.1: the isolated condition on the full data — session A DONE, B and C proposed
 
 The floor every federated condition is measured against: each institution
 trained on its own view, scoring its own view, clustering inside it. **CPU
@@ -1050,11 +1050,19 @@ Estimated **7-14 CPU hours** in total, against a 12-hour session limit. One
 session would fit the optimistic end and lose everything at the pessimistic
 end, so the work is split where it is already resumable:
 
-| Session | Command | Inputs | Estimate |
-|---|---|---|---:|
-| **A** | `train-isolated` (all 12 cells, 96 boosters) | IBM dataset | **2.5-4 h** |
-| **B** | `evaluate-isolated --targets 1.0,0.75` (6 cells) | dataset + **A** | **2.5-5.5 h** |
-| **C** | `evaluate-isolated` (no `--targets`: evaluates 0.50 and 0.25, **reloads** B's six) | dataset + **A** + **B** | **2.5-5.5 h** |
+| Session | Command | Inputs | Estimate | Status |
+|---|---|---|---:|---|
+| **A** | `train-isolated` (all 12 cells, 96 boosters) | IBM dataset | 2.5-4 h | **done 2026-11-15: 2.25 h, exit 0** |
+| **B** | `evaluate-isolated --targets 1.0,0.75` (6 cells) | dataset + **A** | **2.5-5.5 h** | next |
+| **C** | `evaluate-isolated` (no `--targets`: evaluates 0.50 and 0.25, **reloads** B's six) | dataset + **A** + **B** | **2.5-5.5 h** | after B |
+
+**Session A, measured.** 8,094s over the instrumented steps (8,130s in the
+log), peak **5,353 MB**, 83.8s mean per booster (79.1-111.1s), 96 of 96 cells
+`normal`. It beat the optimistic end of its estimate, which does **not** mean
+B and C can be merged: training was the half of the estimate anchored on a
+measured Phase 3 number, evaluation is the half that is not, and it runs over
+seven operating points. Evidence:
+`docs/reference/train_isolated.{md,csv,json}`.
 
 All three in **commit mode** (Save Version → Save & Run All), Internet **ON**,
 Accelerator **None**.
@@ -1077,16 +1085,18 @@ output attached as an extra input and the copy cell below will pick it up.
 Measured on the full data in stage 3.3, scaled by the measured per-institution
 view size of **~23.5%** of the central row count:
 
-| | Central, measured | Per institution, estimated |
-|---|---:|---:|
-| build pipeline | 35.7s (3.2 GB) | once per session |
-| build the training matrix, L = 48 | 114.0s (15.9 GB peak) | ~30s, ~1.5-4 GB |
-| train one booster, L = 48 | ~235s | ~60-110s |
-| evaluate one model, 3 splits | ~286s | ~150-280s, now over **7** operating points |
+| | Central, measured | Per institution, estimated | Per institution, **measured in A** |
+|---|---:|---:|---:|
+| build pipeline | 35.7s (3.2 GB) | once per session | **35.1s (3,168 MB)** |
+| build the training matrix, L = 48 | 114.0s (15.9 GB peak) | ~30s, ~1.5-4 GB | folded into the booster time |
+| train one booster, L = 48 | ~235s | ~60-110s | **83.8s mean, 79.1-111.1s** |
+| evaluate one model, 3 splits | ~286s | ~150-280s, now over **7** operating points | still an estimate — this is what B and C measure |
 
 Memory is not a constraint here: the central matrix peaked at 15.9 GB and an
 institution's is roughly a quarter of it, inside a 30 GB CPU notebook with
-room to spare.
+room to spare. Session A confirmed it — **5,353 MB peak**, which is the
+pipeline's 3,168 MB plus the institution's matrix, and above the 1.5-4 GB
+figure above only because that figure was for the matrix alone.
 
 ### Session A — training, CPU, commit mode
 
@@ -1152,14 +1162,18 @@ print("train-isolated exit code:", code)
 
 **Inputs:** the IBM dataset **and session A's output**.
 
+**Cell order in B and C matters:** the input check comes **first**, then the
+pre-flight, then the long cell. A missing booster is both the likelier failure
+and the cheaper one to detect, and `evaluate-isolated` never trains, so it
+cannot paper over one. Paste B1-B6 in order.
+
 ```python
-# B1, B2 - identical to A1 and A2
+# B1 - identical to A1 (dataset path)
 ```
 
-**Cell order in B and C matters:** the input check (B3 / C3) comes **first**,
-then the pre-flight (A3), then the long cell. A missing booster is both the
-likelier failure and the cheaper one to detect, and `evaluate-isolated` never
-trains, so it cannot paper over one.
+```python
+# B2 - identical to A2 (clone and install, ~1-2 min)
+```
 
 ```python
 # B3 - bring A's boosters into /kaggle/working, where the runner looks, and
@@ -1231,7 +1245,14 @@ print(f"  spot-loaded {len(sample)} boosters, all at L = 48 with 66 features")
 ```
 
 ```python
-# B4 - evaluate targets 1.00 and 0.75 (six cells). ~2.5-5.5 h.
+# B4 - the pre-flight, identical to A3: frozen Phase 4 scope and the 22-point
+#      tau grid. It runs AFTER B3 because a missing booster is the likelier
+#      and cheaper failure, and because the boosters B3 just loaded were
+#      trained against this same grid.
+```
+
+```python
+# B5 - evaluate targets 1.00 and 0.75 (six cells). ~2.5-5.5 h.
 #      Exit 3 is NOT a crash: it means a chosen tau sat at an edge of the
 #      grid. Read the message before using anything.
 import subprocess
@@ -1244,7 +1265,7 @@ print("evaluate-isolated exit code:", code)
 ```
 
 ```python
-# B5 - what came out
+# B6 - what came out
 !ls -la /kaggle/working/phase4_isolated*  /kaggle/working/isolated_cells | head -40
 ```
 
@@ -1253,15 +1274,15 @@ print("evaluate-isolated exit code:", code)
 **Inputs:** the IBM dataset, **session A's output**, **session B's output**.
 
 ```python
-# C1, C2 - as A1 and A2
-# C3    - as B3, VERBATIM: copy A's boosters and assert all 96 are present,
-#         complete and loadable. Run it before C4 and before the pre-flight,
-#         so a missing input fails in the first minute rather than after the
-#         six cells C does evaluate.
+# C1, C2 - as B1 and B2 (dataset path; clone and install)
+# C3     - as B3, VERBATIM: copy A's boosters and assert all 96 are present,
+#          complete and loadable. Run it FIRST, so a missing input fails in
+#          the first minute rather than after the six cells C does evaluate.
+# C4     - as B4, VERBATIM: the scope and grid pre-flight, after C3.
 ```
 
 ```python
-# C4 - bring B's finished cells across, so this session reloads them in
+# C5 - bring B's finished cells across, so this session reloads them in
 #      seconds instead of re-evaluating them, and writes ONE complete report.
 import pathlib, shutil, subprocess
 
@@ -1282,7 +1303,7 @@ print(len(done), "cells already evaluated:", done)
 ```
 
 ```python
-# C5 - all four targets: the six from B load in seconds, the six at 0.50 and
+# C6 - all four targets: the six from B load in seconds, the six at 0.50 and
 #      0.25 are evaluated. ~2.5-5.5 h. This writes the complete report.
 import subprocess
 code = subprocess.run(
@@ -1294,7 +1315,11 @@ print("evaluate-isolated exit code:", code)
 ```
 
 ```python
-# C6 - the headline, read back from the files rather than from the log
+# C7 - the headline, read back from the files rather than from the log.
+#      The mean NEVER prints alone: the eight institutions are not
+#      exchangeable (institution 0 holds the dataset's largest bank by
+#      construction and carried 44% more training positives), so the median
+#      and the range with their institutions print beside it.
 import pandas as pd
 pooled = pd.read_csv("/kaggle/working/phase4_isolated_pooled.csv")
 union = pd.read_csv("/kaggle/working/phase4_isolated_union.csv")
@@ -1302,7 +1327,10 @@ print("cells:", pooled[["visibility_target", "seed"]].drop_duplicates().shape[0]
 print(pooled[(pooled.eval_split == "test") & (pooled.metric == "campaign_recall")]
       [["visibility_target", "seed", "operating_point",
         "mean_over_all_institutions", "mean_over_trained_institutions",
-        "n_institutions_in_mean", "n_binding_budgets", "n_cells_with_a_budget"]]
+        "n_institutions_in_mean", "median_over_institutions",
+        "min_over_institutions", "min_institution",
+        "max_over_institutions", "max_institution",
+        "n_binding_budgets", "n_cells_with_a_budget"]]
       .to_string(index=False))
 print(union[(union.eval_split == "test") & (union.test_subset == "all")]
       [["visibility_target", "seed", "operating_point", "campaign_recall",
@@ -1328,13 +1356,23 @@ session A. They go to `docs/reference/`, and
 
 ### What to expect, and what would be surprising
 
-* **No institution untrained.** Measured on the sample at every target; on
-  the full data each institution's pooled L = 48 matrix should hold roughly
-  2M rows with several hundred to a couple of thousand positives. An
-  `untrained` institution would be a real finding and is reported, not an
-  error.
-* **The thinnest positives at the 100 bin, not the 25 bin** — the stage 4.0
-  finding, which the full data should reproduce in shape if not in size.
+* **No institution untrained — SETTLED by session A.** 96 of 96 cells came
+  out `normal`, thinnest 1,003 positives on ~2.0M rows. The prediction of
+  "roughly 2M rows with several hundred to a couple of thousand positives"
+  held: mean 1,598 positives per cell, rate 0.080%, class weights 435-4,015.
+* **The thinnest positives at the 100 bin, not the 25 bin — CONFIRMED by
+  session A**, and narrower than the sample suggested. The thinnest cell of
+  all 96 is target 1.0, seed 1, institution 2. But the cross-institution
+  spread is 2.42x at target 1.0 and then flat at 1.93 / 1.89 / 1.91 for 0.75 /
+  0.50 / 0.25, where the sample showed a monotone decline. Full visibility is
+  the outlier; below it, the degree of fragmentation does not measurably
+  change how unevenly positives are spread.
+* **Institution 0 will top almost everything, and that is structural.** It
+  held the most training positives in 12 of 12 cells because
+  `assign_institutions` gives the dataset's largest bank to institution 0
+  every time. Expect it at or near the top of the per-institution tables too,
+  and read the pooled mean with the range beside it rather than as a typical
+  bank.
 * **The union's oracle ceiling equal to the centralized ceiling**, exactly,
   at every target. This is the stage 4.1 argument from the frozen visibility
   rule, and this run is the first chance to confirm it on the full data. A

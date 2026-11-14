@@ -1,0 +1,233 @@
+# Stage 4.1: training the isolated condition
+
+One booster per institution per (visibility target, seed), on that
+institution's **own view** of the rule-3 training windows, with the
+feature spec fitted on those same views - an institution
+standardises with its own statistics, which is what 'alone' means.
+
+Hyperparameters are the frozen Phase 3 configuration, identical for
+every institution, target and seed: tuning per institution would
+make the condition a comparison of tuning effort.
+
+**Tiers.** 0 positives cannot train (XGBoost needs both classes) and
+is recorded as `untrained` with recall 0; 1-9
+positives trains and is flagged `thin`. `MIN_POSITIVES_TO_TRAIN` is a
+reporting threshold, never a gate.
+
+- untrained: **0** cell(s)
+- thin: **0** cell(s)
+
+## Per institution
+
+| visibility_target | seed | lookback_h | skipped | directory | institution | tier | trained | n_rows | n_positive | positive_rate | class_weight_min | class_weight_max | n_windows | train_seconds |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| 1.0 | 0 | 48 | False | /kaggle/working/models/isolated/t100_s0_i0 | 0 | normal | True | 2035773 | 1953 | 0.0009593407516456894 | 638.04 | 1375.54 | 9 | 88.21 |
+| 1.0 | 0 | 48 | False | /kaggle/working/models/isolated/t100_s0_i1 | 1 | normal | True | 1997321 | 1486 | 0.0007439965834234957 | 583.1 | 2457.18 | 9 | 86.11 |
+| 1.0 | 0 | 48 | False | /kaggle/working/models/isolated/t100_s0_i2 | 2 | normal | True | 1994141 | 1132 | 0.0005676629686667092 | 710.11 | 3466.14 | 9 | 86.62 |
+| 1.0 | 0 | 48 | False | /kaggle/working/models/isolated/t100_s0_i3 | 3 | normal | True | 2002302 | 1276 | 0.0006372665062513047 | 608.51 | 3160.62 | 9 | 84.53 |
+| 1.0 | 0 | 48 | False | /kaggle/working/models/isolated/t100_s0_i4 | 4 | normal | True | 1986680 | 1434 | 0.0007218072361930457 | 572.65 | 2545.86 | 9 | 80.44 |
+| 1.0 | 0 | 48 | False | /kaggle/working/models/isolated/t100_s0_i5 | 5 | normal | True | 1984649 | 1239 | 0.0006242917513373901 | 615.06 | 3397.32 | 9 | 80.21 |
+| 1.0 | 0 | 48 | False | /kaggle/working/models/isolated/t100_s0_i6 | 6 | normal | True | 1999022 | 1496 | 0.0007483659509500146 | 556.89 | 2306.12 | 9 | 80.94 |
+| 1.0 | 0 | 48 | False | /kaggle/working/models/isolated/t100_s0_i7 | 7 | normal | True | 1990956 | 1395 | 0.000700668422607029 | 565.66 | 2637.9 | 9 | 81.55 |
+| 1.0 | 1 | 48 | False | /kaggle/working/models/isolated/t100_s1_i0 | 0 | normal | True | 2042260 | 2426 | 0.001187899679766533 | 484.98 | 1214.23 | 9 | 80.07 |
+| 1.0 | 1 | 48 | False | /kaggle/working/models/isolated/t100_s1_i1 | 1 | normal | True | 1983202 | 1415 | 0.0007134926245536259 | 660.06 | 2306.23 | 9 | 93.55 |
+| 1.0 | 1 | 48 | False | /kaggle/working/models/isolated/t100_s1_i2 | 2 | normal | True | 1991721 | 1003 | 0.0005035845884036971 | 731.04 | 3972.72 | 9 | 84.1 |
+| 1.0 | 1 | 48 | False | /kaggle/working/models/isolated/t100_s1_i3 | 3 | normal | True | 2008772 | 1381 | 0.0006874846921402728 | 531.9 | 3196.4 | 9 | 83.49 |
+| 1.0 | 1 | 48 | False | /kaggle/working/models/isolated/t100_s1_i4 | 4 | normal | True | 1985243 | 1120 | 0.0005641626742922655 | 732.53 | 3191.27 | 9 | 81.04 |
+| 1.0 | 1 | 48 | False | /kaggle/working/models/isolated/t100_s1_i5 | 5 | normal | True | 1986510 | 1086 | 0.0005466874065572285 | 678.33 | 4014.69 | 9 | 81.39 |
+| 1.0 | 1 | 48 | False | /kaggle/working/models/isolated/t100_s1_i6 | 6 | normal | True | 1997796 | 1469 | 0.0007353103119637841 | 569.65 | 2291.17 | 9 | 83.19 |
+| 1.0 | 1 | 48 | False | /kaggle/working/models/isolated/t100_s1_i7 | 7 | normal | True | 1996469 | 1555 | 0.0007788751039961051 | 528.96 | 2320.44 | 9 | 82.99 |
+| 1.0 | 2 | 48 | False | /kaggle/working/models/isolated/t100_s2_i0 | 0 | normal | True | 2040378 | 2213 | 0.0010846029510218204 | 538.14 | 1257.84 | 9 | 80.41 |
+| 1.0 | 2 | 48 | False | /kaggle/working/models/isolated/t100_s2_i1 | 1 | normal | True | 1983208 | 1233 | 0.0006217199607907995 | 732.59 | 2647.45 | 9 | 81.86 |
+| 1.0 | 2 | 48 | False | /kaggle/working/models/isolated/t100_s2_i2 | 2 | normal | True | 2001183 | 1422 | 0.0007105796921121157 | 545.79 | 2893.02 | 9 | 83.37 |
+| 1.0 | 2 | 48 | False | /kaggle/working/models/isolated/t100_s2_i3 | 3 | normal | True | 1999787 | 1290 | 0.0006450686998165304 | 611.96 | 3054.15 | 9 | 83.3 |
+| 1.0 | 2 | 48 | False | /kaggle/working/models/isolated/t100_s2_i4 | 4 | normal | True | 1992774 | 1297 | 0.000650851526565481 | 631.91 | 2718.69 | 9 | 82.06 |
+| 1.0 | 2 | 48 | False | /kaggle/working/models/isolated/t100_s2_i5 | 5 | normal | True | 1987628 | 1418 | 0.0007134131738937065 | 541.47 | 3095.52 | 9 | 82.5 |
+| 1.0 | 2 | 48 | False | /kaggle/working/models/isolated/t100_s2_i6 | 6 | normal | True | 1994379 | 1417 | 0.0007104968514008622 | 637.59 | 2374.04 | 9 | 83.21 |
+| 1.0 | 2 | 48 | False | /kaggle/working/models/isolated/t100_s2_i7 | 7 | normal | True | 1992663 | 1161 | 0.0005826374053214216 | 617.9 | 3464.49 | 9 | 84.56 |
+| 0.75 | 0 | 48 | False | /kaggle/working/models/isolated/t075_s0_i0 | 0 | normal | True | 2040779 | 2252 | 0.0011035001830183473 | 489.45 | 1245.72 | 9 | 81.97 |
+| 0.75 | 0 | 48 | False | /kaggle/working/models/isolated/t075_s0_i1 | 1 | normal | True | 1989316 | 1736 | 0.0008726617591172042 | 522.56 | 2015.34 | 9 | 84.09 |
+| 0.75 | 0 | 48 | False | /kaggle/working/models/isolated/t075_s0_i2 | 2 | normal | True | 1994354 | 1635 | 0.0008198143358701614 | 519.98 | 2289.32 | 9 | 84.46 |
+| 0.75 | 0 | 48 | False | /kaggle/working/models/isolated/t075_s0_i3 | 3 | normal | True | 2000540 | 1370 | 0.0006848150999230208 | 567.86 | 2892.38 | 9 | 83.97 |
+| 0.75 | 0 | 48 | False | /kaggle/working/models/isolated/t075_s0_i4 | 4 | normal | True | 1986746 | 1510 | 0.0007600367636325932 | 513.65 | 2635.11 | 9 | 82.38 |
+| 0.75 | 0 | 48 | False | /kaggle/working/models/isolated/t075_s0_i5 | 5 | normal | True | 1989657 | 1494 | 0.00075088319242965 | 513.13 | 2799.28 | 9 | 81.84 |
+| 0.75 | 0 | 48 | False | /kaggle/working/models/isolated/t075_s0_i6 | 6 | normal | True | 1999351 | 1612 | 0.0008062616318995514 | 511.31 | 2212.53 | 9 | 82.73 |
+| 0.75 | 0 | 48 | False | /kaggle/working/models/isolated/t075_s0_i7 | 7 | normal | True | 1994007 | 1602 | 0.0008034074103049789 | 456.9 | 2717.44 | 9 | 90.14 |
+| 0.75 | 1 | 48 | False | /kaggle/working/models/isolated/t075_s1_i0 | 0 | normal | True | 2039493 | 2253 | 0.0011046863117451248 | 504.08 | 1245.15 | 9 | 81.37 |
+| 0.75 | 1 | 48 | False | /kaggle/working/models/isolated/t075_s1_i1 | 1 | normal | True | 1988253 | 1811 | 0.0009108498767510975 | 461.06 | 2035.58 | 9 | 95.94 |
+| 0.75 | 1 | 48 | False | /kaggle/working/models/isolated/t075_s1_i2 | 2 | normal | True | 1995853 | 1523 | 0.0007630822510475471 | 511.87 | 2662.32 | 9 | 83.92 |
+| 0.75 | 1 | 48 | False | /kaggle/working/models/isolated/t075_s1_i3 | 3 | normal | True | 2000247 | 1490 | 0.0007449080038615232 | 512.67 | 2806.2 | 9 | 83.04 |
+| 0.75 | 1 | 48 | False | /kaggle/working/models/isolated/t075_s1_i4 | 4 | normal | True | 1987892 | 1480 | 0.0007445072468725665 | 594.47 | 2401.5 | 9 | 81.84 |
+| 0.75 | 1 | 48 | False | /kaggle/working/models/isolated/t075_s1_i5 | 5 | normal | True | 1985560 | 1555 | 0.0007831543745845001 | 466.19 | 2858.01 | 9 | 81.34 |
+| 0.75 | 1 | 48 | False | /kaggle/working/models/isolated/t075_s1_i6 | 6 | normal | True | 1998031 | 1641 | 0.0008213085782953317 | 528.13 | 2100.57 | 9 | 83.26 |
+| 0.75 | 1 | 48 | False | /kaggle/working/models/isolated/t075_s1_i7 | 7 | normal | True | 1997272 | 1437 | 0.0007194813725922158 | 532.35 | 2802.59 | 9 | 81.91 |
+| 0.75 | 2 | 48 | False | /kaggle/working/models/isolated/t075_s2_i0 | 0 | normal | True | 2040018 | 2430 | 0.0011911659603003502 | 461.63 | 1189.77 | 9 | 79.13 |
+| 0.75 | 2 | 48 | False | /kaggle/working/models/isolated/t075_s2_i1 | 1 | normal | True | 1988326 | 1675 | 0.0008424171891329691 | 502.87 | 2128.27 | 9 | 83.31 |
+| 0.75 | 2 | 48 | False | /kaggle/working/models/isolated/t075_s2_i2 | 2 | normal | True | 1992943 | 1257 | 0.0006307255149796056 | 572.84 | 3464.11 | 9 | 82.52 |
+| 0.75 | 2 | 48 | False | /kaggle/working/models/isolated/t075_s2_i3 | 3 | normal | True | 1998766 | 1446 | 0.0007234463664080738 | 509.47 | 2912.24 | 9 | 82.22 |
+| 0.75 | 2 | 48 | False | /kaggle/working/models/isolated/t075_s2_i4 | 4 | normal | True | 1985696 | 1489 | 0.0007498630203213382 | 625.44 | 2202.52 | 9 | 80.43 |
+| 0.75 | 2 | 48 | False | /kaggle/working/models/isolated/t075_s2_i5 | 5 | normal | True | 1987751 | 1440 | 0.0007244368132628282 | 532.55 | 2882.25 | 9 | 81.94 |
+| 0.75 | 2 | 48 | False | /kaggle/working/models/isolated/t075_s2_i6 | 6 | normal | True | 2001199 | 1660 | 0.0008295027131234824 | 498.23 | 2240.46 | 9 | 82.48 |
+| 0.75 | 2 | 48 | False | /kaggle/working/models/isolated/t075_s2_i7 | 7 | normal | True | 1999462 | 1739 | 0.000869733958434819 | 435.23 | 2309.07 | 9 | 82.09 |
+| 0.5 | 0 | 48 | False | /kaggle/working/models/isolated/t050_s0_i0 | 0 | normal | True | 2038532 | 2302 | 0.001129243985377713 | 479.38 | 1232.22 | 9 | 79.39 |
+| 0.5 | 0 | 48 | False | /kaggle/working/models/isolated/t050_s0_i1 | 1 | normal | True | 1989428 | 1694 | 0.0008515010344681989 | 537.6 | 2059.64 | 9 | 83.45 |
+| 0.5 | 0 | 48 | False | /kaggle/working/models/isolated/t050_s0_i2 | 2 | normal | True | 1994772 | 1401 | 0.0007023359060584367 | 577.13 | 2698.69 | 9 | 83.91 |
+| 0.5 | 0 | 48 | False | /kaggle/working/models/isolated/t050_s0_i3 | 3 | normal | True | 2002346 | 1545 | 0.0007715949191598255 | 509.89 | 2597.42 | 9 | 84.56 |
+| 0.5 | 0 | 48 | False | /kaggle/working/models/isolated/t050_s0_i4 | 4 | normal | True | 1986672 | 1615 | 0.0008129172807589778 | 492.23 | 2399.75 | 9 | 81.17 |
+| 0.5 | 0 | 48 | False | /kaggle/working/models/isolated/t050_s0_i5 | 5 | normal | True | 1987725 | 1431 | 0.0007199184997924763 | 512.31 | 3020.59 | 9 | 80.15 |
+| 0.5 | 0 | 48 | False | /kaggle/working/models/isolated/t050_s0_i6 | 6 | normal | True | 2000157 | 1763 | 0.000881430807681597 | 473.23 | 2023.73 | 9 | 82.0 |
+| 0.5 | 0 | 48 | False | /kaggle/working/models/isolated/t050_s0_i7 | 7 | normal | True | 1994261 | 1553 | 0.0007787345788740792 | 477.8 | 2737.78 | 9 | 81.77 |
+| 0.5 | 1 | 48 | False | /kaggle/working/models/isolated/t050_s1_i0 | 0 | normal | True | 2037359 | 2269 | 0.001113696702446648 | 483.84 | 1290.88 | 9 | 79.11 |
+| 0.5 | 1 | 48 | False | /kaggle/working/models/isolated/t050_s1_i1 | 1 | normal | True | 1989596 | 1758 | 0.0008835964688308581 | 472.73 | 2082.24 | 9 | 81.41 |
+| 0.5 | 1 | 48 | False | /kaggle/working/models/isolated/t050_s1_i2 | 2 | normal | True | 1994772 | 1506 | 0.0007549735007309105 | 480.83 | 2798.65 | 9 | 82.18 |
+| 0.5 | 1 | 48 | False | /kaggle/working/models/isolated/t050_s1_i3 | 3 | normal | True | 2001978 | 1467 | 0.0007327752852428948 | 551.84 | 2708.34 | 9 | 81.66 |
+| 0.5 | 1 | 48 | False | /kaggle/working/models/isolated/t050_s1_i4 | 4 | normal | True | 1988832 | 1481 | 0.0007446581712281379 | 577.02 | 2433.19 | 9 | 81.24 |
+| 0.5 | 1 | 48 | False | /kaggle/working/models/isolated/t050_s1_i5 | 5 | normal | True | 1986302 | 1546 | 0.000778330787564026 | 503.52 | 2585.05 | 9 | 82.65 |
+| 0.5 | 1 | 48 | False | /kaggle/working/models/isolated/t050_s1_i6 | 6 | normal | True | 1998972 | 1643 | 0.0008219224681486284 | 516.53 | 2125.33 | 9 | 83.27 |
+| 0.5 | 1 | 48 | False | /kaggle/working/models/isolated/t050_s1_i7 | 7 | normal | True | 1995204 | 1654 | 0.000828987913015411 | 466.29 | 2470.1 | 9 | 106.9 |
+| 0.5 | 2 | 48 | False | /kaggle/working/models/isolated/t050_s2_i0 | 0 | normal | True | 2039907 | 2476 | 0.001213780824321893 | 451.09 | 1167.32 | 9 | 82.86 |
+| 0.5 | 2 | 48 | False | /kaggle/working/models/isolated/t050_s2_i1 | 1 | normal | True | 1988785 | 1641 | 0.0008251268990866283 | 503.11 | 2242.68 | 9 | 87.51 |
+| 0.5 | 2 | 48 | False | /kaggle/working/models/isolated/t050_s2_i2 | 2 | normal | True | 1995134 | 1308 | 0.0006555950627877626 | 566.4 | 3258.42 | 9 | 83.74 |
+| 0.5 | 2 | 48 | False | /kaggle/working/models/isolated/t050_s2_i3 | 3 | normal | True | 1999854 | 1488 | 0.0007440543159650655 | 542.01 | 2594.06 | 9 | 104.03 |
+| 0.5 | 2 | 48 | False | /kaggle/working/models/isolated/t050_s2_i4 | 4 | normal | True | 1988141 | 1539 | 0.0007740899664561015 | 559.47 | 2327.35 | 9 | 81.74 |
+| 0.5 | 2 | 48 | False | /kaggle/working/models/isolated/t050_s2_i5 | 5 | normal | True | 1990216 | 1554 | 0.0007808197703163878 | 510.44 | 2700.16 | 9 | 82.78 |
+| 0.5 | 2 | 48 | False | /kaggle/working/models/isolated/t050_s2_i6 | 6 | normal | True | 1997112 | 1666 | 0.0008342045914300249 | 467.88 | 2304.19 | 9 | 86.86 |
+| 0.5 | 2 | 48 | False | /kaggle/working/models/isolated/t050_s2_i7 | 7 | normal | True | 1995810 | 1639 | 0.0008212204568571156 | 466.18 | 2408.41 | 9 | 83.6 |
+| 0.25 | 0 | 48 | False | /kaggle/working/models/isolated/t025_s0_i0 | 0 | normal | True | 2040096 | 2278 | 0.0011166141201198374 | 494.11 | 1241.14 | 9 | 81.43 |
+| 0.25 | 0 | 48 | False | /kaggle/working/models/isolated/t025_s0_i1 | 1 | normal | True | 1988339 | 1677 | 0.0008434175460019644 | 537.51 | 2116.15 | 9 | 83.39 |
+| 0.25 | 0 | 48 | False | /kaggle/working/models/isolated/t025_s0_i2 | 2 | normal | True | 1995370 | 1463 | 0.0007331973518695781 | 544.05 | 2699.75 | 9 | 84.24 |
+| 0.25 | 0 | 48 | False | /kaggle/working/models/isolated/t025_s0_i3 | 3 | normal | True | 2000682 | 1447 | 0.0007232533706006251 | 526.95 | 2848.86 | 9 | 82.46 |
+| 0.25 | 0 | 48 | False | /kaggle/working/models/isolated/t025_s0_i4 | 4 | normal | True | 1987112 | 1662 | 0.000836389695195842 | 494.83 | 2355.47 | 9 | 93.96 |
+| 0.25 | 0 | 48 | False | /kaggle/working/models/isolated/t025_s0_i5 | 5 | normal | True | 1986067 | 1398 | 0.000703903745442626 | 547.54 | 2836.85 | 9 | 80.59 |
+| 0.25 | 0 | 48 | False | /kaggle/working/models/isolated/t025_s0_i6 | 6 | normal | True | 2000180 | 1728 | 0.0008639222469977702 | 453.0 | 2200.19 | 9 | 82.49 |
+| 0.25 | 0 | 48 | False | /kaggle/working/models/isolated/t025_s0_i7 | 7 | normal | True | 1996622 | 1556 | 0.0007793162651718753 | 488.2 | 2608.39 | 9 | 81.8 |
+| 0.25 | 1 | 48 | False | /kaggle/working/models/isolated/t025_s1_i0 | 0 | normal | True | 2038986 | 2279 | 0.0011177124315713792 | 491.55 | 1248.88 | 9 | 80.34 |
+| 0.25 | 1 | 48 | False | /kaggle/working/models/isolated/t025_s1_i1 | 1 | normal | True | 1988568 | 1674 | 0.0008418117962272349 | 513.77 | 2081.35 | 9 | 83.34 |
+| 0.25 | 1 | 48 | False | /kaggle/working/models/isolated/t025_s1_i2 | 2 | normal | True | 1994000 | 1453 | 0.0007286860581745236 | 495.27 | 2883.63 | 9 | 82.58 |
+| 0.25 | 1 | 48 | False | /kaggle/working/models/isolated/t025_s1_i3 | 3 | normal | True | 2002476 | 1490 | 0.000744078830407955 | 561.86 | 2651.9 | 9 | 82.32 |
+| 0.25 | 1 | 48 | False | /kaggle/working/models/isolated/t025_s1_i4 | 4 | normal | True | 1988608 | 1494 | 0.0007512792868177137 | 594.83 | 2417.7 | 9 | 82.61 |
+| 0.25 | 1 | 48 | False | /kaggle/working/models/isolated/t025_s1_i5 | 5 | normal | True | 1986610 | 1496 | 0.0007530416136030726 | 514.81 | 2735.19 | 9 | 82.32 |
+| 0.25 | 1 | 48 | False | /kaggle/working/models/isolated/t025_s1_i6 | 6 | normal | True | 1998922 | 1617 | 0.0008089360165129004 | 505.64 | 2238.07 | 9 | 83.9 |
+| 0.25 | 1 | 48 | False | /kaggle/working/models/isolated/t025_s1_i7 | 7 | normal | True | 1995461 | 1702 | 0.0008529357376566117 | 436.2 | 2536.79 | 9 | 82.77 |
+| 0.25 | 2 | 48 | False | /kaggle/working/models/isolated/t025_s2_i0 | 0 | normal | True | 2041530 | 2526 | 0.0012373073136324228 | 449.25 | 1150.33 | 9 | 80.91 |
+| 0.25 | 2 | 48 | False | /kaggle/working/models/isolated/t025_s2_i1 | 1 | normal | True | 1988956 | 1649 | 0.0008290781696528228 | 508.79 | 2216.48 | 9 | 81.89 |
+| 0.25 | 2 | 48 | False | /kaggle/working/models/isolated/t025_s2_i2 | 2 | normal | True | 1994192 | 1322 | 0.0006629251345908518 | 543.42 | 3373.61 | 9 | 82.57 |
+| 0.25 | 2 | 48 | False | /kaggle/working/models/isolated/t025_s2_i3 | 3 | normal | True | 2000359 | 1435 | 0.0007173712318638805 | 578.27 | 2649.59 | 9 | 81.31 |
+| 0.25 | 2 | 48 | False | /kaggle/working/models/isolated/t025_s2_i4 | 4 | normal | True | 1986927 | 1488 | 0.0007488951531686871 | 590.61 | 2370.12 | 9 | 81.06 |
+| 0.25 | 2 | 48 | False | /kaggle/working/models/isolated/t025_s2_i5 | 5 | normal | True | 1986982 | 1540 | 0.0007750447663843961 | 490.86 | 2775.15 | 9 | 83.75 |
+| 0.25 | 2 | 48 | False | /kaggle/working/models/isolated/t025_s2_i6 | 6 | normal | True | 1998608 | 1621 | 0.0008110645008926212 | 490.22 | 2264.29 | 9 | 84.19 |
+| 0.25 | 2 | 48 | False | /kaggle/working/models/isolated/t025_s2_i7 | 7 | normal | True | 1996403 | 1625 | 0.000813963914099508 | 444.44 | 2504.87 | 9 | 111.14 |
+
+## Timing
+
+| Step | Seconds | Memory | True peak |
+|---|---:|---:|---|
+| build pipeline | 35.1 | 3,168 MB | yes |
+| assignment target=1.0 seed=0 | 0.0 | 3,168 MB | yes |
+| train t100_s0_i0 | 88.3 | 4,710 MB | yes |
+| train t100_s0_i1 | 86.2 | 4,760 MB | yes |
+| train t100_s0_i2 | 86.7 | 4,814 MB | yes |
+| train t100_s0_i3 | 84.6 | 4,821 MB | yes |
+| train t100_s0_i4 | 80.5 | 4,821 MB | yes |
+| train t100_s0_i5 | 80.3 | 4,824 MB | yes |
+| train t100_s0_i6 | 81.0 | 4,888 MB | yes |
+| train t100_s0_i7 | 81.6 | 4,907 MB | yes |
+| assignment target=1.0 seed=1 | 0.0 | 4,907 MB | yes |
+| train t100_s1_i0 | 80.1 | 4,996 MB | yes |
+| train t100_s1_i1 | 93.6 | 4,996 MB | yes |
+| train t100_s1_i2 | 84.2 | 5,008 MB | yes |
+| train t100_s1_i3 | 83.6 | 5,052 MB | yes |
+| train t100_s1_i4 | 81.1 | 5,070 MB | yes |
+| train t100_s1_i5 | 81.5 | 5,099 MB | yes |
+| train t100_s1_i6 | 83.3 | 5,143 MB | yes |
+| train t100_s1_i7 | 83.1 | 5,173 MB | yes |
+| assignment target=1.0 seed=2 | 0.0 | 5,173 MB | yes |
+| train t100_s2_i0 | 80.5 | 5,173 MB | yes |
+| train t100_s2_i1 | 81.9 | 5,173 MB | yes |
+| train t100_s2_i2 | 83.4 | 5,173 MB | yes |
+| train t100_s2_i3 | 83.6 | 5,173 MB | yes |
+| train t100_s2_i4 | 82.1 | 5,173 MB | yes |
+| train t100_s2_i5 | 82.6 | 5,173 MB | yes |
+| train t100_s2_i6 | 83.3 | 5,173 MB | yes |
+| train t100_s2_i7 | 84.6 | 5,173 MB | yes |
+| assignment target=0.75 seed=0 | 0.9 | 5,173 MB | yes |
+| train t075_s0_i0 | 82.0 | 5,173 MB | yes |
+| train t075_s0_i1 | 84.2 | 5,173 MB | yes |
+| train t075_s0_i2 | 84.5 | 5,178 MB | yes |
+| train t075_s0_i3 | 84.1 | 5,213 MB | yes |
+| train t075_s0_i4 | 82.5 | 5,213 MB | yes |
+| train t075_s0_i5 | 81.9 | 5,213 MB | yes |
+| train t075_s0_i6 | 82.8 | 5,213 MB | yes |
+| train t075_s0_i7 | 90.2 | 5,213 MB | yes |
+| assignment target=0.75 seed=1 | 1.0 | 5,213 MB | yes |
+| train t075_s1_i0 | 81.4 | 5,213 MB | yes |
+| train t075_s1_i1 | 96.0 | 5,213 MB | yes |
+| train t075_s1_i2 | 84.0 | 5,213 MB | yes |
+| train t075_s1_i3 | 83.1 | 5,213 MB | yes |
+| train t075_s1_i4 | 81.9 | 5,213 MB | yes |
+| train t075_s1_i5 | 81.4 | 5,213 MB | yes |
+| train t075_s1_i6 | 83.3 | 5,213 MB | yes |
+| train t075_s1_i7 | 82.0 | 5,240 MB | yes |
+| assignment target=0.75 seed=2 | 0.9 | 5,240 MB | yes |
+| train t075_s2_i0 | 79.2 | 5,240 MB | yes |
+| train t075_s2_i1 | 83.4 | 5,240 MB | yes |
+| train t075_s2_i2 | 82.6 | 5,240 MB | yes |
+| train t075_s2_i3 | 82.3 | 5,240 MB | yes |
+| train t075_s2_i4 | 80.5 | 5,240 MB | yes |
+| train t075_s2_i5 | 82.0 | 5,240 MB | yes |
+| train t075_s2_i6 | 82.6 | 5,240 MB | yes |
+| train t075_s2_i7 | 82.2 | 5,240 MB | yes |
+| assignment target=0.5 seed=0 | 0.9 | 5,240 MB | yes |
+| train t050_s0_i0 | 79.5 | 5,240 MB | yes |
+| train t050_s0_i1 | 83.5 | 5,240 MB | yes |
+| train t050_s0_i2 | 84.0 | 5,240 MB | yes |
+| train t050_s0_i3 | 84.7 | 5,281 MB | yes |
+| train t050_s0_i4 | 81.2 | 5,281 MB | yes |
+| train t050_s0_i5 | 80.2 | 5,281 MB | yes |
+| train t050_s0_i6 | 82.1 | 5,281 MB | yes |
+| train t050_s0_i7 | 81.8 | 5,281 MB | yes |
+| assignment target=0.5 seed=1 | 0.9 | 5,281 MB | yes |
+| train t050_s1_i0 | 79.2 | 5,281 MB | yes |
+| train t050_s1_i1 | 81.5 | 5,281 MB | yes |
+| train t050_s1_i2 | 82.3 | 5,281 MB | yes |
+| train t050_s1_i3 | 81.7 | 5,281 MB | yes |
+| train t050_s1_i4 | 81.3 | 5,281 MB | yes |
+| train t050_s1_i5 | 82.7 | 5,281 MB | yes |
+| train t050_s1_i6 | 83.4 | 5,281 MB | yes |
+| train t050_s1_i7 | 107.0 | 5,305 MB | yes |
+| assignment target=0.5 seed=2 | 0.9 | 5,305 MB | yes |
+| train t050_s2_i0 | 82.9 | 5,305 MB | yes |
+| train t050_s2_i1 | 87.6 | 5,305 MB | yes |
+| train t050_s2_i2 | 83.8 | 5,305 MB | yes |
+| train t050_s2_i3 | 104.1 | 5,305 MB | yes |
+| train t050_s2_i4 | 81.8 | 5,305 MB | yes |
+| train t050_s2_i5 | 82.8 | 5,305 MB | yes |
+| train t050_s2_i6 | 86.9 | 5,305 MB | yes |
+| train t050_s2_i7 | 83.7 | 5,305 MB | yes |
+| assignment target=0.25 seed=0 | 0.9 | 5,305 MB | yes |
+| train t025_s0_i0 | 81.5 | 5,305 MB | yes |
+| train t025_s0_i1 | 83.5 | 5,305 MB | yes |
+| train t025_s0_i2 | 84.3 | 5,305 MB | yes |
+| train t025_s0_i3 | 82.5 | 5,353 MB | yes |
+| train t025_s0_i4 | 94.0 | 5,353 MB | yes |
+| train t025_s0_i5 | 80.7 | 5,353 MB | yes |
+| train t025_s0_i6 | 82.5 | 5,353 MB | yes |
+| train t025_s0_i7 | 81.9 | 5,353 MB | yes |
+| assignment target=0.25 seed=1 | 0.9 | 5,353 MB | yes |
+| train t025_s1_i0 | 80.4 | 5,353 MB | yes |
+| train t025_s1_i1 | 83.4 | 5,353 MB | yes |
+| train t025_s1_i2 | 82.6 | 5,353 MB | yes |
+| train t025_s1_i3 | 82.4 | 5,353 MB | yes |
+| train t025_s1_i4 | 82.7 | 5,353 MB | yes |
+| train t025_s1_i5 | 82.4 | 5,353 MB | yes |
+| train t025_s1_i6 | 84.0 | 5,353 MB | yes |
+| train t025_s1_i7 | 82.9 | 5,353 MB | yes |
+| assignment target=0.25 seed=2 | 0.9 | 5,353 MB | yes |
+| train t025_s2_i0 | 81.0 | 5,353 MB | yes |
+| train t025_s2_i1 | 82.0 | 5,353 MB | yes |
+| train t025_s2_i2 | 82.7 | 5,353 MB | yes |
+| train t025_s2_i3 | 81.4 | 5,353 MB | yes |
+| train t025_s2_i4 | 81.1 | 5,353 MB | yes |
+| train t025_s2_i5 | 83.8 | 5,353 MB | yes |
+| train t025_s2_i6 | 84.3 | 5,353 MB | yes |
+| train t025_s2_i7 | 111.2 | 5,353 MB | yes |
