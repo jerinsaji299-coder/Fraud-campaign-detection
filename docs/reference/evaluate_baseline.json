@@ -9734,7 +9734,7 @@
       "ambiguous": 617,
       "n_campaigns": 26,
       "n_detected": 19,
-      "seconds": 3.83
+      "seconds": 3.92
     },
     {
       "variant": "xgboost_centralized",
@@ -9752,7 +9752,7 @@
       "ambiguous": 596,
       "n_campaigns": 26,
       "n_detected": 19,
-      "seconds": 3.31
+      "seconds": 3.26
     },
     {
       "variant": "xgboost_centralized",
@@ -9770,7 +9770,7 @@
       "ambiguous": 598,
       "n_campaigns": 26,
       "n_detected": 19,
-      "seconds": 2.94
+      "seconds": 2.98
     },
     {
       "variant": "xgboost_centralized",
@@ -9788,7 +9788,7 @@
       "ambiguous": 579,
       "n_campaigns": 26,
       "n_detected": 19,
-      "seconds": 2.72
+      "seconds": 2.82
     },
     {
       "variant": "xgboost_centralized",
@@ -9806,7 +9806,7 @@
       "ambiguous": 541,
       "n_campaigns": 26,
       "n_detected": 18,
-      "seconds": 2.59
+      "seconds": 2.58
     },
     {
       "variant": "xgboost_centralized",
@@ -9824,7 +9824,7 @@
       "ambiguous": 524,
       "n_campaigns": 26,
       "n_detected": 17,
-      "seconds": 2.44
+      "seconds": 2.45
     },
     {
       "variant": "xgboost_centralized",
@@ -9842,7 +9842,7 @@
       "ambiguous": 460,
       "n_campaigns": 26,
       "n_detected": 17,
-      "seconds": 2.4
+      "seconds": 2.35
     },
     {
       "variant": "xgboost_centralized",
@@ -9860,7 +9860,7 @@
       "ambiguous": 348,
       "n_campaigns": 26,
       "n_detected": 17,
-      "seconds": 2.32
+      "seconds": 2.24
     },
     {
       "variant": "xgboost_centralized",
@@ -9878,7 +9878,7 @@
       "ambiguous": 237,
       "n_campaigns": 26,
       "n_detected": 16,
-      "seconds": 2.22
+      "seconds": 2.11
     },
     {
       "variant": "xgboost_centralized",
@@ -9896,7 +9896,7 @@
       "ambiguous": 43,
       "n_campaigns": 26,
       "n_detected": 14,
-      "seconds": 2.16
+      "seconds": 2.02
     },
     {
       "variant": "xgboost_centralized",
@@ -9914,7 +9914,7 @@
       "ambiguous": 4,
       "n_campaigns": 26,
       "n_detected": 11,
-      "seconds": 2.15
+      "seconds": 1.96
     },
     {
       "variant": "xgboost_centralized",
@@ -9932,7 +9932,7 @@
       "ambiguous": 0,
       "n_campaigns": 26,
       "n_detected": 9,
-      "seconds": 2.13
+      "seconds": 2.0
     },
     {
       "variant": "xgboost_centralized",
@@ -9950,7 +9950,7 @@
       "ambiguous": 0,
       "n_campaigns": 26,
       "n_detected": 5,
-      "seconds": 2.11
+      "seconds": 1.96
     },
     {
       "variant": "xgboost_centralized",
@@ -9968,7 +9968,7 @@
       "ambiguous": 0,
       "n_campaigns": 26,
       "n_detected": 4,
-      "seconds": 2.13
+      "seconds": 1.96
     },
     {
       "variant": "xgboost_centralized",
@@ -9986,7 +9986,7 @@
       "ambiguous": 0,
       "n_campaigns": 26,
       "n_detected": 0,
-      "seconds": 2.1
+      "seconds": 1.95
     },
     {
       "variant": "xgboost_centralized",
@@ -10004,7 +10004,7 @@
       "ambiguous": 626,
       "n_campaigns": 26,
       "n_detected": 19,
-      "seconds": 4.35
+      "seconds": 4.54
     },
     {
       "variant": "xgboost_centralized",
@@ -10022,7 +10022,7 @@
       "ambiguous": 613,
       "n_campaigns": 26,
       "n_detected": 19,
-      "seconds": 3.82
+      "seconds": 3.89
     },
     {
       "variant": "xgboost_centralized",
@@ -10040,7 +10040,7 @@
       "ambiguous": 605,
       "n_campaigns": 26,
       "n_detected": 19,
-      "seconds": 3.21
+      "seconds": 3.36
     },
     {
       "variant": "xgboost_centralized",
@@ -10058,7 +10058,7 @@
       "ambiguous": 602,
       "n_campaigns": 26,
       "n_detected": 19,
-      "seconds": 2.85
+      "seconds": 2.98
     },
     {
       "variant": "xgboost_centralized",
@@ -10076,7 +10076,7 @@
       "ambiguous": 582,
       "n_campaigns": 26,
       "n_detected": 19,
-      "seconds": 2.67
+      "seconds": 2.74
     },
     {
       "variant": "xgboost_centralized",
@@ -10094,7 +10094,7 @@
       "ambiguous": 539,
       "n_campaigns": 26,
       "n_detected": 18,
-      "seconds": 2.5
+      "seconds": 2.58
     },
     {
       "variant": "xgboost_centralized",
@@ -10112,7 +10112,7 @@
       "ambiguous": 521,
       "n_campaigns": 26,
       "n_detected": 18,
-      "seconds": 2.41
+      "seconds": 2.49
     },
     {
       "variant": "xgboost_centralized",
@@ -10130,7 +10130,7 @@
       "ambiguous": 480,
       "n_campaigns": 26,
       "n_detected": 18,
-      "seconds": 2.33
+      "seconds": 2.38
     },
     {
       "variant": "xgboost_centralized",
@@ -10148,7 +10148,7 @@
       "ambiguous": 392,
       "n_campaigns": 26,
       "n_detected": 17,
-      "seconds": 2.26
+      "seconds": 2.25
     },
     {
       "variant": "xgboost_centralized",
@@ -10166,7 +10166,7 @@
       "ambiguous": 198,
       "n_campaigns": 26,
       "n_detected": 17,
-      "seconds": 2.18
+      "seconds": 2.13
     },
     {
       "variant": "xgboost_centralized",
@@ -10184,7 +10184,7 @@
       "ambiguous": 56,
       "n_campaigns": 26,
       "n_detected": 14,
-      "seconds": 2.13
+      "seconds": 2.0
     },
     {
       "variant": "xgboost_centralized",
@@ -10202,7 +10202,7 @@
       "ambiguous": 0,
       "n_campaigns": 26,
       "n_detected": 10,
-      "seconds": 2.05
+      "seconds": 1.99
     },
     {
       "variant": "xgboost_centralized",
@@ -10220,7 +10220,7 @@
       "ambiguous": 0,
       "n_campaigns": 26,
       "n_detected": 8,
-      "seconds": 2.04
+      "seconds": 1.97
     },
     {
       "variant": "xgboost_centralized",
@@ -10238,7 +10238,7 @@
       "ambiguous": 0,
       "n_campaigns": 26,
       "n_detected": 5,
-      "seconds": 2.05
+      "seconds": 1.97
     },
     {
       "variant": "xgboost_centralized",
@@ -10256,7 +10256,7 @@
       "ambiguous": 0,
       "n_campaigns": 26,
       "n_detected": 4,
-      "seconds": 2.06
+      "seconds": 1.96
     },
     {
       "variant": "xgboost_centralized",
@@ -10274,7 +10274,7 @@
       "ambiguous": 0,
       "n_campaigns": 26,
       "n_detected": 0,
-      "seconds": 2.06
+      "seconds": 1.96
     },
     {
       "variant": "xgboost_centralized",
@@ -10292,7 +10292,7 @@
       "ambiguous": 619,
       "n_campaigns": 26,
       "n_detected": 19,
-      "seconds": 4.39
+      "seconds": 4.69
     },
     {
       "variant": "xgboost_centralized",
@@ -10310,7 +10310,7 @@
       "ambiguous": 611,
       "n_campaigns": 26,
       "n_detected": 19,
-      "seconds": 3.86
+      "seconds": 4.26
     },
     {
       "variant": "xgboost_centralized",
@@ -10328,7 +10328,7 @@
       "ambiguous": 595,
       "n_campaigns": 26,
       "n_detected": 19,
-      "seconds": 3.31
+      "seconds": 3.65
     },
     {
       "variant": "xgboost_centralized",
@@ -10346,7 +10346,7 @@
       "ambiguous": 582,
       "n_campaigns": 26,
       "n_detected": 19,
-      "seconds": 2.95
+      "seconds": 3.23
     },
     {
       "variant": "xgboost_centralized",
@@ -10364,7 +10364,7 @@
       "ambiguous": 566,
       "n_campaigns": 26,
       "n_detected": 19,
-      "seconds": 2.69
+      "seconds": 2.92
     },
     {
       "variant": "xgboost_centralized",
@@ -10382,7 +10382,7 @@
       "ambiguous": 549,
       "n_campaigns": 26,
       "n_detected": 19,
-      "seconds": 2.54
+      "seconds": 2.69
     },
     {
       "variant": "xgboost_centralized",
@@ -10400,7 +10400,7 @@
       "ambiguous": 505,
       "n_campaigns": 26,
       "n_detected": 18,
-      "seconds": 2.42
+      "seconds": 2.6
     },
     {
       "variant": "xgboost_centralized",
@@ -10418,7 +10418,7 @@
       "ambiguous": 461,
       "n_campaigns": 26,
       "n_detected": 18,
-      "seconds": 2.33
+      "seconds": 2.38
     },
     {
       "variant": "xgboost_centralized",
@@ -10436,7 +10436,7 @@
       "ambiguous": 386,
       "n_campaigns": 26,
       "n_detected": 17,
-      "seconds": 2.22
+      "seconds": 2.26
     },
     {
       "variant": "xgboost_centralized",
@@ -10454,7 +10454,7 @@
       "ambiguous": 252,
       "n_campaigns": 26,
       "n_detected": 17,
-      "seconds": 2.18
+      "seconds": 2.13
     },
     {
       "variant": "xgboost_centralized",
@@ -10490,7 +10490,7 @@
       "ambiguous": 0,
       "n_campaigns": 26,
       "n_detected": 10,
-      "seconds": 2.04
+      "seconds": 1.98
     },
     {
       "variant": "xgboost_centralized",
@@ -10508,7 +10508,7 @@
       "ambiguous": 0,
       "n_campaigns": 26,
       "n_detected": 8,
-      "seconds": 2.04
+      "seconds": 2.08
     },
     {
       "variant": "xgboost_centralized",
@@ -10526,7 +10526,7 @@
       "ambiguous": 0,
       "n_campaigns": 26,
       "n_detected": 5,
-      "seconds": 2.03
+      "seconds": 1.98
     },
     {
       "variant": "xgboost_centralized",
@@ -10544,7 +10544,7 @@
       "ambiguous": 0,
       "n_campaigns": 26,
       "n_detected": 5,
-      "seconds": 2.04
+      "seconds": 1.98
     },
     {
       "variant": "xgboost_centralized",
@@ -10562,7 +10562,7 @@
       "ambiguous": 0,
       "n_campaigns": 26,
       "n_detected": 0,
-      "seconds": 2.02
+      "seconds": 2.0
     },
     {
       "variant": "xgboost_centralized",
@@ -10580,7 +10580,7 @@
       "ambiguous": 619,
       "n_campaigns": 26,
       "n_detected": 19,
-      "seconds": 4.47
+      "seconds": 4.64
     },
     {
       "variant": "xgboost_centralized",
@@ -10598,7 +10598,7 @@
       "ambiguous": 597,
       "n_campaigns": 26,
       "n_detected": 19,
-      "seconds": 3.82
+      "seconds": 4.12
     },
     {
       "variant": "xgboost_centralized",
@@ -10616,7 +10616,7 @@
       "ambiguous": 610,
       "n_campaigns": 26,
       "n_detected": 19,
-      "seconds": 3.26
+      "seconds": 3.57
     },
     {
       "variant": "xgboost_centralized",
@@ -10634,7 +10634,7 @@
       "ambiguous": 587,
       "n_campaigns": 26,
       "n_detected": 19,
-      "seconds": 2.9
+      "seconds": 3.13
     },
     {
       "variant": "xgboost_centralized",
@@ -10652,7 +10652,7 @@
       "ambiguous": 575,
       "n_campaigns": 26,
       "n_detected": 19,
-      "seconds": 2.66
+      "seconds": 2.94
     },
     {
       "variant": "xgboost_centralized",
@@ -10670,7 +10670,7 @@
       "ambiguous": 555,
       "n_campaigns": 26,
       "n_detected": 19,
-      "seconds": 2.5
+      "seconds": 2.68
     },
     {
       "variant": "xgboost_centralized",
@@ -10688,7 +10688,7 @@
       "ambiguous": 521,
       "n_campaigns": 26,
       "n_detected": 18,
-      "seconds": 2.4
+      "seconds": 2.55
     },
     {
       "variant": "xgboost_centralized",
@@ -10706,7 +10706,7 @@
       "ambiguous": 458,
       "n_campaigns": 26,
       "n_detected": 18,
-      "seconds": 2.32
+      "seconds": 2.41
     },
     {
       "variant": "xgboost_centralized",
@@ -10724,7 +10724,7 @@
       "ambiguous": 391,
       "n_campaigns": 26,
       "n_detected": 17,
-      "seconds": 2.22
+      "seconds": 2.45
     },
     {
       "variant": "xgboost_centralized",
@@ -10742,7 +10742,7 @@
       "ambiguous": 213,
       "n_campaigns": 26,
       "n_detected": 17,
-      "seconds": 2.15
+      "seconds": 2.26
     },
     {
       "variant": "xgboost_centralized",
@@ -10760,7 +10760,7 @@
       "ambiguous": 48,
       "n_campaigns": 26,
       "n_detected": 13,
-      "seconds": 2.07
+      "seconds": 2.11
     },
     {
       "variant": "xgboost_centralized",
@@ -10778,7 +10778,7 @@
       "ambiguous": 0,
       "n_campaigns": 26,
       "n_detected": 9,
-      "seconds": 2.06
+      "seconds": 2.07
     },
     {
       "variant": "xgboost_centralized",
@@ -10796,7 +10796,7 @@
       "ambiguous": 0,
       "n_campaigns": 26,
       "n_detected": 8,
-      "seconds": 2.05
+      "seconds": 2.04
     },
     {
       "variant": "xgboost_centralized",
@@ -10814,7 +10814,7 @@
       "ambiguous": 0,
       "n_campaigns": 26,
       "n_detected": 5,
-      "seconds": 2.03
+      "seconds": 2.06
     },
     {
       "variant": "xgboost_centralized",
@@ -10850,7 +10850,7 @@
       "ambiguous": 0,
       "n_campaigns": 26,
       "n_detected": 0,
-      "seconds": 2.09
+      "seconds": 2.03
     },
     {
       "variant": "xgboost_centralized",
@@ -10868,7 +10868,7 @@
       "ambiguous": 609,
       "n_campaigns": 26,
       "n_detected": 19,
-      "seconds": 4.43
+      "seconds": 4.57
     },
     {
       "variant": "xgboost_centralized",
@@ -10886,7 +10886,7 @@
       "ambiguous": 607,
       "n_campaigns": 26,
       "n_detected": 19,
-      "seconds": 3.85
+      "seconds": 4.03
     },
     {
       "variant": "xgboost_centralized",
@@ -10904,7 +10904,7 @@
       "ambiguous": 593,
       "n_campaigns": 26,
       "n_detected": 19,
-      "seconds": 3.31
+      "seconds": 3.52
     },
     {
       "variant": "xgboost_centralized",
@@ -10922,7 +10922,7 @@
       "ambiguous": 568,
       "n_campaigns": 26,
       "n_detected": 19,
-      "seconds": 2.96
+      "seconds": 3.07
     },
     {
       "variant": "xgboost_centralized",
@@ -10940,7 +10940,7 @@
       "ambiguous": 564,
       "n_campaigns": 26,
       "n_detected": 19,
-      "seconds": 2.7
+      "seconds": 2.83
     },
     {
       "variant": "xgboost_centralized",
@@ -10958,7 +10958,7 @@
       "ambiguous": 541,
       "n_campaigns": 26,
       "n_detected": 19,
-      "seconds": 2.53
+      "seconds": 2.73
     },
     {
       "variant": "xgboost_centralized",
@@ -10976,7 +10976,7 @@
       "ambiguous": 524,
       "n_campaigns": 26,
       "n_detected": 19,
-      "seconds": 2.43
+      "seconds": 2.54
     },
     {
       "variant": "xgboost_centralized",
@@ -10994,7 +10994,7 @@
       "ambiguous": 464,
       "n_campaigns": 26,
       "n_detected": 18,
-      "seconds": 2.38
+      "seconds": 2.35
     },
     {
       "variant": "xgboost_centralized",
@@ -11030,7 +11030,7 @@
       "ambiguous": 250,
       "n_campaigns": 26,
       "n_detected": 15,
-      "seconds": 2.18
+      "seconds": 2.12
     },
     {
       "variant": "xgboost_centralized",
@@ -11048,7 +11048,7 @@
       "ambiguous": 48,
       "n_campaigns": 26,
       "n_detected": 12,
-      "seconds": 2.12
+      "seconds": 2.07
     },
     {
       "variant": "xgboost_centralized",
@@ -11066,7 +11066,7 @@
       "ambiguous": 4,
       "n_campaigns": 26,
       "n_detected": 10,
-      "seconds": 2.09
+      "seconds": 1.98
     },
     {
       "variant": "xgboost_centralized",
@@ -11084,7 +11084,7 @@
       "ambiguous": 0,
       "n_campaigns": 26,
       "n_detected": 7,
-      "seconds": 2.09
+      "seconds": 1.99
     },
     {
       "variant": "xgboost_centralized",
@@ -11102,7 +11102,7 @@
       "ambiguous": 0,
       "n_campaigns": 26,
       "n_detected": 5,
-      "seconds": 2.08
+      "seconds": 1.97
     },
     {
       "variant": "xgboost_centralized",
@@ -11120,7 +11120,7 @@
       "ambiguous": 0,
       "n_campaigns": 26,
       "n_detected": 4,
-      "seconds": 2.07
+      "seconds": 1.98
     },
     {
       "variant": "xgboost_centralized",
@@ -11138,7 +11138,7 @@
       "ambiguous": 0,
       "n_campaigns": 26,
       "n_detected": 0,
-      "seconds": 2.1
+      "seconds": 2.02
     },
     {
       "variant": "xgboost_centralized",
@@ -11156,7 +11156,7 @@
       "ambiguous": 1193,
       "n_campaigns": 26,
       "n_detected": 19,
-      "seconds": 7.63
+      "seconds": 7.9
     },
     {
       "variant": "xgboost_centralized",
@@ -11174,7 +11174,7 @@
       "ambiguous": 1145,
       "n_campaigns": 26,
       "n_detected": 20,
-      "seconds": 6.74
+      "seconds": 6.99
     },
     {
       "variant": "xgboost_centralized",
@@ -11192,7 +11192,7 @@
       "ambiguous": 1128,
       "n_campaigns": 26,
       "n_detected": 20,
-      "seconds": 5.69
+      "seconds": 5.91
     },
     {
       "variant": "xgboost_centralized",
@@ -11210,7 +11210,7 @@
       "ambiguous": 1114,
       "n_campaigns": 26,
       "n_detected": 20,
-      "seconds": 5.11
+      "seconds": 5.26
     },
     {
       "variant": "xgboost_centralized",
@@ -11228,7 +11228,7 @@
       "ambiguous": 1078,
       "n_campaigns": 26,
       "n_detected": 20,
-      "seconds": 4.65
+      "seconds": 4.81
     },
     {
       "variant": "xgboost_centralized",
@@ -11246,7 +11246,7 @@
       "ambiguous": 1030,
       "n_campaigns": 26,
       "n_detected": 20,
-      "seconds": 4.44
+      "seconds": 4.45
     },
     {
       "variant": "xgboost_centralized",
@@ -11264,7 +11264,7 @@
       "ambiguous": 1008,
       "n_campaigns": 26,
       "n_detected": 20,
-      "seconds": 4.09
+      "seconds": 4.29
     },
     {
       "variant": "xgboost_centralized",
@@ -11282,7 +11282,7 @@
       "ambiguous": 899,
       "n_campaigns": 26,
       "n_detected": 20,
-      "seconds": 3.88
+      "seconds": 4.22
     },
     {
       "variant": "xgboost_centralized",
@@ -11300,7 +11300,7 @@
       "ambiguous": 802,
       "n_campaigns": 26,
       "n_detected": 20,
-      "seconds": 3.73
+      "seconds": 3.92
     },
     {
       "variant": "xgboost_centralized",
@@ -11318,7 +11318,7 @@
       "ambiguous": 438,
       "n_campaigns": 26,
       "n_detected": 19,
-      "seconds": 3.52
+      "seconds": 3.61
     },
     {
       "variant": "xgboost_centralized",
@@ -11336,7 +11336,7 @@
       "ambiguous": 135,
       "n_campaigns": 26,
       "n_detected": 18,
-      "seconds": 3.37
+      "seconds": 3.32
     },
     {
       "variant": "xgboost_centralized",
@@ -11354,7 +11354,7 @@
       "ambiguous": 2,
       "n_campaigns": 26,
       "n_detected": 14,
-      "seconds": 3.33
+      "seconds": 3.21
     },
     {
       "variant": "xgboost_centralized",
@@ -11372,7 +11372,7 @@
       "ambiguous": 2,
       "n_campaigns": 26,
       "n_detected": 10,
-      "seconds": 3.32
+      "seconds": 3.22
     },
     {
       "variant": "xgboost_centralized",
@@ -11390,7 +11390,7 @@
       "ambiguous": 2,
       "n_campaigns": 26,
       "n_detected": 6,
-      "seconds": 3.33
+      "seconds": 3.19
     },
     {
       "variant": "xgboost_centralized",
@@ -11408,7 +11408,7 @@
       "ambiguous": 0,
       "n_campaigns": 26,
       "n_detected": 4,
-      "seconds": 3.33
+      "seconds": 3.2
     },
     {
       "variant": "xgboost_centralized",
@@ -11426,7 +11426,7 @@
       "ambiguous": 0,
       "n_campaigns": 26,
       "n_detected": 1,
-      "seconds": 3.3
+      "seconds": 3.2
     },
     {
       "variant": "xgboost_centralized",
@@ -11444,7 +11444,7 @@
       "ambiguous": 1134,
       "n_campaigns": 26,
       "n_detected": 19,
-      "seconds": 7.18
+      "seconds": 7.71
     },
     {
       "variant": "xgboost_centralized",
@@ -11462,7 +11462,7 @@
       "ambiguous": 1140,
       "n_campaigns": 26,
       "n_detected": 18,
-      "seconds": 6.54
+      "seconds": 6.88
     },
     {
       "variant": "xgboost_centralized",
@@ -11480,7 +11480,7 @@
       "ambiguous": 1128,
       "n_campaigns": 26,
       "n_detected": 20,
-      "seconds": 5.52
+      "seconds": 5.82
     },
     {
       "variant": "xgboost_centralized",
@@ -11498,7 +11498,7 @@
       "ambiguous": 1129,
       "n_campaigns": 26,
       "n_detected": 20,
-      "seconds": 5.0
+      "seconds": 5.35
     },
     {
       "variant": "xgboost_centralized",
@@ -11516,7 +11516,7 @@
       "ambiguous": 1092,
       "n_campaigns": 26,
       "n_detected": 20,
-      "seconds": 4.6
+      "seconds": 4.84
     },
     {
       "variant": "xgboost_centralized",
@@ -11534,7 +11534,7 @@
       "ambiguous": 1067,
       "n_campaigns": 26,
       "n_detected": 20,
-      "seconds": 4.44
+      "seconds": 4.54
     },
     {
       "variant": "xgboost_centralized",
@@ -11552,7 +11552,7 @@
       "ambiguous": 992,
       "n_campaigns": 26,
       "n_detected": 20,
-      "seconds": 4.07
+      "seconds": 4.3
     },
     {
       "variant": "xgboost_centralized",
@@ -11570,7 +11570,7 @@
       "ambiguous": 917,
       "n_campaigns": 26,
       "n_detected": 20,
-      "seconds": 3.84
+      "seconds": 4.13
     },
     {
       "variant": "xgboost_centralized",
@@ -11588,7 +11588,7 @@
       "ambiguous": 787,
       "n_campaigns": 26,
       "n_detected": 20,
-      "seconds": 3.7
+      "seconds": 3.9
     },
     {
       "variant": "xgboost_centralized",
@@ -11606,7 +11606,7 @@
       "ambiguous": 543,
       "n_campaigns": 26,
       "n_detected": 20,
-      "seconds": 3.51
+      "seconds": 3.61
     },
     {
       "variant": "xgboost_centralized",
@@ -11624,7 +11624,7 @@
       "ambiguous": 163,
       "n_campaigns": 26,
       "n_detected": 16,
-      "seconds": 3.38
+      "seconds": 3.41
     },
     {
       "variant": "xgboost_centralized",
@@ -11642,7 +11642,7 @@
       "ambiguous": 2,
       "n_campaigns": 26,
       "n_detected": 14,
-      "seconds": 3.3
+      "seconds": 3.19
     },
     {
       "variant": "xgboost_centralized",
@@ -11660,7 +11660,7 @@
       "ambiguous": 2,
       "n_campaigns": 26,
       "n_detected": 10,
-      "seconds": 3.3
+      "seconds": 3.19
     },
     {
       "variant": "xgboost_centralized",
@@ -11678,7 +11678,7 @@
       "ambiguous": 2,
       "n_campaigns": 26,
       "n_detected": 7,
-      "seconds": 3.3
+      "seconds": 3.15
     },
     {
       "variant": "xgboost_centralized",
@@ -11696,7 +11696,7 @@
       "ambiguous": 0,
       "n_campaigns": 26,
       "n_detected": 5,
-      "seconds": 3.26
+      "seconds": 3.17
     },
     {
       "variant": "xgboost_centralized",
@@ -11714,7 +11714,7 @@
       "ambiguous": 0,
       "n_campaigns": 26,
       "n_detected": 0,
-      "seconds": 3.27
+      "seconds": 3.21
     },
     {
       "variant": "xgboost_centralized",
@@ -11732,7 +11732,7 @@
       "ambiguous": 1184,
       "n_campaigns": 26,
       "n_detected": 19,
-      "seconds": 7.93
+      "seconds": 7.51
     },
     {
       "variant": "xgboost_centralized",
@@ -11750,7 +11750,7 @@
       "ambiguous": 1167,
       "n_campaigns": 26,
       "n_detected": 20,
-      "seconds": 6.93
+      "seconds": 6.67
     },
     {
       "variant": "xgboost_centralized",
@@ -11768,7 +11768,7 @@
       "ambiguous": 1087,
       "n_campaigns": 26,
       "n_detected": 20,
-      "seconds": 6.03
+      "seconds": 5.75
     },
     {
       "variant": "xgboost_centralized",
@@ -11786,7 +11786,7 @@
       "ambiguous": 1081,
       "n_campaigns": 26,
       "n_detected": 20,
-      "seconds": 5.43
+      "seconds": 5.13
     },
     {
       "variant": "xgboost_centralized",
@@ -11804,7 +11804,7 @@
       "ambiguous": 1071,
       "n_campaigns": 26,
       "n_detected": 20,
-      "seconds": 5.01
+      "seconds": 4.74
     },
     {
       "variant": "xgboost_centralized",
@@ -11822,7 +11822,7 @@
       "ambiguous": 1028,
       "n_campaigns": 26,
       "n_detected": 20,
-      "seconds": 4.79
+      "seconds": 4.44
     },
     {
       "variant": "xgboost_centralized",
@@ -11840,7 +11840,7 @@
       "ambiguous": 990,
       "n_campaigns": 26,
       "n_detected": 20,
-      "seconds": 4.46
+      "seconds": 4.12
     },
     {
       "variant": "xgboost_centralized",
@@ -11858,7 +11858,7 @@
       "ambiguous": 940,
       "n_campaigns": 26,
       "n_detected": 20,
-      "seconds": 4.24
+      "seconds": 4.04
     },
     {
       "variant": "xgboost_centralized",
@@ -11876,7 +11876,7 @@
       "ambiguous": 765,
       "n_campaigns": 26,
       "n_detected": 20,
-      "seconds": 4.03
+      "seconds": 3.97
     },
     {
       "variant": "xgboost_centralized",
@@ -11894,7 +11894,7 @@
       "ambiguous": 414,
       "n_campaigns": 26,
       "n_detected": 19,
-      "seconds": 3.81
+      "seconds": 3.61
     },
     {
       "variant": "xgboost_centralized",
@@ -11912,7 +11912,7 @@
       "ambiguous": 144,
       "n_campaigns": 26,
       "n_detected": 18,
-      "seconds": 3.69
+      "seconds": 3.34
     },
     {
       "variant": "xgboost_centralized",
@@ -11930,7 +11930,7 @@
       "ambiguous": 0,
       "n_campaigns": 26,
       "n_detected": 13,
-      "seconds": 3.68
+      "seconds": 3.24
     },
     {
       "variant": "xgboost_centralized",
@@ -11948,7 +11948,7 @@
       "ambiguous": 2,
       "n_campaigns": 26,
       "n_detected": 10,
-      "seconds": 3.55
+      "seconds": 3.2
     },
     {
       "variant": "xgboost_centralized",
@@ -11966,7 +11966,7 @@
       "ambiguous": 0,
       "n_campaigns": 26,
       "n_detected": 5,
-      "seconds": 3.54
+      "seconds": 3.21
     },
     {
       "variant": "xgboost_centralized",
@@ -11984,7 +11984,7 @@
       "ambiguous": 0,
       "n_campaigns": 26,
       "n_detected": 5,
-      "seconds": 3.55
+      "seconds": 3.26
     },
     {
       "variant": "xgboost_centralized",
@@ -12002,7 +12002,7 @@
       "ambiguous": 0,
       "n_campaigns": 26,
       "n_detected": 2,
-      "seconds": 3.52
+      "seconds": 3.18
     },
     {
       "variant": "xgboost_centralized",
@@ -12038,7 +12038,7 @@
       "ambiguous": 1156,
       "n_campaigns": 26,
       "n_detected": 19,
-      "seconds": 6.87
+      "seconds": 7.01
     },
     {
       "variant": "xgboost_centralized",
@@ -12056,7 +12056,7 @@
       "ambiguous": 1145,
       "n_campaigns": 26,
       "n_detected": 20,
-      "seconds": 5.97
+      "seconds": 5.98
     },
     {
       "variant": "xgboost_centralized",
@@ -12074,7 +12074,7 @@
       "ambiguous": 1110,
       "n_campaigns": 26,
       "n_detected": 20,
-      "seconds": 5.45
+      "seconds": 5.23
     },
     {
       "variant": "xgboost_centralized",
@@ -12092,7 +12092,7 @@
       "ambiguous": 1101,
       "n_campaigns": 26,
       "n_detected": 20,
-      "seconds": 5.01
+      "seconds": 4.79
     },
     {
       "variant": "xgboost_centralized",
@@ -12110,7 +12110,7 @@
       "ambiguous": 1046,
       "n_campaigns": 26,
       "n_detected": 20,
-      "seconds": 4.68
+      "seconds": 4.72
     },
     {
       "variant": "xgboost_centralized",
@@ -12128,7 +12128,7 @@
       "ambiguous": 993,
       "n_campaigns": 26,
       "n_detected": 20,
-      "seconds": 4.44
+      "seconds": 4.31
     },
     {
       "variant": "xgboost_centralized",
@@ -12146,7 +12146,7 @@
       "ambiguous": 910,
       "n_campaigns": 26,
       "n_detected": 20,
-      "seconds": 4.2
+      "seconds": 4.11
     },
     {
       "variant": "xgboost_centralized",
@@ -12164,7 +12164,7 @@
       "ambiguous": 763,
       "n_campaigns": 26,
       "n_detected": 19,
-      "seconds": 3.98
+      "seconds": 4.05
     },
     {
       "variant": "xgboost_centralized",
@@ -12182,7 +12182,7 @@
       "ambiguous": 454,
       "n_campaigns": 26,
       "n_detected": 19,
-      "seconds": 3.77
+      "seconds": 3.65
     },
     {
       "variant": "xgboost_centralized",
@@ -12200,7 +12200,7 @@
       "ambiguous": 148,
       "n_campaigns": 26,
       "n_detected": 17,
-      "seconds": 3.62
+      "seconds": 3.45
     },
     {
       "variant": "xgboost_centralized",
@@ -12218,7 +12218,7 @@
       "ambiguous": 2,
       "n_campaigns": 26,
       "n_detected": 15,
-      "seconds": 3.57
+      "seconds": 3.26
     },
     {
       "variant": "xgboost_centralized",
@@ -12236,7 +12236,7 @@
       "ambiguous": 2,
       "n_campaigns": 26,
       "n_detected": 11,
-      "seconds": 3.56
+      "seconds": 3.27
     },
     {
       "variant": "xgboost_centralized",
@@ -12254,7 +12254,7 @@
       "ambiguous": 0,
       "n_campaigns": 26,
       "n_detected": 6,
-      "seconds": 3.51
+      "seconds": 3.31
     },
     {
       "variant": "xgboost_centralized",
@@ -12272,7 +12272,7 @@
       "ambiguous": 0,
       "n_campaigns": 26,
       "n_detected": 5,
-      "seconds": 3.54
+      "seconds": 3.26
     },
     {
       "variant": "xgboost_centralized",
@@ -12290,7 +12290,7 @@
       "ambiguous": 0,
       "n_campaigns": 26,
       "n_detected": 2,
-      "seconds": 3.54
+      "seconds": 3.27
     },
     {
       "variant": "xgboost_centralized",
@@ -12308,7 +12308,7 @@
       "ambiguous": 1200,
       "n_campaigns": 26,
       "n_detected": 19,
-      "seconds": 8.11
+      "seconds": 7.87
     },
     {
       "variant": "xgboost_centralized",
@@ -12326,7 +12326,7 @@
       "ambiguous": 1156,
       "n_campaigns": 26,
       "n_detected": 20,
-      "seconds": 7.16
+      "seconds": 6.89
     },
     {
       "variant": "xgboost_centralized",
@@ -12344,7 +12344,7 @@
       "ambiguous": 1157,
       "n_campaigns": 26,
       "n_detected": 19,
-      "seconds": 6.12
+      "seconds": 6.01
     },
     {
       "variant": "xgboost_centralized",
@@ -12362,7 +12362,7 @@
       "ambiguous": 1104,
       "n_campaigns": 26,
       "n_detected": 19,
-      "seconds": 5.67
+      "seconds": 5.4
     },
     {
       "variant": "xgboost_centralized",
@@ -12380,7 +12380,7 @@
       "ambiguous": 1100,
       "n_campaigns": 26,
       "n_detected": 20,
-      "seconds": 5.27
+      "seconds": 5.05
     },
     {
       "variant": "xgboost_centralized",
@@ -12398,7 +12398,7 @@
       "ambiguous": 1051,
       "n_campaigns": 26,
       "n_detected": 20,
-      "seconds": 4.89
+      "seconds": 4.85
     },
     {
       "variant": "xgboost_centralized",
@@ -12416,7 +12416,7 @@
       "ambiguous": 1008,
       "n_campaigns": 26,
       "n_detected": 20,
-      "seconds": 4.53
+      "seconds": 4.47
     },
     {
       "variant": "xgboost_centralized",
@@ -12434,7 +12434,7 @@
       "ambiguous": 901,
       "n_campaigns": 26,
       "n_detected": 20,
-      "seconds": 4.3
+      "seconds": 4.31
     },
     {
       "variant": "xgboost_centralized",
@@ -12452,7 +12452,7 @@
       "ambiguous": 827,
       "n_campaigns": 26,
       "n_detected": 19,
-      "seconds": 4.16
+      "seconds": 4.09
     },
     {
       "variant": "xgboost_centralized",
@@ -12470,7 +12470,7 @@
       "ambiguous": 465,
       "n_campaigns": 26,
       "n_detected": 18,
-      "seconds": 3.9
+      "seconds": 3.7
     },
     {
       "variant": "xgboost_centralized",
@@ -12488,7 +12488,7 @@
       "ambiguous": 164,
       "n_campaigns": 26,
       "n_detected": 17,
-      "seconds": 3.79
+      "seconds": 3.35
     },
     {
       "variant": "xgboost_centralized",
@@ -12506,7 +12506,7 @@
       "ambiguous": 1,
       "n_campaigns": 26,
       "n_detected": 13,
-      "seconds": 3.73
+      "seconds": 3.28
     },
     {
       "variant": "xgboost_centralized",
@@ -12524,7 +12524,7 @@
       "ambiguous": 2,
       "n_campaigns": 26,
       "n_detected": 11,
-      "seconds": 3.74
+      "seconds": 3.24
     },
     {
       "variant": "xgboost_centralized",
@@ -12542,7 +12542,7 @@
       "ambiguous": 2,
       "n_campaigns": 26,
       "n_detected": 7,
-      "seconds": 3.72
+      "seconds": 3.24
     },
     {
       "variant": "xgboost_centralized",
@@ -12560,7 +12560,7 @@
       "ambiguous": 0,
       "n_campaigns": 26,
       "n_detected": 5,
-      "seconds": 3.69
+      "seconds": 3.25
     },
     {
       "variant": "xgboost_centralized",
@@ -12578,7 +12578,7 @@
       "ambiguous": 0,
       "n_campaigns": 26,
       "n_detected": 2,
-      "seconds": 3.69
+      "seconds": 3.22
     },
     {
       "variant": "xgboost_centralized_no_format",
@@ -12596,7 +12596,7 @@
       "ambiguous": 562,
       "n_campaigns": 26,
       "n_detected": 17,
-      "seconds": 8.96
+      "seconds": 8.66
     },
     {
       "variant": "xgboost_centralized_no_format",
@@ -12614,7 +12614,7 @@
       "ambiguous": 590,
       "n_campaigns": 26,
       "n_detected": 19,
-      "seconds": 6.45
+      "seconds": 6.38
     },
     {
       "variant": "xgboost_centralized_no_format",
@@ -12632,7 +12632,7 @@
       "ambiguous": 564,
       "n_campaigns": 26,
       "n_detected": 19,
-      "seconds": 4.91
+      "seconds": 4.61
     },
     {
       "variant": "xgboost_centralized_no_format",
@@ -12650,7 +12650,7 @@
       "ambiguous": 528,
       "n_campaigns": 26,
       "n_detected": 19,
-      "seconds": 4.09
+      "seconds": 4.03
     },
     {
       "variant": "xgboost_centralized_no_format",
@@ -12668,7 +12668,7 @@
       "ambiguous": 468,
       "n_campaigns": 26,
       "n_detected": 19,
-      "seconds": 3.46
+      "seconds": 3.37
     },
     {
       "variant": "xgboost_centralized_no_format",
@@ -12686,7 +12686,7 @@
       "ambiguous": 446,
       "n_campaigns": 26,
       "n_detected": 18,
-      "seconds": 3.1
+      "seconds": 2.98
     },
     {
       "variant": "xgboost_centralized_no_format",
@@ -12722,7 +12722,7 @@
       "ambiguous": 332,
       "n_campaigns": 26,
       "n_detected": 16,
-      "seconds": 2.57
+      "seconds": 2.53
     },
     {
       "variant": "xgboost_centralized_no_format",
@@ -12740,7 +12740,7 @@
       "ambiguous": 304,
       "n_campaigns": 26,
       "n_detected": 15,
-      "seconds": 2.43
+      "seconds": 2.32
     },
     {
       "variant": "xgboost_centralized_no_format",
@@ -12758,7 +12758,7 @@
       "ambiguous": 150,
       "n_campaigns": 26,
       "n_detected": 12,
-      "seconds": 2.26
+      "seconds": 2.16
     },
     {
       "variant": "xgboost_centralized_no_format",
@@ -12776,7 +12776,7 @@
       "ambiguous": 46,
       "n_campaigns": 26,
       "n_detected": 10,
-      "seconds": 2.18
+      "seconds": 2.07
     },
     {
       "variant": "xgboost_centralized_no_format",
@@ -12794,7 +12794,7 @@
       "ambiguous": 0,
       "n_campaigns": 26,
       "n_detected": 6,
-      "seconds": 2.18
+      "seconds": 2.01
     },
     {
       "variant": "xgboost_centralized_no_format",
@@ -12812,7 +12812,7 @@
       "ambiguous": 0,
       "n_campaigns": 26,
       "n_detected": 6,
-      "seconds": 2.17
+      "seconds": 2.02
     },
     {
       "variant": "xgboost_centralized_no_format",
@@ -12830,7 +12830,7 @@
       "ambiguous": 0,
       "n_campaigns": 26,
       "n_detected": 3,
-      "seconds": 2.17
+      "seconds": 1.99
     },
     {
       "variant": "xgboost_centralized_no_format",
@@ -12848,7 +12848,7 @@
       "ambiguous": 0,
       "n_campaigns": 26,
       "n_detected": 2,
-      "seconds": 2.16
+      "seconds": 1.97
     },
     {
       "variant": "xgboost_centralized_no_format",
@@ -12866,7 +12866,7 @@
       "ambiguous": 0,
       "n_campaigns": 26,
       "n_detected": 0,
-      "seconds": 1.97
+      "seconds": 1.87
     },
     {
       "variant": "xgboost_centralized_no_format",
@@ -12884,7 +12884,7 @@
       "ambiguous": 562,
       "n_campaigns": 26,
       "n_detected": 16,
-      "seconds": 8.65
+      "seconds": 8.96
     },
     {
       "variant": "xgboost_centralized_no_format",
@@ -12902,7 +12902,7 @@
       "ambiguous": 611,
       "n_campaigns": 26,
       "n_detected": 19,
-      "seconds": 6.32
+      "seconds": 6.47
     },
     {
       "variant": "xgboost_centralized_no_format",
@@ -12920,7 +12920,7 @@
       "ambiguous": 568,
       "n_campaigns": 26,
       "n_detected": 19,
-      "seconds": 4.73
+      "seconds": 4.83
     },
     {
       "variant": "xgboost_centralized_no_format",
@@ -12938,7 +12938,7 @@
       "ambiguous": 526,
       "n_campaigns": 26,
       "n_detected": 19,
-      "seconds": 4.05
+      "seconds": 4.07
     },
     {
       "variant": "xgboost_centralized_no_format",
@@ -12956,7 +12956,7 @@
       "ambiguous": 494,
       "n_campaigns": 26,
       "n_detected": 19,
-      "seconds": 3.44
+      "seconds": 3.53
     },
     {
       "variant": "xgboost_centralized_no_format",
@@ -12974,7 +12974,7 @@
       "ambiguous": 457,
       "n_campaigns": 26,
       "n_detected": 18,
-      "seconds": 3.07
+      "seconds": 3.0
     },
     {
       "variant": "xgboost_centralized_no_format",
@@ -12992,7 +12992,7 @@
       "ambiguous": 417,
       "n_campaigns": 26,
       "n_detected": 16,
-      "seconds": 2.75
+      "seconds": 2.81
     },
     {
       "variant": "xgboost_centralized_no_format",
@@ -13010,7 +13010,7 @@
       "ambiguous": 349,
       "n_campaigns": 26,
       "n_detected": 15,
-      "seconds": 2.58
+      "seconds": 2.55
     },
     {
       "variant": "xgboost_centralized_no_format",
@@ -13028,7 +13028,7 @@
       "ambiguous": 286,
       "n_campaigns": 26,
       "n_detected": 14,
-      "seconds": 2.4
+      "seconds": 2.34
     },
     {
       "variant": "xgboost_centralized_no_format",
@@ -13046,7 +13046,7 @@
       "ambiguous": 152,
       "n_campaigns": 26,
       "n_detected": 12,
-      "seconds": 2.24
+      "seconds": 2.13
     },
     {
       "variant": "xgboost_centralized_no_format",
@@ -13064,7 +13064,7 @@
       "ambiguous": 74,
       "n_campaigns": 26,
       "n_detected": 12,
-      "seconds": 2.14
+      "seconds": 2.01
     },
     {
       "variant": "xgboost_centralized_no_format",
@@ -13082,7 +13082,7 @@
       "ambiguous": 0,
       "n_campaigns": 26,
       "n_detected": 6,
-      "seconds": 2.14
+      "seconds": 2.02
     },
     {
       "variant": "xgboost_centralized_no_format",
@@ -13100,7 +13100,7 @@
       "ambiguous": 0,
       "n_campaigns": 26,
       "n_detected": 6,
-      "seconds": 2.1
+      "seconds": 2.03
     },
     {
       "variant": "xgboost_centralized_no_format",
@@ -13118,7 +13118,7 @@
       "ambiguous": 0,
       "n_campaigns": 26,
       "n_detected": 3,
-      "seconds": 2.16
+      "seconds": 1.97
     },
     {
       "variant": "xgboost_centralized_no_format",
@@ -13136,7 +13136,7 @@
       "ambiguous": 0,
       "n_campaigns": 26,
       "n_detected": 1,
-      "seconds": 2.1
+      "seconds": 1.98
     },
     {
       "variant": "xgboost_centralized_no_format",
@@ -13154,7 +13154,7 @@
       "ambiguous": 0,
       "n_campaigns": 26,
       "n_detected": 0,
-      "seconds": 1.93
+      "seconds": 1.82
     },
     {
       "variant": "xgboost_centralized_no_format",
@@ -13172,7 +13172,7 @@
       "ambiguous": 557,
       "n_campaigns": 26,
       "n_detected": 16,
-      "seconds": 8.85
+      "seconds": 9.23
     },
     {
       "variant": "xgboost_centralized_no_format",
@@ -13190,7 +13190,7 @@
       "ambiguous": 574,
       "n_campaigns": 26,
       "n_detected": 17,
-      "seconds": 6.26
+      "seconds": 6.38
     },
     {
       "variant": "xgboost_centralized_no_format",
@@ -13208,7 +13208,7 @@
       "ambiguous": 580,
       "n_campaigns": 26,
       "n_detected": 19,
-      "seconds": 4.82
+      "seconds": 4.83
     },
     {
       "variant": "xgboost_centralized_no_format",
@@ -13226,7 +13226,7 @@
       "ambiguous": 532,
       "n_campaigns": 26,
       "n_detected": 19,
-      "seconds": 3.86
+      "seconds": 4.03
     },
     {
       "variant": "xgboost_centralized_no_format",
@@ -13244,7 +13244,7 @@
       "ambiguous": 479,
       "n_campaigns": 26,
       "n_detected": 16,
-      "seconds": 3.39
+      "seconds": 3.49
     },
     {
       "variant": "xgboost_centralized_no_format",
@@ -13262,7 +13262,7 @@
       "ambiguous": 431,
       "n_campaigns": 26,
       "n_detected": 16,
-      "seconds": 2.97
+      "seconds": 3.09
     },
     {
       "variant": "xgboost_centralized_no_format",
@@ -13280,7 +13280,7 @@
       "ambiguous": 377,
       "n_campaigns": 26,
       "n_detected": 16,
-      "seconds": 2.71
+      "seconds": 2.8
     },
     {
       "variant": "xgboost_centralized_no_format",
@@ -13298,7 +13298,7 @@
       "ambiguous": 347,
       "n_campaigns": 26,
       "n_detected": 15,
-      "seconds": 2.48
+      "seconds": 2.55
     },
     {
       "variant": "xgboost_centralized_no_format",
@@ -13316,7 +13316,7 @@
       "ambiguous": 276,
       "n_campaigns": 26,
       "n_detected": 15,
-      "seconds": 2.39
+      "seconds": 2.46
     },
     {
       "variant": "xgboost_centralized_no_format",
@@ -13334,7 +13334,7 @@
       "ambiguous": 171,
       "n_campaigns": 26,
       "n_detected": 12,
-      "seconds": 2.22
+      "seconds": 2.16
     },
     {
       "variant": "xgboost_centralized_no_format",
@@ -13352,7 +13352,7 @@
       "ambiguous": 48,
       "n_campaigns": 26,
       "n_detected": 10,
-      "seconds": 2.16
+      "seconds": 2.05
     },
     {
       "variant": "xgboost_centralized_no_format",
@@ -13370,7 +13370,7 @@
       "ambiguous": 0,
       "n_campaigns": 26,
       "n_detected": 7,
-      "seconds": 2.13
+      "seconds": 1.98
     },
     {
       "variant": "xgboost_centralized_no_format",
@@ -13388,7 +13388,7 @@
       "ambiguous": 0,
       "n_campaigns": 26,
       "n_detected": 5,
-      "seconds": 2.12
+      "seconds": 1.98
     },
     {
       "variant": "xgboost_centralized_no_format",
@@ -13406,7 +13406,7 @@
       "ambiguous": 0,
       "n_campaigns": 26,
       "n_detected": 3,
-      "seconds": 2.14
+      "seconds": 1.97
     },
     {
       "variant": "xgboost_centralized_no_format",
@@ -13424,7 +13424,7 @@
       "ambiguous": 0,
       "n_campaigns": 26,
       "n_detected": 1,
-      "seconds": 2.12
+      "seconds": 1.99
     },
     {
       "variant": "xgboost_centralized_no_format",
@@ -13442,7 +13442,7 @@
       "ambiguous": 0,
       "n_campaigns": 26,
       "n_detected": 0,
-      "seconds": 1.89
+      "seconds": 1.82
     },
     {
       "variant": "xgboost_centralized_no_format",
@@ -13460,7 +13460,7 @@
       "ambiguous": 549,
       "n_campaigns": 26,
       "n_detected": 15,
-      "seconds": 8.45
+      "seconds": 8.38
     },
     {
       "variant": "xgboost_centralized_no_format",
@@ -13478,7 +13478,7 @@
       "ambiguous": 601,
       "n_campaigns": 26,
       "n_detected": 19,
-      "seconds": 6.22
+      "seconds": 6.27
     },
     {
       "variant": "xgboost_centralized_no_format",
@@ -13496,7 +13496,7 @@
       "ambiguous": 563,
       "n_campaigns": 26,
       "n_detected": 19,
-      "seconds": 4.77
+      "seconds": 4.63
     },
     {
       "variant": "xgboost_centralized_no_format",
@@ -13514,7 +13514,7 @@
       "ambiguous": 536,
       "n_campaigns": 26,
       "n_detected": 19,
-      "seconds": 3.97
+      "seconds": 3.93
     },
     {
       "variant": "xgboost_centralized_no_format",
@@ -13532,7 +13532,7 @@
       "ambiguous": 499,
       "n_campaigns": 26,
       "n_detected": 19,
-      "seconds": 3.36
+      "seconds": 3.45
     },
     {
       "variant": "xgboost_centralized_no_format",
@@ -13550,7 +13550,7 @@
       "ambiguous": 453,
       "n_campaigns": 26,
       "n_detected": 17,
-      "seconds": 2.99
+      "seconds": 2.98
     },
     {
       "variant": "xgboost_centralized_no_format",
@@ -13568,7 +13568,7 @@
       "ambiguous": 419,
       "n_campaigns": 26,
       "n_detected": 16,
-      "seconds": 2.63
+      "seconds": 2.71
     },
     {
       "variant": "xgboost_centralized_no_format",
@@ -13586,7 +13586,7 @@
       "ambiguous": 367,
       "n_campaigns": 26,
       "n_detected": 15,
-      "seconds": 2.51
+      "seconds": 2.58
     },
     {
       "variant": "xgboost_centralized_no_format",
@@ -13604,7 +13604,7 @@
       "ambiguous": 289,
       "n_campaigns": 26,
       "n_detected": 15,
-      "seconds": 2.37
+      "seconds": 2.34
     },
     {
       "variant": "xgboost_centralized_no_format",
@@ -13622,7 +13622,7 @@
       "ambiguous": 148,
       "n_campaigns": 26,
       "n_detected": 13,
-      "seconds": 2.25
+      "seconds": 2.16
     },
     {
       "variant": "xgboost_centralized_no_format",
@@ -13640,7 +13640,7 @@
       "ambiguous": 66,
       "n_campaigns": 26,
       "n_detected": 11,
-      "seconds": 2.18
+      "seconds": 2.04
     },
     {
       "variant": "xgboost_centralized_no_format",
@@ -13658,7 +13658,7 @@
       "ambiguous": 0,
       "n_campaigns": 26,
       "n_detected": 6,
-      "seconds": 2.12
+      "seconds": 2.02
     },
     {
       "variant": "xgboost_centralized_no_format",
@@ -13676,7 +13676,7 @@
       "ambiguous": 0,
       "n_campaigns": 26,
       "n_detected": 5,
-      "seconds": 2.14
+      "seconds": 1.97
     },
     {
       "variant": "xgboost_centralized_no_format",
@@ -13694,7 +13694,7 @@
       "ambiguous": 0,
       "n_campaigns": 26,
       "n_detected": 3,
-      "seconds": 2.15
+      "seconds": 1.98
     },
     {
       "variant": "xgboost_centralized_no_format",
@@ -13712,7 +13712,7 @@
       "ambiguous": 0,
       "n_campaigns": 26,
       "n_detected": 2,
-      "seconds": 2.16
+      "seconds": 1.97
     },
     {
       "variant": "xgboost_centralized_no_format",
@@ -13730,7 +13730,7 @@
       "ambiguous": 0,
       "n_campaigns": 26,
       "n_detected": 0,
-      "seconds": 1.81
+      "seconds": 1.67
     },
     {
       "variant": "xgboost_centralized_no_format",
@@ -13748,7 +13748,7 @@
       "ambiguous": 541,
       "n_campaigns": 26,
       "n_detected": 16,
-      "seconds": 8.92
+      "seconds": 8.83
     },
     {
       "variant": "xgboost_centralized_no_format",
@@ -13766,7 +13766,7 @@
       "ambiguous": 589,
       "n_campaigns": 26,
       "n_detected": 17,
-      "seconds": 6.53
+      "seconds": 6.36
     },
     {
       "variant": "xgboost_centralized_no_format",
@@ -13784,7 +13784,7 @@
       "ambiguous": 563,
       "n_campaigns": 26,
       "n_detected": 19,
-      "seconds": 4.86
+      "seconds": 4.91
     },
     {
       "variant": "xgboost_centralized_no_format",
@@ -13802,7 +13802,7 @@
       "ambiguous": 523,
       "n_campaigns": 26,
       "n_detected": 18,
-      "seconds": 4.06
+      "seconds": 4.02
     },
     {
       "variant": "xgboost_centralized_no_format",
@@ -13820,7 +13820,7 @@
       "ambiguous": 485,
       "n_campaigns": 26,
       "n_detected": 18,
-      "seconds": 3.44
+      "seconds": 3.49
     },
     {
       "variant": "xgboost_centralized_no_format",
@@ -13838,7 +13838,7 @@
       "ambiguous": 452,
       "n_campaigns": 26,
       "n_detected": 18,
-      "seconds": 3.07
+      "seconds": 3.08
     },
     {
       "variant": "xgboost_centralized_no_format",
@@ -13874,7 +13874,7 @@
       "ambiguous": 334,
       "n_campaigns": 26,
       "n_detected": 15,
-      "seconds": 2.58
+      "seconds": 2.6
     },
     {
       "variant": "xgboost_centralized_no_format",
@@ -13892,7 +13892,7 @@
       "ambiguous": 257,
       "n_campaigns": 26,
       "n_detected": 14,
-      "seconds": 2.41
+      "seconds": 2.36
     },
     {
       "variant": "xgboost_centralized_no_format",
@@ -13910,7 +13910,7 @@
       "ambiguous": 142,
       "n_campaigns": 26,
       "n_detected": 13,
-      "seconds": 2.25
+      "seconds": 2.14
     },
     {
       "variant": "xgboost_centralized_no_format",
@@ -13928,7 +13928,7 @@
       "ambiguous": 29,
       "n_campaigns": 26,
       "n_detected": 12,
-      "seconds": 2.18
+      "seconds": 2.01
     },
     {
       "variant": "xgboost_centralized_no_format",
@@ -13946,7 +13946,7 @@
       "ambiguous": 0,
       "n_campaigns": 26,
       "n_detected": 6,
-      "seconds": 2.12
+      "seconds": 2.0
     },
     {
       "variant": "xgboost_centralized_no_format",
@@ -13964,7 +13964,7 @@
       "ambiguous": 0,
       "n_campaigns": 26,
       "n_detected": 5,
-      "seconds": 2.1
+      "seconds": 2.01
     },
     {
       "variant": "xgboost_centralized_no_format",
@@ -13982,7 +13982,7 @@
       "ambiguous": 0,
       "n_campaigns": 26,
       "n_detected": 3,
-      "seconds": 2.14
+      "seconds": 1.97
     },
     {
       "variant": "xgboost_centralized_no_format",
@@ -14000,7 +14000,7 @@
       "ambiguous": 0,
       "n_campaigns": 26,
       "n_detected": 1,
-      "seconds": 2.09
+      "seconds": 1.96
     },
     {
       "variant": "xgboost_centralized_no_format",
@@ -14018,7 +14018,7 @@
       "ambiguous": 0,
       "n_campaigns": 26,
       "n_detected": 0,
-      "seconds": 1.83
+      "seconds": 1.69
     },
     {
       "variant": "xgboost_centralized_no_format",
@@ -14036,7 +14036,7 @@
       "ambiguous": 941,
       "n_campaigns": 26,
       "n_detected": 16,
-      "seconds": 14.95
+      "seconds": 15.43
     },
     {
       "variant": "xgboost_centralized_no_format",
@@ -14054,7 +14054,7 @@
       "ambiguous": 1014,
       "n_campaigns": 26,
       "n_detected": 17,
-      "seconds": 10.46
+      "seconds": 10.61
     },
     {
       "variant": "xgboost_centralized_no_format",
@@ -14072,7 +14072,7 @@
       "ambiguous": 1090,
       "n_campaigns": 26,
       "n_detected": 18,
-      "seconds": 7.92
+      "seconds": 7.86
     },
     {
       "variant": "xgboost_centralized_no_format",
@@ -14090,7 +14090,7 @@
       "ambiguous": 1083,
       "n_campaigns": 26,
       "n_detected": 19,
-      "seconds": 6.78
+      "seconds": 6.79
     },
     {
       "variant": "xgboost_centralized_no_format",
@@ -14108,7 +14108,7 @@
       "ambiguous": 1071,
       "n_campaigns": 26,
       "n_detected": 19,
-      "seconds": 5.88
+      "seconds": 5.81
     },
     {
       "variant": "xgboost_centralized_no_format",
@@ -14126,7 +14126,7 @@
       "ambiguous": 1020,
       "n_campaigns": 26,
       "n_detected": 19,
-      "seconds": 5.32
+      "seconds": 5.22
     },
     {
       "variant": "xgboost_centralized_no_format",
@@ -14144,7 +14144,7 @@
       "ambiguous": 963,
       "n_campaigns": 26,
       "n_detected": 19,
-      "seconds": 4.85
+      "seconds": 4.72
     },
     {
       "variant": "xgboost_centralized_no_format",
@@ -14162,7 +14162,7 @@
       "ambiguous": 841,
       "n_campaigns": 26,
       "n_detected": 19,
-      "seconds": 4.46
+      "seconds": 4.34
     },
     {
       "variant": "xgboost_centralized_no_format",
@@ -14198,7 +14198,7 @@
       "ambiguous": 405,
       "n_campaigns": 26,
       "n_detected": 14,
-      "seconds": 3.74
+      "seconds": 3.68
     },
     {
       "variant": "xgboost_centralized_no_format",
@@ -14216,7 +14216,7 @@
       "ambiguous": 159,
       "n_campaigns": 26,
       "n_detected": 13,
-      "seconds": 3.6
+      "seconds": 3.4
     },
     {
       "variant": "xgboost_centralized_no_format",
@@ -14234,7 +14234,7 @@
       "ambiguous": 2,
       "n_campaigns": 26,
       "n_detected": 9,
-      "seconds": 3.49
+      "seconds": 3.28
     },
     {
       "variant": "xgboost_centralized_no_format",
@@ -14252,7 +14252,7 @@
       "ambiguous": 2,
       "n_campaigns": 26,
       "n_detected": 7,
-      "seconds": 3.43
+      "seconds": 3.25
     },
     {
       "variant": "xgboost_centralized_no_format",
@@ -14270,7 +14270,7 @@
       "ambiguous": 0,
       "n_campaigns": 26,
       "n_detected": 5,
-      "seconds": 3.42
+      "seconds": 3.24
     },
     {
       "variant": "xgboost_centralized_no_format",
@@ -14288,7 +14288,7 @@
       "ambiguous": 0,
       "n_campaigns": 26,
       "n_detected": 5,
-      "seconds": 3.45
+      "seconds": 3.24
     },
     {
       "variant": "xgboost_centralized_no_format",
@@ -14306,7 +14306,7 @@
       "ambiguous": 0,
       "n_campaigns": 26,
       "n_detected": 0,
-      "seconds": 3.45
+      "seconds": 3.23
     },
     {
       "variant": "xgboost_centralized_no_format",
@@ -14324,7 +14324,7 @@
       "ambiguous": 975,
       "n_campaigns": 26,
       "n_detected": 16,
-      "seconds": 14.17
+      "seconds": 15.28
     },
     {
       "variant": "xgboost_centralized_no_format",
@@ -14342,7 +14342,7 @@
       "ambiguous": 1016,
       "n_campaigns": 26,
       "n_detected": 17,
-      "seconds": 10.07
+      "seconds": 10.51
     },
     {
       "variant": "xgboost_centralized_no_format",
@@ -14360,7 +14360,7 @@
       "ambiguous": 1069,
       "n_campaigns": 26,
       "n_detected": 18,
-      "seconds": 7.62
+      "seconds": 7.96
     },
     {
       "variant": "xgboost_centralized_no_format",
@@ -14378,7 +14378,7 @@
       "ambiguous": 1073,
       "n_campaigns": 26,
       "n_detected": 20,
-      "seconds": 6.29
+      "seconds": 6.78
     },
     {
       "variant": "xgboost_centralized_no_format",
@@ -14396,7 +14396,7 @@
       "ambiguous": 1009,
       "n_campaigns": 26,
       "n_detected": 19,
-      "seconds": 5.56
+      "seconds": 5.95
     },
     {
       "variant": "xgboost_centralized_no_format",
@@ -14414,7 +14414,7 @@
       "ambiguous": 961,
       "n_campaigns": 26,
       "n_detected": 18,
-      "seconds": 5.01
+      "seconds": 5.21
     },
     {
       "variant": "xgboost_centralized_no_format",
@@ -14432,7 +14432,7 @@
       "ambiguous": 897,
       "n_campaigns": 26,
       "n_detected": 18,
-      "seconds": 4.57
+      "seconds": 4.91
     },
     {
       "variant": "xgboost_centralized_no_format",
@@ -14450,7 +14450,7 @@
       "ambiguous": 812,
       "n_campaigns": 26,
       "n_detected": 18,
-      "seconds": 4.18
+      "seconds": 4.49
     },
     {
       "variant": "xgboost_centralized_no_format",
@@ -14468,7 +14468,7 @@
       "ambiguous": 677,
       "n_campaigns": 26,
       "n_detected": 17,
-      "seconds": 3.87
+      "seconds": 4.2
     },
     {
       "variant": "xgboost_centralized_no_format",
@@ -14486,7 +14486,7 @@
       "ambiguous": 365,
       "n_campaigns": 26,
       "n_detected": 16,
-      "seconds": 3.61
+      "seconds": 3.92
     },
     {
       "variant": "xgboost_centralized_no_format",
@@ -14504,7 +14504,7 @@
       "ambiguous": 154,
       "n_campaigns": 26,
       "n_detected": 15,
-      "seconds": 3.46
+      "seconds": 3.6
     },
     {
       "variant": "xgboost_centralized_no_format",
@@ -14522,7 +14522,7 @@
       "ambiguous": 2,
       "n_campaigns": 26,
       "n_detected": 8,
-      "seconds": 3.4
+      "seconds": 3.54
     },
     {
       "variant": "xgboost_centralized_no_format",
@@ -14540,7 +14540,7 @@
       "ambiguous": 0,
       "n_campaigns": 26,
       "n_detected": 6,
-      "seconds": 3.42
+      "seconds": 3.45
     },
     {
       "variant": "xgboost_centralized_no_format",
@@ -14558,7 +14558,7 @@
       "ambiguous": 0,
       "n_campaigns": 26,
       "n_detected": 5,
-      "seconds": 3.41
+      "seconds": 3.43
     },
     {
       "variant": "xgboost_centralized_no_format",
@@ -14576,7 +14576,7 @@
       "ambiguous": 0,
       "n_campaigns": 26,
       "n_detected": 5,
-      "seconds": 3.37
+      "seconds": 3.52
     },
     {
       "variant": "xgboost_centralized_no_format",
@@ -14594,7 +14594,7 @@
       "ambiguous": 0,
       "n_campaigns": 26,
       "n_detected": 2,
-      "seconds": 3.4
+      "seconds": 3.45
     },
     {
       "variant": "xgboost_centralized_no_format",
@@ -14612,7 +14612,7 @@
       "ambiguous": 939,
       "n_campaigns": 26,
       "n_detected": 15,
-      "seconds": 14.9
+      "seconds": 15.62
     },
     {
       "variant": "xgboost_centralized_no_format",
@@ -14630,7 +14630,7 @@
       "ambiguous": 1022,
       "n_campaigns": 26,
       "n_detected": 18,
-      "seconds": 10.5
+      "seconds": 10.67
     },
     {
       "variant": "xgboost_centralized_no_format",
@@ -14648,7 +14648,7 @@
       "ambiguous": 1068,
       "n_campaigns": 26,
       "n_detected": 18,
-      "seconds": 7.71
+      "seconds": 7.98
     },
     {
       "variant": "xgboost_centralized_no_format",
@@ -14666,7 +14666,7 @@
       "ambiguous": 1032,
       "n_campaigns": 26,
       "n_detected": 19,
-      "seconds": 6.51
+      "seconds": 6.87
     },
     {
       "variant": "xgboost_centralized_no_format",
@@ -14684,7 +14684,7 @@
       "ambiguous": 1044,
       "n_campaigns": 26,
       "n_detected": 20,
-      "seconds": 5.78
+      "seconds": 5.81
     },
     {
       "variant": "xgboost_centralized_no_format",
@@ -14702,7 +14702,7 @@
       "ambiguous": 993,
       "n_campaigns": 26,
       "n_detected": 20,
-      "seconds": 5.19
+      "seconds": 5.29
     },
     {
       "variant": "xgboost_centralized_no_format",
@@ -14720,7 +14720,7 @@
       "ambiguous": 896,
       "n_campaigns": 26,
       "n_detected": 19,
-      "seconds": 4.74
+      "seconds": 4.8
     },
     {
       "variant": "xgboost_centralized_no_format",
@@ -14738,7 +14738,7 @@
       "ambiguous": 818,
       "n_campaigns": 26,
       "n_detected": 19,
-      "seconds": 4.35
+      "seconds": 4.46
     },
     {
       "variant": "xgboost_centralized_no_format",
@@ -14756,7 +14756,7 @@
       "ambiguous": 691,
       "n_campaigns": 26,
       "n_detected": 18,
-      "seconds": 4.1
+      "seconds": 4.16
     },
     {
       "variant": "xgboost_centralized_no_format",
@@ -14774,7 +14774,7 @@
       "ambiguous": 383,
       "n_campaigns": 26,
       "n_detected": 16,
-      "seconds": 3.75
+      "seconds": 3.85
     },
     {
       "variant": "xgboost_centralized_no_format",
@@ -14792,7 +14792,7 @@
       "ambiguous": 179,
       "n_campaigns": 26,
       "n_detected": 14,
-      "seconds": 3.59
+      "seconds": 3.63
     },
     {
       "variant": "xgboost_centralized_no_format",
@@ -14810,7 +14810,7 @@
       "ambiguous": 2,
       "n_campaigns": 26,
       "n_detected": 10,
-      "seconds": 3.46
+      "seconds": 3.45
     },
     {
       "variant": "xgboost_centralized_no_format",
@@ -14828,7 +14828,7 @@
       "ambiguous": 2,
       "n_campaigns": 26,
       "n_detected": 8,
-      "seconds": 3.47
+      "seconds": 3.41
     },
     {
       "variant": "xgboost_centralized_no_format",
@@ -14846,7 +14846,7 @@
       "ambiguous": 0,
       "n_campaigns": 26,
       "n_detected": 5,
-      "seconds": 3.51
+      "seconds": 3.44
     },
     {
       "variant": "xgboost_centralized_no_format",
@@ -14864,7 +14864,7 @@
       "ambiguous": 0,
       "n_campaigns": 26,
       "n_detected": 5,
-      "seconds": 3.51
+      "seconds": 3.37
     },
     {
       "variant": "xgboost_centralized_no_format",
@@ -14882,7 +14882,7 @@
       "ambiguous": 0,
       "n_campaigns": 26,
       "n_detected": 0,
-      "seconds": 3.46
+      "seconds": 3.41
     },
     {
       "variant": "xgboost_centralized_no_format",
@@ -14900,7 +14900,7 @@
       "ambiguous": 965,
       "n_campaigns": 26,
       "n_detected": 17,
-      "seconds": 14.44
+      "seconds": 14.76
     },
     {
       "variant": "xgboost_centralized_no_format",
@@ -14918,7 +14918,7 @@
       "ambiguous": 1068,
       "n_campaigns": 26,
       "n_detected": 16,
-      "seconds": 10.21
+      "seconds": 10.37
     },
     {
       "variant": "xgboost_centralized_no_format",
@@ -14936,7 +14936,7 @@
       "ambiguous": 1060,
       "n_campaigns": 26,
       "n_detected": 18,
-      "seconds": 7.84
+      "seconds": 7.86
     },
     {
       "variant": "xgboost_centralized_no_format",
@@ -14954,7 +14954,7 @@
       "ambiguous": 1056,
       "n_campaigns": 26,
       "n_detected": 20,
-      "seconds": 6.57
+      "seconds": 6.75
     },
     {
       "variant": "xgboost_centralized_no_format",
@@ -14972,7 +14972,7 @@
       "ambiguous": 1010,
       "n_campaigns": 26,
       "n_detected": 19,
-      "seconds": 5.94
+      "seconds": 5.81
     },
     {
       "variant": "xgboost_centralized_no_format",
@@ -14990,7 +14990,7 @@
       "ambiguous": 931,
       "n_campaigns": 26,
       "n_detected": 19,
-      "seconds": 5.3
+      "seconds": 5.24
     },
     {
       "variant": "xgboost_centralized_no_format",
@@ -15008,7 +15008,7 @@
       "ambiguous": 879,
       "n_campaigns": 26,
       "n_detected": 19,
-      "seconds": 4.93
+      "seconds": 4.78
     },
     {
       "variant": "xgboost_centralized_no_format",
@@ -15026,7 +15026,7 @@
       "ambiguous": 783,
       "n_campaigns": 26,
       "n_detected": 19,
-      "seconds": 4.53
+      "seconds": 4.33
     },
     {
       "variant": "xgboost_centralized_no_format",
@@ -15044,7 +15044,7 @@
       "ambiguous": 648,
       "n_campaigns": 26,
       "n_detected": 16,
-      "seconds": 4.18
+      "seconds": 4.13
     },
     {
       "variant": "xgboost_centralized_no_format",
@@ -15062,7 +15062,7 @@
       "ambiguous": 378,
       "n_campaigns": 26,
       "n_detected": 16,
-      "seconds": 3.95
+      "seconds": 3.81
     },
     {
       "variant": "xgboost_centralized_no_format",
@@ -15080,7 +15080,7 @@
       "ambiguous": 129,
       "n_campaigns": 26,
       "n_detected": 15,
-      "seconds": 3.79
+      "seconds": 3.5
     },
     {
       "variant": "xgboost_centralized_no_format",
@@ -15098,7 +15098,7 @@
       "ambiguous": 2,
       "n_campaigns": 26,
       "n_detected": 9,
-      "seconds": 3.69
+      "seconds": 3.4
     },
     {
       "variant": "xgboost_centralized_no_format",
@@ -15116,7 +15116,7 @@
       "ambiguous": 0,
       "n_campaigns": 26,
       "n_detected": 6,
-      "seconds": 3.68
+      "seconds": 3.33
     },
     {
       "variant": "xgboost_centralized_no_format",
@@ -15134,7 +15134,7 @@
       "ambiguous": 0,
       "n_campaigns": 26,
       "n_detected": 5,
-      "seconds": 3.69
+      "seconds": 3.3
     },
     {
       "variant": "xgboost_centralized_no_format",
@@ -15152,7 +15152,7 @@
       "ambiguous": 0,
       "n_campaigns": 26,
       "n_detected": 3,
-      "seconds": 3.73
+      "seconds": 3.4
     },
     {
       "variant": "xgboost_centralized_no_format",
@@ -15170,7 +15170,7 @@
       "ambiguous": 0,
       "n_campaigns": 26,
       "n_detected": 0,
-      "seconds": 3.71
+      "seconds": 3.32
     },
     {
       "variant": "xgboost_centralized_no_format",
@@ -15188,7 +15188,7 @@
       "ambiguous": 969,
       "n_campaigns": 26,
       "n_detected": 17,
-      "seconds": 14.85
+      "seconds": 15.35
     },
     {
       "variant": "xgboost_centralized_no_format",
@@ -15206,7 +15206,7 @@
       "ambiguous": 1035,
       "n_campaigns": 26,
       "n_detected": 17,
-      "seconds": 10.74
+      "seconds": 10.64
     },
     {
       "variant": "xgboost_centralized_no_format",
@@ -15224,7 +15224,7 @@
       "ambiguous": 1054,
       "n_campaigns": 26,
       "n_detected": 17,
-      "seconds": 7.99
+      "seconds": 8.0
     },
     {
       "variant": "xgboost_centralized_no_format",
@@ -15242,7 +15242,7 @@
       "ambiguous": 1063,
       "n_campaigns": 26,
       "n_detected": 19,
-      "seconds": 6.74
+      "seconds": 6.81
     },
     {
       "variant": "xgboost_centralized_no_format",
@@ -15260,7 +15260,7 @@
       "ambiguous": 1022,
       "n_campaigns": 26,
       "n_detected": 19,
-      "seconds": 5.87
+      "seconds": 5.98
     },
     {
       "variant": "xgboost_centralized_no_format",
@@ -15278,7 +15278,7 @@
       "ambiguous": 949,
       "n_campaigns": 26,
       "n_detected": 19,
-      "seconds": 5.31
+      "seconds": 5.18
     },
     {
       "variant": "xgboost_centralized_no_format",
@@ -15296,7 +15296,7 @@
       "ambiguous": 896,
       "n_campaigns": 26,
       "n_detected": 19,
-      "seconds": 4.79
+      "seconds": 4.68
     },
     {
       "variant": "xgboost_centralized_no_format",
@@ -15314,7 +15314,7 @@
       "ambiguous": 867,
       "n_campaigns": 26,
       "n_detected": 19,
-      "seconds": 4.47
+      "seconds": 4.49
     },
     {
       "variant": "xgboost_centralized_no_format",
@@ -15332,7 +15332,7 @@
       "ambiguous": 719,
       "n_campaigns": 26,
       "n_detected": 19,
-      "seconds": 4.15
+      "seconds": 4.16
     },
     {
       "variant": "xgboost_centralized_no_format",
@@ -15350,7 +15350,7 @@
       "ambiguous": 389,
       "n_campaigns": 26,
       "n_detected": 17,
-      "seconds": 3.87
+      "seconds": 3.72
     },
     {
       "variant": "xgboost_centralized_no_format",
@@ -15368,7 +15368,7 @@
       "ambiguous": 138,
       "n_campaigns": 26,
       "n_detected": 15,
-      "seconds": 3.69
+      "seconds": 3.41
     },
     {
       "variant": "xgboost_centralized_no_format",
@@ -15386,7 +15386,7 @@
       "ambiguous": 2,
       "n_campaigns": 26,
       "n_detected": 10,
-      "seconds": 3.61
+      "seconds": 3.3
     },
     {
       "variant": "xgboost_centralized_no_format",
@@ -15404,7 +15404,7 @@
       "ambiguous": 2,
       "n_campaigns": 26,
       "n_detected": 7,
-      "seconds": 3.55
+      "seconds": 3.32
     },
     {
       "variant": "xgboost_centralized_no_format",
@@ -15422,7 +15422,7 @@
       "ambiguous": 0,
       "n_campaigns": 26,
       "n_detected": 5,
-      "seconds": 3.59
+      "seconds": 3.28
     },
     {
       "variant": "xgboost_centralized_no_format",
@@ -15440,7 +15440,7 @@
       "ambiguous": 0,
       "n_campaigns": 26,
       "n_detected": 5,
-      "seconds": 3.56
+      "seconds": 3.27
     },
     {
       "variant": "xgboost_centralized_no_format",
@@ -15458,7 +15458,7 @@
       "ambiguous": 0,
       "n_campaigns": 26,
       "n_detected": 1,
-      "seconds": 3.55
+      "seconds": 3.3
     }
   ],
   "paired": [

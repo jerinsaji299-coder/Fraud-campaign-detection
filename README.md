@@ -38,7 +38,9 @@ git clone https://github.com/jerinsaji299-coder/Fraud-campaign-detection.git
     - [Oracle ceiling](#oracle-ceiling)
     - [Stage 3.3: the XGBoost baseline](#stage-33-the-xgboost-baseline)
     - [Stage 3.4: the centralized GNN](#stage-34-the-centralized-gnn)
-    - [3.4.1 design proposal](#341-design-proposal--proposed-awaiting-approval)
+    - [3.4.1 design](#341-design--approved-2026-11-10-with-four-additions)
+    - [3.4.4 the full run](#344-the-full-run--done)
+    - [3.4.5 the gate report: why the GNN loses](#345-the-gate-report--why-the-gnn-loses-at-extraction-not-at-ranking)
     - [Comparing two configurations: the paired method](#comparing-two-configurations-the-paired-method)
     - [Recall against the ceiling](#recall-against-the-ceiling)
 19. [Phase 4 definitions](#phase-4-definitions-the-federated-conditions)
@@ -81,6 +83,18 @@ bank).
 
 ## Project status
 
+**Phase 3 is COMPLETE** (2026-11-14, tag `v0.3-phase3`). The gate question is
+answered: a centralized model **can** discover campaigns early — the XGBoost
+baseline reaches **0.679 test recall at L = 48, 0.760 of the oracle
+ceiling** — and **the graph model does not beat it**. Over five seeds the GNN
+matches XGBoost's recall at the F1 operating point while raising ~5× the
+alerts, and at a matched budget of 10 false alarms a day it reaches **0.525
+against XGBoost's 0.654**. The *reason* is measured rather than guessed: the
+shortfall is at **cluster extraction, not edge ranking** — see
+§[why the GNN loses](#345-the-gate-report--why-the-gnn-loses-at-extraction-not-at-ranking).
+The stage 3.3 retrain reproduced every recorded stage 3.3 number exactly,
+so the baseline is a confirmed regression check rather than a one-off.
+
 **Current stage:** **Phase 4**, stage **4.0 done** — the institution-split
 data layer is built and tested, and the per-institution training loads are
 measured on the 1% sample. **Next step: approve or amend the stage 4.1
@@ -88,42 +102,20 @@ design proposal**, which has to define what "FedAvg" and "embedding
 exchange" mean for a tree model; nothing federated is implemented until
 that is settled. See §[Phase 4 definitions](#phase-4-definitions-the-federated-conditions).
 
-Phase 3 runs **in parallel and is not blocked by Phase 4**: stage 3.4.4, the
-full GNN run, is still planned and awaiting approval, and its outcome does
-not change Phase 4, which uses XGBoost only (see the Decision log,
-2026-11-14). 3.4.0 to 3.4.3 are done: the environment measured, full-batch
-training decided on the probe, the design approved with four additions, the
-model implemented and tested, and the one-seed quick check run on the full
-data. Stages 3.0-3.3 are complete, including the evaluation module and the
-oracle ceiling validated on the full data.
-**Phase 3's next step:** approve or amend the
-§[3.4.4 full-run plan](#344-the-full-run-plan--proposed-awaiting-approval) —
-two GPU sessions, one per lookback, then one CPU session that evaluates all
-20 GNN models, regenerates the XGBoost per-campaign records and runs the
-direct comparison (§5k of `backend/scripts/kaggle/run_on_kaggle.md` has the
-exact cells). The CPU session also **retrains the XGBoost baseline**: stage
-3.3 ran interactively, so its 20 boosters were discarded with the session.
-That makes session B ~4.8–7.1 hours of a 12-hour commit-mode run, and the
-retrain doubles as a regression check against the recorded stage 3.3
-numbers. The 3.4.3 quick check is done and is **provisional, one
-seed**: the GNN matches XGBoost's test recall (0.661, 0.804 of the ceiling)
-but at **33.3 false alarms a day against 3.4**, and at a comparable alert
-volume on validation it reaches 0.231 recall against XGBoost's 0.423. It is
-behind on this configuration, it is **not being tuned to close that gap**
-(equal tuning effort stands; only a demonstrated bug justifies a change),
-and the five-seed, two-lookback, both-variant run decides it. Stage 3.3
-is complete: the non-graph baseline reaches **0.679 test recall at L = 48,
-0.760 of the oracle**, and that is the number the GNN has to beat. Two
-things 3.4 must carry: both lookbacks (L = 48's validation margin mostly
-did not survive to test), and both format variants (payment format buys
-coverage, and it is a generator artefact). See
-§[stage 3.3 results](#stage-33-results-full-data-five-seeds--complete) and
-§[stage 3.4](#stage-34-the-centralized-gnn). The baseline, the model tau grid, the payment-format ablation and the
-seed sweep are all implemented and pass development checks on the 1% sample;
-**none of those sample numbers is a result.** The evaluation, the oracle
-ceiling and the miss diagnosis are measured on the full data. The training
-regime for 3.4 is already frozen (neighbour sampling for both candidate
-lookbacks; see Decision log).
+Phase 4 is unaffected by the Phase 3 result: it uses XGBoost only, a decision
+taken before the five-seed run and now reinforced by it (see the Decision
+log, 2026-11-14).
+
+**How Phase 3 finished.** The 3.4.4 full run went through as planned — two
+GPU sessions (one per lookback, 20 GNN models) and one CPU session in commit
+mode that retrained the 20 XGBoost boosters, evaluated everything, and ran
+the direct model-versus-model comparison. Evidence is committed under
+`docs/reference/`. The 3.4.3 quick check's one-seed reading held up under
+five seeds: the GNN is behind at a comparable alert volume, it was **not
+tuned** in response (equal tuning effort stands), and 3.4.5 diagnoses *where*
+it loses. See §[stage 3.3 results](#stage-33-results-full-data-five-seeds--complete),
+§[the 3.4.4 results](#344-the-full-run--done) and
+§[the gate report](#345-the-gate-report--why-the-gnn-loses-at-extraction-not-at-ranking).
 
 **Phase 2 — pipeline, artifacts, API, frontend (complete)**
 
@@ -136,7 +128,7 @@ lookbacks; see Decision log).
 | 4 | Frontend scaffold, theme, layout, API client, types, Home, Dataset, Campaign Explorer | done |
 | 5 | Campaign Detail, Visibility Lab, Results Dashboard (empty-state), Methodology page, frontend tests | done |
 
-**Phase 3 — baselines and campaign-level evaluation (in progress)**
+**Phase 3 — baselines and campaign-level evaluation (COMPLETE, 2026-11-14)**
 
 Gate question: can a **centralized** model (full visibility, natural data, no
 reassignment) discover campaigns early, and does a graph model beat a
@@ -149,8 +141,8 @@ no visibility reassignment is used in this phase.
 | 3.1 | Window builder + features + leakage tests | done |
 | 3.2 | Evaluation module (extraction, matching, lead time, bootstrap CIs) + oracle and random scorers | done, **validated on full data**; ceiling, miss diagnosis and the paired lookback comparison all measured and recorded |
 | 3.3 | XGBoost baseline: train, select tau on validation, evaluate on test | **done** — 20 boosters on the full data at commit `de48b35`, exit 0, no edge taus. Selected: the full model at L = 48 (validation recall 0.531 vs 0.385); test recall 0.679 [0.661, 0.696], 0.760 of the ceiling. Format ablation settled; one campaign beats the ceiling |
-| 3.4 | GNN centralized (GINEConv edge classification) | **in progress**, in sub-stages. 3.4.0-3.4.3 **done**: the environment measured (2 x T4, 33.7 GB RAM, all PyG extensions), full-batch training decided on the probe, the design approved with four additions, the model implemented with 25 tests, and the quick check run (L = 24, seed 0: test recall 0.661 at 33.3 FA/day against XGBoost's 0.661 at 3.4 - **provisional, one seed, and the GNN is behind at a comparable alert volume**). 3.4.4, the full run, is planned and awaiting approval; 3.4.5, the gate report, has its machinery built and its inputs not yet generated |
-| 3.5 | Gate report + results files + frontend Results page wired to real baseline results | not started |
+| 3.4 | GNN centralized (GINEConv edge classification) | **done** — all six sub-stages. 20 models on the full data (2 variants × 2 lookbacks × 5 seeds), both GPU sessions and the CPU session exit 0. **The GNN does not beat the baseline**: at a matched 10 FA/day budget it reaches 0.525 test recall against XGBoost's 0.654, and the gate report locates the shortfall at **cluster extraction, not edge ranking** |
+| 3.5 | Gate report | **done** as §3.4.5. The results files and the frontend Results page stay **deferred to Phase 5**, which is what populates `artifacts/results/` — Phase 3 produces no `runs.parquet`/`detections.parquet` |
 
 **Phase 4 — federated conditions (in progress)**
 
@@ -819,8 +811,8 @@ It runs in sub-stages, each stopping for approval:
 | 3.4.1 | Design | **approved 2026-11-10** with four additions — see §[the design](#341-design--approved-2026-11-10-with-four-additions) |
 | 3.4.2 | Implementation, tests, resumability, local CPU smoke run | **done** — `models/gnn.py`, 25 tests, `train-gnn` / `evaluate-gnn`, smoke run on the real sample |
 | 3.4.3 | Kaggle quick check: 1 seed, L = 24, full variant — GPU training then CPU evaluation | **done** (Kaggle, `8d8929c`, both sessions exit 0) — see §[the quick check](#343-quick-check--done-provisional-one-seed) |
-| 3.4.4 | Full-run plan against the 9-hour session and weekly GPU quota | **plan written 2026-11-10, awaiting approval** — see §[the plan](#344-the-full-run-plan--proposed-awaiting-approval) |
-| 3.4.5 | Phase 3 gate report: GNN vs XGBoost, paired comparisons only | not started — the machinery it needs is built and tested (`compare-models`), the inputs are not yet generated |
+| 3.4.4 | The full run: 20 GNN models, the XGBoost retrain, the direct comparison | **done** (2026-11-14) — three sessions, all exit 0; the retrain reproduced every stage 3.3 number. See §[the results](#344-the-full-run--done) |
+| 3.4.5 | Phase 3 gate report: GNN vs XGBoost, paired comparisons only | **done** — and it locates the shortfall. See §[why the GNN loses](#345-the-gate-report--why-the-gnn-loses-at-extraction-not-at-ranking) |
 
 #### 3.4.0: what the check does
 
@@ -1425,7 +1417,11 @@ On the sample the GNN's `val_detection` edge AP is 0.9406 — **the same
 number training reported as its best epoch's validation AP**, which is the
 check that the diagnostic computes the quantity early stopping used.
 
-#### 3.4.4 the full-run plan — proposed, awaiting approval
+#### 3.4.4 the full-run plan — executed as written
+
+*(The plan as approved, kept for the record; the measured outcome is in
+§[the full run](#344-the-full-run--done) below. The three sessions ran as
+described and all exited 0.)*
 
 Two variants × two lookbacks × five seeds = **20 GNN models**, plus the
 XGBoost baseline, which has to be **retrained**: stage 3.3 ran in an
@@ -1524,6 +1520,137 @@ no retraining.
    output — by paired comparisons only, per lookback, per seed, at the
    F1-chosen taus and at every budget, with coverage reported separately. It
    needs no further session.
+
+#### 3.4.4 the full run — done
+
+**Run:** three Kaggle sessions as planned — two GPU (one per lookback, ten
+models each) and one CPU session in commit mode that retrained the 20
+XGBoost boosters, evaluated all 40 models and ran `compare-models`. All exit
+0, no tau at a grid edge (the chosen taus span 0.95–0.999 against a grid top
+of 0.9999). The `models/` trees were not kept; every number below comes from
+the committed reports in `docs/reference/`.
+
+**The stage 3.3 retrain is a clean regression pass.** This was the point of
+retraining rather than the comparison it was run for, so it is reported
+first. Test split, `all` subset, mean [min, max] over seeds 0–4:
+
+| Variant | L | Recorded in stage 3.3 | Re-run 2026-11-14 | Seed sd |
+|---|---:|---|---|---:|
+| `xgboost_centralized` | 24 | 0.654 [0.643, 0.661], 0.796 of ceiling, 3.8 FA/day | **0.654 [0.643, 0.661], 0.796, 3.79** | 0.009 |
+| `xgboost_centralized` | 48 | 0.679 [0.661, 0.696], 0.760 of ceiling, 10.5 FA/day | **0.679 [0.661, 0.696], 0.760, 10.53** | 0.016 |
+| `xgboost_centralized_no_format` | 24 | 0.479 [0.393, 0.554], 0.583, 4.2 FA/day | **0.479 [0.393, 0.554], 0.583, 4.17** | 0.052 |
+| `xgboost_centralized_no_format` | 48 | 0.532 [0.500, 0.571], 0.596, 8.6 FA/day | **0.532 [0.500, 0.571], 0.596, 8.55** | 0.026 |
+
+Every figure reproduces to three decimal places, including the min and max
+across seeds and the five-fold seed-noise difference between the variants.
+The boosters are a deterministic function of the seeds, the code and the
+data, and that is now demonstrated rather than assumed.
+
+**The GNN, five seeds, at the F1 operating point.** Test split, `all`
+subset:
+
+| Model | L | Recall | vs ceiling | FA/day | Median lead | Seed sd |
+|---|---:|---:|---:|---:|---:|---:|
+| `xgboost_centralized` | 24 | 0.654 | 0.796 | **3.8** | 67.2h | 0.009 |
+| `gnn_centralized` | 24 | **0.661** | 0.804 | **20.3** | 69.1h | 0.046 |
+| `xgboost_centralized` | 48 | **0.679** | 0.760 | **10.5** | 68.2h | 0.016 |
+| `gnn_centralized` | 48 | 0.636 | 0.712 | **34.2** | 61.7h | 0.065 |
+| `gnn_centralized_no_format` | 24 | 0.386 | 0.470 | 20.6 | 61.3h | 0.045 |
+| `gnn_centralized_no_format` | 48 | 0.418 | 0.468 | 74.4 | 56.8h | **0.181** |
+
+The one-seed quick check's reading survives five seeds: at L = 24 the GNN's
+recall is statistically indistinguishable from XGBoost's (0.661 against
+0.654, well inside the seed spread) **at more than five times the alert
+volume**, and at L = 48 it is behind on both. It is also markedly noisier —
+seed sd 0.046–0.065 against the baseline's 0.009–0.016, and **0.181** for
+no-format at L = 48, where one seed collapses to 0.143 recall.
+
+**At a matched alert budget, the gap is unambiguous.** Recall at 10 false
+alarms a day, tau chosen on validation, test split, mean over five seeds:
+
+| Model | L = 24 | L = 48 |
+|---|---:|---:|
+| `xgboost_centralized` | **0.654** | 0.479 |
+| `gnn_centralized` | **0.525** | 0.475 |
+| `xgboost_centralized_no_format` | 0.511 | 0.443 |
+| `gnn_centralized_no_format` | **0.032** | 0.082 |
+
+**The no-format GNN effectively cannot operate at 10 alarms a day.** At
+L = 24 it produces **zero clusters in all five seeds** at that budget — there
+is no threshold on the frozen grid at which it alerts inside the budget and
+still detects anything. At L = 48 two of five seeds are likewise zero and a
+third yields one or two clusters. Its 0.032 mean recall is not a weak
+detector; it is mostly a detector that has been switched off by its own
+threshold. The XGBoost ablation at the same budget reaches 0.511.
+
+**Earliness is not where the two differ.** The direct paired comparison
+(rule 3: GNN against XGBoost, never each against the oracle) gives a median
+difference of **0.0h with a CI containing zero in every seed** at the F1
+point, and at the 10/day budget every CI also touches or contains zero. No
+earliness difference is demonstrated in either direction. What differs is
+**coverage**: at 10/day on test at L = 24, seed 0, XGBoost detects 13
+campaigns the GNN misses while the GNN detects 1 that XGBoost misses.
+
+#### 3.4.5 the gate report — why the GNN loses at extraction, not at ranking
+
+The campaign-level number is the product of two stages — rank the edges,
+then threshold and extract connected components — and a single recall figure
+cannot say which one costs the GNN its performance. The two diagnostics added
+after the quick check answer it, and they point the same way.
+
+**The edge ranking is near-equal at L = 24.** Edge-level average precision
+over the raw scores, before any threshold or clustering, full variant, mean
+over five seeds:
+
+| Window set | L | XGBoost | GNN | Difference |
+|---|---:|---:|---:|---:|
+| test | 24 | **0.394** | 0.392 | −0.002 |
+| `val_detection` (the 4 windows the GNN early-stops on) | 24 | 0.425 | **0.435** | **+0.010** |
+| test | 48 | **0.387** | 0.350 | −0.037 |
+| `val_detection` | 48 | **0.501** | 0.439 | −0.062 |
+
+At L = 24 the two models rank edges equally well, and on the four
+validation-detection windows the GNN early-stops on it ranks **slightly
+better**. Yet its campaign recall at 10 FA/day there is 0.525 against 0.654.
+**The ranking is not the problem at L = 24; what happens after the threshold
+is.** (At L = 48 the GNN is genuinely behind on ranking too, −0.037, which is
+a separate and simpler deficit.)
+
+**The mechanism is the shape of the false alarms.** From
+`false_alarm_cluster_shape` in `compare_models.json`, at the F1 operating
+point on test, L = 24, seed 0:
+
+| | Clusters | Median accounts | Mean | Max | Size distribution |
+|---|---:|---:|---:|---:|---|
+| XGBoost | **16** | 3 | **3.00** | **3** | 16 × 3 accounts, nothing larger |
+| GNN | **158** | 3 | **3.20** | **6** | 132 × 3, 22 × 4, 3 × 5, 1 × 6–10 |
+
+XGBoost's false alarms are *all exactly three accounts* — the smallest
+component the extraction rule will emit, i.e. the minimum accident. The
+GNN's are ten times as numerous and systematically larger.
+
+**Why:** message passing **correlates the scores of adjacent edges**. A
+GNN's high scores therefore arrive in connected neighbourhoods and readily
+form spurious connected components, while XGBoost scores each transaction
+independently, so its high scores are scattered and rarely form a connected
+triple by chance. Under connected-component extraction, the very property
+that is supposed to help a graph model — neighbourhood information flowing
+along edges — works against it. The model pays for each false neighbourhood
+in alert volume, which forces its budget tau higher, which costs it the
+campaigns it would otherwise have found.
+
+**This is a finding, not a defect to fix.** The GNN is **not** tuned in
+response and the extraction rule is **not** changed: both were frozen before
+any full-data training, and altering either now would make the comparison a
+record of which model received more attention. The result stands as measured.
+See §[future phases](#future-phases) for the follow-up this suggests — an
+extraction rule less sensitive to score correlation, or per-neighbourhood
+score calibration — which is further work, not a correction to this result.
+
+Evidence: `docs/reference/compare_models.{md,json}`,
+`compare_models_edge_ap.csv`, `compare_models_clusters.csv`,
+`compare_models_paired.csv`, `compare_models_coverage.csv`, and the
+per-campaign records in `evaluate_outcomes.csv` / `evaluate_gnn_outcomes.csv`.
 
 #### Development checks on the 1% sample
 
@@ -1965,6 +2092,10 @@ two minutes on the sample.
 
 | Date | Decision | Reason | Evidence |
 |---|---|---|---|
+| 2026-11-14 | **Phase 3 is COMPLETE. The gate question is answered: a centralized model can discover campaigns early, and the graph model does not beat the non-graph baseline.** XGBoost reaches 0.679 test recall at L = 48 (0.760 of the ceiling); at a matched 10 FA/day budget the GNN reaches **0.525 against XGBoost's 0.654** | Five seeds, two lookbacks, two variants, on the full data, with the stage 3.3 retrain reproducing every recorded number to three decimals — so the baseline is a confirmed regression check, not a single run. The GNN's F1-point recall at L = 24 (0.661) is inside seed noise of XGBoost's (0.654) but costs **5× the alerts** (20.3 against 3.8 a day), and it is noisier across seeds (sd 0.046–0.065 against 0.009–0.016) | `docs/reference/evaluate_baseline.*`, `evaluate_gnn.*`, `compare_models.*`; tag `v0.3-phase3` |
+| 2026-11-14 | **The GNN's shortfall is located at CLUSTER EXTRACTION, not at edge ranking** — and this is recorded as a **finding, not a defect to fix**. Neither the GNN nor the extraction rule is changed in response | Edge-level AP on test at L = 24 is **0.394 (XGBoost) against 0.392 (GNN)**, and on the four validation-detection windows the GNN early-stops on the **GNN ranks better**, 0.435 against 0.425 — yet its campaign recall at 10 FA/day is 0.525 against 0.654. The mechanism is in the false-alarm cluster shape: at the F1 point (test, L = 24, seed 0) XGBoost produces **16** false-alarm clusters, **all exactly 3 accounts**, while the GNN produces **158**, mean **3.20** accounts and up to **6**. Message passing correlates the scores of adjacent edges, so the GNN's high scores arrive in connected neighbourhoods and form spurious connected components; XGBoost scores transactions independently, so its high scores are scattered and rarely form a connected triple. The property that should help a graph model works against it under connected-component extraction. Tuning the model or relaxing the extraction rule now would make the comparison a record of how much attention each model received — equal tuning effort was the condition that made it a comparison of models at all | `compare_models_edge_ap.csv`, `false_alarm_cluster_shape` in `compare_models.json` |
+| 2026-11-14 | **At L = 48 the GNN is behind on edge ranking too** — 0.350 against 0.387 — which is a separate deficit from the extraction effect and is reported as such | Reported rather than merged into the extraction finding, because the two have different causes and different implications: at L = 24 the ranking is equal and only extraction costs the GNN, while at L = 48 it loses at both stages. Conflating them would overstate how general the extraction mechanism is | `compare_models_edge_ap.csv` |
+| 2026-11-14 | **Recorded: the no-format GNN cannot operate at the 10 FA/day budget.** At L = 24 it yields **zero clusters in all five seeds**; at L = 48, two of five are zero and a third yields one or two | There is no threshold on the frozen grid at which it alerts inside the budget and still detects anything, so its 0.032 mean recall is not a weak detector but one switched off by its own threshold. Reported rather than worked around: widening the grid for one arm would break the "one grid for every model and condition" rule that keeps a comparison from being a comparison of search effort. The XGBoost ablation reaches 0.511 at the same budget | `evaluate_gnn_budgets.csv`, `compare_models_clusters.csv` |
 | 2026-11-14 | **Phase 4 uses XGBoost only. No GNN in any federated condition**; the GNN remains the Phase 3 centralized comparison | On the full data at L = 24, seed 0, the GNN matched XGBoost's test recall (**0.661**, 0.804 of the ceiling) while raising **33.3 false alarms a day against 3.4** — ten times the alert volume for the same recall — and at a matched ~4 alarms a day reached **0.231** validation recall against XGBoost's **0.423**. Equal recall at ten times the alert load is worse, not equal, so the federated comparison is built on the baseline model. This also keeps Phase 4 inside a two-week finish: four conditions × four bins × three seeds is already 48 cells, and a GNN arm would need a GPU session per cell | user decision, 2026-11-14; §[3.4.3 quick check](#343-quick-check--done-provisional-one-seed) |
 | 2026-11-14 | **Phase 4 runs the full feature set only** — no `no_format` arm | The payment-format ablation is settled as a **centralized** result: format buys coverage, not earliness, with the direct paired earliness CI including zero in all ten test cells. Re-running it across four federated conditions would double the matrix for a question already answered. The limitation this leaves is explicit: Phase 4's absolute numbers inherit whatever the format shortcut contributes, so they are read as *differences between conditions*, which the shortcut affects equally | user decision, 2026-11-14 |
 | 2026-11-14 | **Phase 4 uses seeds 0, 1, 2 — three, not five** | Timeline. Recorded as a limitation: three seeds give wider confidence intervals than Phase 3's five, and any Phase 4 difference smaller than the seed spread is reported as undemonstrated rather than claimed | user decision, 2026-11-14 |
@@ -2132,6 +2263,20 @@ project-root/
       evaluate_gnn_tau_curve.csv      its per-tau precision/recall/F1 on validation
       evaluate_gnn_inference.csv      measured featurise and forward cost per edge
       evaluate_gnn_partial.csv        the partial report, written per configuration
+      --- stage 3.4.4, the full run (2026-11-14) ---
+      evaluate_outcomes.csv           XGBoost: one row per campaign per operating point
+      evaluate_gnn_outcomes.csv       the GNN: the same, and what compare-models pairs on
+      evaluate_clusters.csv           XGBoost false-alarm cluster sizes per operating point
+      evaluate_gnn_clusters.csv       the GNN: the same
+      evaluate_edge_metrics.csv       XGBoost edge-level average precision per window set
+      evaluate_gnn_edge_metrics.csv   the GNN: the same
+      evaluate_gnn_budgets.csv        GNN recall and lead time at 10/50/100 alarms a day
+      evaluate_gnn_operating.csv      GNN recall vs false alarms, for plotting
+      compare_models.{md,json}        stage 3.4.5: the direct GNN-vs-XGBoost gate report
+      compare_models_paired.csv       earliness, paired per seed and operating point
+      compare_models_coverage.csv     which campaigns each model finds that the other misses
+      compare_models_edge_ap.csv      edge ranking compared: where the GNN is and is not behind
+      compare_models_clusters.csv     false-alarm cluster shape: the extraction mechanism
   backend/
     requirements.txt               Python dependencies: pandas, numpy, pyarrow, pyyaml, pytest, fastapi, uvicorn, pydantic
     pyproject.toml                 setuptools packaging for `fraudcamp` (src/ layout) + pytest `fulldata` marker
@@ -3427,6 +3572,20 @@ is recorded here rather than in the suite.
 - No model, training, federated-learning or experiment code exists yet. The
   four experimental conditions are defined and the result schema is fixed,
   but nothing has been run, so the project has no findings of any kind.
+- **The Phase 3 comparison holds the extraction rule fixed, and that choice
+  is not neutral between the two models.** The gate report shows the GNN's
+  shortfall is at connected-component extraction rather than edge ranking:
+  message passing correlates adjacent edges' scores, so its high scores form
+  spurious components where XGBoost's scattered ones do not. The honest
+  reading is **"the GNN does not beat the baseline under this extraction
+  rule"**, not "graph models do not help here" — a rule less sensitive to
+  score correlation might change the verdict, and testing that is future
+  work. The rule stays frozen because every earlier result depends on it.
+- **The Phase 3 models no longer exist.** The 3.4.4 `models/` trees were not
+  kept, so every Phase 3 number is reproducible only by retraining from the
+  seeds, the code and the data. That path is demonstrated — the stage 3.3
+  retrain reproduced all four configurations to three decimals — but it costs
+  a GPU session per lookback plus a CPU session.
 - **Phase 4 is scoped down, and every cut is a limitation.** XGBoost only
   (no federated GNN), the full feature set only (no `no_format` arm), **three
   seeds rather than five**, and **one lookback**. The three-seed choice in
@@ -3505,6 +3664,19 @@ is recorded here rather than in the suite.
 - **Phase 7 — Analysis and paper:** write up findings against the related
   work positioning in the Research question section.
 
+**Follow-up suggested by the Phase 3 gate report, not attempted here.** The
+GNN loses at cluster extraction rather than at edge ranking, because message
+passing correlates the scores of adjacent edges and connected-component
+extraction turns those correlated neighbourhoods into spurious clusters. The
+natural follow-up is therefore **an extraction rule less sensitive to score
+correlation** — for example requiring a minimum score margin across a
+component, or a density/size prior — or **per-neighbourhood score
+calibration** that removes the local correlation before thresholding. Either
+would change a frozen definition every existing result depends on, so it is
+future work and explicitly **not** a correction to the Phase 3 result: the
+comparison reported here is between two models under one fixed extraction
+rule, which is what makes it a comparison of models.
+
 ## Version history
 
 Tagged points in the repository, newest first. Check one out with
@@ -3512,10 +3684,71 @@ Tagged points in the repository, newest first. Check one out with
 
 | Tag | Date | What it contains |
 |---|---|---|
+| `v0.3-phase3` | 2026-11-14 | **Phase 3 complete.** The centralized gate question answered on the full data: the XGBoost baseline reaches 0.679 test recall at L = 48 (0.760 of the oracle ceiling), and the centralized GNN does **not** beat it — 0.525 against 0.654 at a matched 10 false alarms a day. The gate report locates the GNN's shortfall at **cluster extraction rather than edge ranking**, with the mechanism measured. 20 boosters and 20 GNN models trained on the full data across five seeds, two lookbacks and two variants; the stage 3.3 retrain reproduced every recorded number. Phase 4 (federated) has its stage 4.0 data layer built. Still no federated results and no visibility sweep. |
 | `v0.2-verified` | 2026-10-09 | Phase 2 verified end to end on the full dataset, and reproducible. All 24 regression numbers pinned and confirmed on Kaggle; the visibility search made deterministic across processes, with reference SHA-256 digests recorded and confirmed across 2 sessions × 3 processes. Still no models and no experiment results. |
 | `v0.1-data-pipeline` | 2026-10-08 | Phase 2 complete, plus the stage 3.0 Kaggle runner. The research pipeline (campaign ground truth, splits, topology groups, institutions, visibility), the artifact export, the read-only FastAPI server, and the full React frontend — 69 backend tests and 48 frontend tests passing. **No models and no experiment results**: the four conditions are defined and the result schema is fixed, but nothing has been trained or run, and the full-data regression numbers are still unverified (that is what stage 3.0's Kaggle run is for). |
 
 ## Changelog
+
+- **2026-11-14 (stage 3.4.4 + 3.4.5 — PHASE 3 COMPLETE, tag `v0.3-phase3`)** —
+  **the full run is in, the GNN does not beat the baseline, and the reason is
+  located.**
+
+  *The run.* Three Kaggle sessions as planned — two GPU (ten models each) and
+  one CPU session in commit mode that retrained the 20 boosters, evaluated all
+  40 models and ran `compare-models`. All exit 0, **no tau at a grid edge**.
+  The `models/` trees were not kept; the reports are committed under
+  `docs/reference/`.
+
+  *The regression check passed exactly*, which was the point of retraining
+  rather than the comparison it was run for. All four XGBoost configurations
+  reproduce the recorded stage 3.3 numbers **to three decimal places**,
+  including the per-seed min and max and the five-fold seed-noise difference
+  between the variants: L = 48 full at **0.679 [0.661, 0.696], 0.760 of the
+  ceiling**.
+
+  *The result.* At the F1 operating point the GNN's L = 24 recall (0.661) sits
+  inside seed noise of XGBoost's (0.654) but costs **20.3 false alarms a day
+  against 3.8**; at L = 48 it is behind on both (0.636 at 34.2/day against
+  0.679 at 10.5). **At a matched 10 FA/day budget the gap is unambiguous:
+  0.525 against 0.654.** The GNN is also 3–5× noisier across seeds. No
+  earliness difference is demonstrated in either direction — the direct paired
+  comparison is 0.0h with a CI containing zero in every seed — so what differs
+  is coverage.
+
+  *The diagnosis, and it is the useful part.* **The shortfall is at cluster
+  extraction, not at edge ranking.** Edge-level AP on test at L = 24 is
+  **0.394 (XGBoost) against 0.392 (GNN)**, and on the four
+  validation-detection windows the GNN early-stops on the **GNN ranks
+  better**, 0.435 against 0.425 — while its recall at 10 FA/day is 0.525
+  against 0.654. The mechanism is in the false-alarm cluster shape: at the F1
+  point (test, L = 24, seed 0) XGBoost produces **16** false-alarm clusters,
+  **all exactly 3 accounts**, and the GNN produces **158**, mean **3.20**
+  accounts, up to **6**. Message passing correlates adjacent edges' scores, so
+  the GNN's high scores arrive in connected neighbourhoods and form spurious
+  components; XGBoost scores transactions independently, so its high scores
+  are scattered and rarely form a connected triple. **The property that should
+  help a graph model works against it under connected-component extraction.**
+  At L = 48 the GNN is additionally behind on ranking (0.350 against 0.387),
+  recorded separately because it is a different deficit.
+
+  *Also recorded:* the **no-format GNN cannot operate at 10 alarms a day** —
+  zero clusters in all five seeds at L = 24, and two of five at L = 48 — so
+  its 0.032 mean recall is a detector switched off by its own threshold rather
+  than a weak one. The XGBoost ablation reaches 0.511 there.
+
+  *This is a finding, not a defect.* The GNN is **not** tuned and the
+  extraction rule is **not** changed: both were frozen before any full-data
+  training, and changing either now would make the comparison a record of
+  which model got more attention. The follow-up it suggests — an extraction
+  rule less sensitive to score correlation, or per-neighbourhood score
+  calibration — is written into §[Future phases](#future-phases) as further
+  work, and the limitation that the verdict is "under this extraction rule"
+  is stated under Known limitations.
+
+  *Phase 3 is marked COMPLETE* and tagged **`v0.3-phase3`**. Stage 3.5's
+  results files and the frontend Results page stay deferred to Phase 5, which
+  is what populates `artifacts/results/`.
 
 - **2026-11-14 (stage 4.0)** — **Phase 4 begins: the institution-split data
   layer is built, tested and measured. Nothing federated is implemented yet.**

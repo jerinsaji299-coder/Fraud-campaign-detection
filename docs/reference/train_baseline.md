@@ -171,26 +171,26 @@ feature sets differ by something other than the ablation.
 
 | Step | Seconds | Memory | True peak |
 |---|---:|---:|---|
-| build pipeline | 32.1 | 3,161 MB | yes |
-| build training matrix, L=24h | 76.2 | 9,884 MB | yes |
-| train xgboost_centralized, L=24h, seed=0 | 209.0 | 9,884 MB | yes |
-| train xgboost_centralized, L=24h, seed=1 | 217.2 | 9,884 MB | yes |
-| train xgboost_centralized, L=24h, seed=2 | 209.3 | 9,884 MB | yes |
-| train xgboost_centralized, L=24h, seed=3 | 207.4 | 9,884 MB | yes |
-| train xgboost_centralized, L=24h, seed=4 | 207.0 | 9,884 MB | yes |
-| train xgboost_centralized_no_format, L=24h, seed=0 | 193.6 | 9,884 MB | yes |
-| train xgboost_centralized_no_format, L=24h, seed=1 | 204.3 | 9,884 MB | yes |
-| train xgboost_centralized_no_format, L=24h, seed=2 | 192.8 | 9,884 MB | yes |
-| train xgboost_centralized_no_format, L=24h, seed=3 | 195.3 | 9,884 MB | yes |
-| train xgboost_centralized_no_format, L=24h, seed=4 | 191.9 | 9,884 MB | yes |
-| build training matrix, L=48h | 103.7 | 15,907 MB | yes |
-| train xgboost_centralized, L=48h, seed=0 | 282.9 | 15,907 MB | yes |
-| train xgboost_centralized, L=48h, seed=1 | 289.0 | 15,907 MB | yes |
-| train xgboost_centralized, L=48h, seed=2 | 282.5 | 15,907 MB | yes |
-| train xgboost_centralized, L=48h, seed=3 | 284.2 | 15,907 MB | yes |
-| train xgboost_centralized, L=48h, seed=4 | 285.5 | 15,907 MB | yes |
-| train xgboost_centralized_no_format, L=48h, seed=0 | 259.7 | 15,907 MB | yes |
-| train xgboost_centralized_no_format, L=48h, seed=1 | 374.1 | 15,907 MB | yes |
-| train xgboost_centralized_no_format, L=48h, seed=2 | 262.6 | 15,907 MB | yes |
-| train xgboost_centralized_no_format, L=48h, seed=3 | 375.0 | 15,907 MB | yes |
-| train xgboost_centralized_no_format, L=48h, seed=4 | 263.9 | 15,907 MB | yes |
+| build pipeline | 35.7 | 3,165 MB | yes |
+| build training matrix, L=24h | 87.0 | 9,888 MB | yes |
+| train xgboost_centralized, L=24h, seed=0 | 183.2 | 9,888 MB | yes |
+| train xgboost_centralized, L=24h, seed=1 | 180.7 | 9,888 MB | yes |
+| train xgboost_centralized, L=24h, seed=2 | 175.6 | 9,888 MB | yes |
+| train xgboost_centralized, L=24h, seed=3 | 176.6 | 9,888 MB | yes |
+| train xgboost_centralized, L=24h, seed=4 | 175.0 | 9,888 MB | yes |
+| train xgboost_centralized_no_format, L=24h, seed=0 | 249.9 | 9,888 MB | yes |
+| train xgboost_centralized_no_format, L=24h, seed=1 | 162.9 | 9,888 MB | yes |
+| train xgboost_centralized_no_format, L=24h, seed=2 | 170.8 | 9,888 MB | yes |
+| train xgboost_centralized_no_format, L=24h, seed=3 | 170.8 | 9,888 MB | yes |
+| train xgboost_centralized_no_format, L=24h, seed=4 | 164.3 | 9,888 MB | yes |
+| build training matrix, L=48h | 114.0 | 15,907 MB | yes |
+| train xgboost_centralized, L=48h, seed=0 | 234.5 | 15,907 MB | yes |
+| train xgboost_centralized, L=48h, seed=1 | 235.9 | 15,907 MB | yes |
+| train xgboost_centralized, L=48h, seed=2 | 235.2 | 15,907 MB | yes |
+| train xgboost_centralized, L=48h, seed=3 | 356.0 | 15,907 MB | yes |
+| train xgboost_centralized, L=48h, seed=4 | 244.6 | 15,907 MB | yes |
+| train xgboost_centralized_no_format, L=48h, seed=0 | 220.9 | 15,907 MB | yes |
+| train xgboost_centralized_no_format, L=48h, seed=1 | 227.1 | 15,907 MB | yes |
+| train xgboost_centralized_no_format, L=48h, seed=2 | 224.7 | 15,907 MB | yes |
+| train xgboost_centralized_no_format, L=48h, seed=3 | 223.9 | 15,907 MB | yes |
+| train xgboost_centralized_no_format, L=48h, seed=4 | 223.3 | 15,907 MB | yes |
