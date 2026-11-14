@@ -2357,11 +2357,23 @@ taken on trust.
 
 Both are reported, kept separate, and never averaged into one figure.
 
-**(a) The per-institution mean** — "what does a typical bank achieve alone".
-The mean over the 8 institutions of that institution's recall, each against
-**its own** ceiling. A bank operating alone has its own analysts, so each
-institution is operated at the **full** budget B (10, 50, 100 false-alarm
-clusters a day), exactly as the centralized model is.
+**(a) The per-institution mean** — the mean over the 8 institutions of that
+institution's recall, each against **its own** ceiling. A bank operating alone
+has its own analysts, so each institution is operated at the **full** budget B
+(10, 50, 100 false-alarm clusters a day), exactly as the centralized model is.
+
+> **This is not "what a typical bank achieves alone", and an earlier draft of
+> this section was wrong to call it that.** `K = 8` is a construction rather
+> than a sample of banks, and institution 0 is a deterministic hub —
+> `assign_institutions` gives it the dataset's largest bank every time, and on
+> the full data it carried **44.2%** more training positives than the
+> cross-institution mean. **The LEVEL of this mean is therefore not
+> interpretable on its own; only differences against 4.2 and 4.3, paired per
+> institution, are.** In a paired difference institution 0 sits on both sides
+> and its atypicality cancels; in a level it does not. Every pooled mean is
+> printed with its median, min and max and the institutions that produced
+> them, for this reason. Full reasoning: [the institutions are not
+> exchangeable](#the-institutions-are-not-exchangeable-institution-0-holds-the-hub-bank).
 
 **It is reported twice: over all 8 institutions, and over trained
 institutions only.** An `untrained` institution entered at recall 0 is
@@ -2708,6 +2720,20 @@ from every per-institution number beside it, and the suite fails.
 
 #### Measured on the 1% sample — DEVELOPMENT ONLY, not for quotation
 
+> **The LEVEL of the isolated per-institution mean is not interpretable on its
+> own — only differences against 4.2 and 4.3, paired per institution, are.**
+> `K = 8` is a construction, not a sample of banks, and institution 0 is a
+> deterministic hub: `assign_institutions` hands it the dataset's largest bank
+> every time, and it carried 44.2% more training positives than the
+> cross-institution mean on the full data. So "the isolated mean is 0.62" never
+> means "a bank achieves 0.62 alone". It means "this panel of eight, one of
+> which is the hub, averaged 0.62" — and the quantity the research question
+> asks about is what that same panel does differently under `fedavg` and
+> `fedavg_exchange`, institution by institution. Read the mean only as the
+> baseline of a paired difference, always with its range beside it. Full
+> reasoning: [the institutions are not
+> exchangeable](#the-institutions-are-not-exchangeable-institution-0-holds-the-hub-bank).
+
 > **Every figure in this subsection is a development check on the 1% sample
 > and none of them may be quoted in the report, the deck or the paper.** They
 > exist to show the code runs and behaves as designed, not to say what the
@@ -2916,36 +2942,55 @@ had nothing to learn from" if 4.2 or 4.3 ever produces such a cell, and the
 alternative was finding out at evaluation time that a booster had never seen a
 positive.
 
-**2. The stage 4.0 prediction holds in direction and is weaker in magnitude.**
-The prediction was that the **thinnest** per-institution positive count
-appears at target **1.0**, not at 0.25 — because at full visibility one
-institution must be an endpoint of every edge of a campaign, which
+**2. Full visibility is the outlier; below it, the spread is flat.**
+
+The thinnest per-institution positive count appears at target **1.0**, not at
+0.25 — as stage 4.0 predicted, and for the reason it gave: at full visibility
+one institution must be an endpoint of every edge of a campaign, which
 concentrates that campaign in one view and starves the other seven, while at
-0.25 every campaign is spread across many views and no view is starved.
-Confirmed: the thinnest cell of all 96 is **target 1.0, seed 1, institution
-2** at 1,003 positives.
+0.25 every campaign is spread across many views and no view is starved. The
+thinnest cell of all 96 is **target 1.0, seed 1, institution 2** at 1,003
+positives.
 
 Spread, as max/min of training positives within a target across all eight
-institutions and all three seeds — the widest definition, and the one used for
-every row here:
+institutions and all seeds, at **L = 48** — the widest definition, and the one
+used for every row here:
 
-| Target | Full data | 1% sample (stage 4.1, seed 0) | 1% sample (stage 4.0, 3 seeds) |
+| Target | Full data (3 seeds) | 1% sample, stage 4.0 (3 seeds) | 1% sample, stage 4.1 (seed 0) |
 |---:|---:|---:|---:|
-| 1.00 | **2.42** | 2.01 | 4.22 |
-| 0.75 | 1.93 | 1.86 | 2.84 |
-| 0.50 | 1.89 | 1.44 | 2.49 |
-| 0.25 | 1.91 | 1.53 | 2.26 |
+| 1.00 | **2.42** | 3.13 | 2.01 |
+| 0.75 | 1.93 | 2.03 | 1.86 |
+| 0.50 | 1.89 | 1.76 | 1.44 |
+| 0.25 | 1.91 | 1.60 | 1.53 |
 
-Two things to read off this rather than one. Target 1.0 **is** the outlier on
-the full data, as predicted. But 0.75, 0.50 and 0.25 come out at 1.93 / 1.89 /
-1.91 — **indistinguishable from each other**, where the sample showed a
-monotone decline across them. The honest statement is therefore narrower than
-the sample suggested: *full visibility concentrates campaigns and starves some
-views; below full visibility, the degree of fragmentation does not measurably
-change how unevenly positives are spread.* The full-data magnitude is also
-roughly half the stage 4.0 sample's (2.42 against 4.22 at target 1.0), the
-expected direction for a thinned background — 1% of the background makes every
-per-institution count small and its ratios volatile.
+**The result: full visibility concentrates campaigns and starves some views,
+and below full visibility the degree of fragmentation does not measurably
+change how unevenly positives are spread.** On the full data target 1.0 stands
+apart at 2.42, and 0.75 / 0.50 / 0.25 come out at 1.93 / 1.89 / 1.91 — flat,
+with the three fragmented targets inside 2% of each other while target 1.0
+sits 25-28% above all three. The sample's apparent monotone decline across all four
+targets (3.13 → 2.03 → 1.76 → 1.60) is **not** what the full data shows: only
+the first step of it survives.
+
+So the sweep's four targets behave as two regimes, not four points on a slope.
+That matters for how 4.2 and 4.3 are read: a difference between the 0.75, 0.50
+and 0.25 arms cannot be attributed to "more fragmentation" via how thinly the
+positives are spread, because on the full data they are spread equally thinly.
+Whatever separates those three arms, if anything does, has to be something else.
+
+*Why the stage 4.0 column differs from the figures quoted during the 4.1
+proposal (3.13× at 1.0 against 1.60× at 0.25):* it does not — those are these,
+and the reconciliation is recorded because an earlier draft of this table got
+it wrong. That draft pooled **both** lookbacks, which is not Phase 4's scope
+(L = 48 only) and inflated every stage 4.0 row — target 1.0 read 4.22× instead
+of 3.13×, and the resulting claim that the full data was "roughly half the
+sample's magnitude" was an artefact of mixing L = 24 into the sample column.
+At L = 48 the two spreads are 2.42 against 3.13 at target 1.0, and at target
+0.25 the **full data is higher than the sample**, 1.91 against 1.60 — so there
+is no uniform attenuation to claim in either direction. Within a lookback,
+max/min of `positives` and of `share_of_central_positives` are the same ratio,
+so the column is definition-stable; the lookback filter was the whole of the
+error.
 
 #### The institutions are not exchangeable: institution 0 holds the hub bank
 
@@ -3115,7 +3160,7 @@ rather than the run.
 
 | Date | Decision | Reason | Evidence |
 |---|---|---|---|
-| 2026-11-15 | **Recorded: the eight institutions are NOT exchangeable, and institution 0 is the hub holder by construction.** Neither pooled mean may be read as "what a typical bank achieves". The unweighted mean over the fixed panel is kept, and **every pooled mean now carries its median, min and max with the institutions that produced them**, over the same institutions the mean averages | Institution 0 held the most training positives in **12 of 12** full-data cells. The cause is deterministic, not stochastic: `assign_institutions` walks banks largest-volume-first into the least-loaded institution and breaks ties at the **lowest index**, so with every load at 0 the dataset's largest bank lands in institution 0 every time, and the assignment is seed-independent. Volume is balanced to within one endpoint-slot, but institution 0 is one hub bank plus small ones (bank 70 = 33.6% of its own load, against 4.7-9.9% elsewhere) and a hub is an endpoint of disproportionately many edges — so it holds 44.2% more positives on 2.0% more rows. **Reach, not ownership**: campaign-account ownership is not biased toward it. The mean survives as the floor because 4.2 and 4.3 are **paired per institution**, so institution 0 appears on both sides and its atypicality cancels in the contrast; it biases the level, not the result. No interval is affected, because the CIs are per-seed bootstrap over campaigns and no standard error is ever taken across institutions. Weighting was rejected: by rows it moves the figure ~2% and answers a question nobody asked, by positives it weights each institution by the fraud it already sees — the very quantity being measured | user question, 2026-11-15; `docs/reference/train_isolated.csv`; `federation.isolated.pooled_mean`; `tests/test_federation_isolated.py`; §[not exchangeable](#the-institutions-are-not-exchangeable-institution-0-holds-the-hub-bank) |
+| 2026-11-15 | **Recorded: the eight institutions are NOT exchangeable, and institution 0 is the hub holder by construction. The LEVEL of the isolated per-institution mean is therefore not interpretable on its own — only differences against 4.2 and 4.3, paired per institution, are.** This is stated beside the numbers themselves (§5(a), the head of the measured subsection, the generated report's preamble) and not only in Known limitations; §5(a)'s earlier phrasing "what does a typical bank achieve alone" is removed. The unweighted mean over the fixed panel is kept, and **every pooled mean now carries its median, min and max with the institutions that produced them**, over the same institutions the mean averages | Institution 0 held the most training positives in **12 of 12** full-data cells. The cause is deterministic, not stochastic: `assign_institutions` walks banks largest-volume-first into the least-loaded institution and breaks ties at the **lowest index**, so with every load at 0 the dataset's largest bank lands in institution 0 every time, and the assignment is seed-independent. Volume is balanced to within one endpoint-slot, but institution 0 is one hub bank plus small ones (bank 70 = 33.6% of its own load, against 4.7-9.9% elsewhere) and a hub is an endpoint of disproportionately many edges — so it holds 44.2% more positives on 2.0% more rows. **Reach, not ownership**: campaign-account ownership is not biased toward it. The mean survives as the floor because 4.2 and 4.3 are **paired per institution**, so institution 0 appears on both sides and its atypicality cancels in the contrast; it biases the level, not the result. No interval is affected, because the CIs are per-seed bootstrap over campaigns and no standard error is ever taken across institutions. Weighting was rejected: by rows it moves the figure ~2% and answers a question nobody asked, by positives it weights each institution by the fraud it already sees — the very quantity being measured | user question, 2026-11-15; `docs/reference/train_isolated.csv`; `federation.isolated.pooled_mean`; `tests/test_federation_isolated.py`; §[not exchangeable](#the-institutions-are-not-exchangeable-institution-0-holds-the-hub-bank) |
 | 2026-11-15 | **Recorded: the thin-positive tiers were the right decision in advance and did not bind on the full data.** They stay in the code unchanged | 96 of 96 cells came out `normal` — 0 `untrained`, 0 `thin` — and the thinnest cell carries 1,003 positives against a `MIN_POSITIVES_TO_TRAIN` of 10. Kept because the scheme cost nothing, because it is what separates "this bank caught nothing" from "this bank had nothing to learn from" should 4.2 or 4.3 produce such a cell, and because the alternative was discovering at evaluation time that a booster had never seen a positive. Recorded explicitly so the absence of `untrained` cells in the reports reads as a measured outcome rather than as machinery that was never built | `docs/reference/train_isolated.{md,csv}`; §[stage 4.1](#stage-41-the-isolated-condition--approved-and-implemented-2026-11-14) §8 |
 | 2026-11-14 | **PRIMARY comparison points for all of Phase 4, designated 2026-11-14 before any federated arm existed: `f1` and `total_10`.** Every condition-to-condition comparison is made at these two; the other five points are reported and are not comparison points. The designation travels in the data as a `primary` column | They are the only two points where the threshold is determined by something: `f1` by the frozen selection rule on validation, `total_10` by a budget that actually binds (5-7 of 8 institutions, against 0 of 8 at the per-institution budgets). Fixed in advance for the same reason equal tuning effort was — a comparison point chosen after seeing which arm it favoured is not a comparison point, and the choice would be invisible in the result | user decision, 2026-11-14; `federation.isolated.PRIMARY_POINTS`; §[stage 4.1](#stage-41-the-isolated-condition--approved-and-implemented-2026-11-14) §5 |
 | 2026-11-14 | **The per-institution full-budget points are renamed `uncapped_10/50/100`** (from `budget_*`) in the schema, the reports and every table, with the binding count kept beside them | For an isolated institution they are **not budgeted operating points**: an institution seeing a fraction of the traffic cannot raise 10 alarms a day even at the grid's most sensitive threshold, so the budget never binds and the threshold is set by the grid floor. Measured: binding in **0 of 8** institutions at every target. A name reading `budget_10` invites a reader to compare it against a centralized model's genuinely budgeted 10/day, which is the error the binding count exists to prevent; the name should not have to be corrected by a footnote | user decision, 2026-11-14; `phase4_isolated_taus.csv` |
@@ -4770,13 +4815,24 @@ is recorded here rather than in the suite.
   undemonstrated rather than claimed. The single lookback rests on a
   validation margin that did not survive to test. See
   §[Phase 4 frozen scope](#phase-4-frozen-scope).
-- **Phase 4's per-institution training loads are measured on the 1% sample
-  only.** The *relative* distribution across institutions transfers (it is a
-  property of the assignment), but the absolute row counts, positive rates
-  and class weights do not — the sample's positive rate is 3.55% against the
-  full data's 0.102%. The full-data figures land with the first Kaggle run in
-  stage 4.4; until then, "no institution is starved" is a sample result with
-  a stated extrapolation behind it.
+- **The LEVEL of the isolated per-institution mean is not interpretable on its
+  own.** `K = 8` is a construction, not a sample of banks, and institution 0 is
+  a deterministic hub: the bank-to-institution assignment hands it the
+  dataset's largest bank every time, and on the full data it held 44.2% more
+  training positives than the cross-institution mean on 2.0% more rows. Only
+  **differences against 4.2 and 4.3, paired per institution**, are
+  interpretable — there the hub sits on both sides and cancels. No isolated
+  level may be quoted as what a bank achieves alone, and no standard error is
+  ever taken across the eight institutions. See [the institutions are not
+  exchangeable](#the-institutions-are-not-exchangeable-institution-0-holds-the-hub-bank).
+- **Phase 4's per-institution training loads are now measured on the full
+  data** (stage 4.1 session A, 2026-11-15): ~2.0M rows and 1,003-2,526
+  positives per institution-cell, a 0.080% positive rate, class weights
+  435-4,015, and no institution starved at any target. The *detection* numbers
+  are still sample-only until sessions B and C run. The stage 4.0 sample
+  figures remain in the README as the prediction they were, with the sample's
+  3.55% positive rate against the full data's 0.102% as the reason their
+  absolute values never transferred.
 - **The isolated condition's union is not structurally handicapped, which
   constrains what Phase 4 can claim.** Measured on the sample: the union over
   institutions of "this institution's own view holds a connected triple of
@@ -4937,15 +4993,32 @@ Tagged points in the repository, newest first. Check one out with
   and not binding:* 96 of 96 cells `normal`, 0 `untrained`, 0 `thin`, thinnest
   cell 1,003 positives against a threshold of 10. Kept in the code unchanged.
 
-  *The stage 4.0 prediction is confirmed in direction, weaker in magnitude, and
-  narrower than the sample suggested.* The thinnest cell of all 96 is at target
-  **1.0** (seed 1, institution 2), not at 0.25, as predicted. But the spread
-  across institutions is 2.42× at target 1.0 and then 1.93 / 1.89 / 1.91 at
-  0.75 / 0.50 / 0.25 — flat, where the sample showed a monotone decline. So
+  *Result: full visibility is the outlier, and below it the spread is flat.*
+  The thinnest cell of all 96 is at target **1.0** (seed 1, institution 2), not
+  at 0.25, as stage 4.0 predicted. The spread across institutions is **2.42×**
+  at target 1.0 and then **1.93 / 1.89 / 1.91** at 0.75 / 0.50 / 0.25 — the
+  three fragmented targets inside 2% of each other, with target 1.0 sitting
+  25-28% above all three. So
   full visibility concentrates campaigns and starves some views, and below full
   visibility the degree of fragmentation does not measurably change how
-  unevenly positives are spread. Magnitudes run about half the stage 4.0
-  sample's, the expected direction for a 1% background.
+  unevenly positives are spread. The sample's monotone decline across all four
+  targets does not survive: only its first step does. Consequence for 4.2 and
+  4.3: a difference between the 0.75, 0.50 and 0.25 arms cannot be explained by
+  how thinly positives are spread, because there they are spread equally
+  thinly. *Correction in the same step:* a first draft of this table pooled
+  both lookbacks into the stage 4.0 column, which is not Phase 4's scope
+  (L = 48 only) and inflated it — target 1.0 read 4.22× rather than 3.13×, and
+  the "roughly half the sample's magnitude" claim drawn from it was an artefact
+  of the mixed lookbacks. At L = 48 it is 2.42 against 3.13 at target 1.0, and
+  at 0.25 the full data is **higher** than the sample (1.91 against 1.60).
+
+  *Stated next to the numbers, not only in Known limitations:* the **level** of
+  the isolated per-institution mean is not interpretable on its own, because
+  K = 8 is a construction and institution 0 is a deterministic hub. Only
+  differences against 4.2/4.3, paired per institution, are. §5(a) had defined
+  the mean as "what does a typical bank achieve alone"; that phrasing is
+  removed, and the caveat now sits in §5(a), at the head of the measured
+  numbers, in Known limitations, and in the generated report's preamble.
 
   *Recorded: the eight institutions are not exchangeable.* Institution 0 held
   the most positives in **12 of 12** cells, deterministically —
