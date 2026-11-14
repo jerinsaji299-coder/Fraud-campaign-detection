@@ -5,10 +5,17 @@ per-institution **views** of the transaction data under a given
 ``(seed, target)`` visibility assignment, and the account features each
 institution can compute from its own view alone.
 
-Nothing here trains or scores anything. The four conditions — isolated,
-fedavg, fedavg_exchange and centralized — are defined in stage 4.1 and
-implemented in 4.2, and they all consume views built here and are evaluated
-by the unchanged Phase 3 evaluation code.
+Nothing here trains or scores anything. The four conditions consume views
+built here and are evaluated by the unchanged Phase 3 evaluation code:
+``isolated`` is stage 4.1 (proposed, awaiting approval), ``fedavg`` is 4.2,
+``fedavg_exchange`` and the gate are 4.3, and ``centralized`` is the Phase 3
+model already measured.
+
+In ``isolated``, an institution is restricted by its **scorer** and not by
+its data: the evaluation keeps the global transactions, campaigns and
+deadlines, and the scorer returns 0 outside ``visible_mask`` and its model's
+probability inside, with features built from ``institution_view`` alone.
+Visibility restricts what can be scored, never what is true.
 """
 
 from .views import (

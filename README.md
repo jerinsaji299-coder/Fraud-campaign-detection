@@ -47,6 +47,7 @@ git clone https://github.com/jerinsaji299-coder/Fraud-campaign-detection.git
     - [Frozen scope](#phase-4-frozen-scope)
     - [The four conditions](#the-four-conditions)
     - [Stage 4.0: institution-split data](#stage-40-institution-split-data--done)
+    - [Stage 4.1 proposal: the isolated condition](#stage-41-proposal-the-isolated-condition--proposed-awaiting-approval)
 20. [Version history](#version-history)
 21. [Changelog](#changelog)
 
@@ -97,10 +98,15 @@ so the baseline is a confirmed regression check rather than a one-off.
 
 **Current stage:** **Phase 4**, stage **4.0 done** — the institution-split
 data layer is built and tested, and the per-institution training loads are
-measured on the 1% sample. **Next step: approve or amend the stage 4.1
-design proposal**, which has to define what "FedAvg" and "embedding
-exchange" mean for a tree model; nothing federated is implemented until
-that is settled. See §[Phase 4 definitions](#phase-4-definitions-the-federated-conditions).
+measured on the 1% sample, and the stage **4.1 design proposal is
+written and awaiting approval**. 4.1 is the **isolated** condition — each
+institution alone, which is the floor the federated conditions must beat —
+and nothing is implemented until it is approved. Two of its points need a
+decision before anything runs: it asks for **five seeds and both lookbacks**
+where the frozen Phase 4 scope says three seeds and L = 48 (a 96-cell run
+against a 320-cell one, and whatever is chosen binds 4.2 and 4.3 too), and
+the two reporting rules that change the pooled numbers. See
+§[the 4.1 proposal](#stage-41-proposal-the-isolated-condition--proposed-awaiting-approval).
 
 Phase 4 is unaffected by the Phase 3 result: it uses XGBoost only, a decision
 taken before the five-seed run and now reinforced by it (see the Decision
@@ -153,9 +159,9 @@ feature set only, three seeds, one lookback**. See
 | Stage | Description | Status |
 |---|---|---|
 | 4.0 | Institution-split data: per-institution views of every window, and the account features each institution can compute from its own view alone | **done** — `federation/views.py`, 31 tests, per-institution training loads measured on the sample, visibility cross-check exact on all 370 campaigns |
-| 4.1 | Design proposal: what "FedAvg" and "embedding exchange" mean for a tree model, tau per condition, per-institution class weights, the starved-institution rule, seeds, runtime | **not started** — the next step, and no code until it is approved |
-| 4.2 | Implementation and tests, reusing the Phase 3 evaluation code unchanged | not started |
-| 4.3 | The gate: centralized vs `fedavg_exchange` at the 100 bin, full data. A failed gate stops the sweep | not started |
+| 4.1 | **The `isolated` condition**: each institution trained and scoring on its own view alone, with its **own** oracle ceiling per target, and the two pooled numbers (per-institution mean, and the union over institutions) | **proposed, awaiting approval** — §[the 4.1 proposal](#stage-41-proposal-the-isolated-condition--proposed-awaiting-approval). No code until it is approved |
+| 4.2 | `fedavg`: what "FedAvg" means for a tree model, then implementation and tests, reusing the Phase 3 evaluation code unchanged | not started — the design question moved here from 4.1 |
+| 4.3 | `fedavg_exchange`: what crosses the institution boundary, then the gate — centralized vs `fedavg_exchange` at the 100 bin, full data. A failed gate stops the sweep | not started |
 | 4.4 | Kaggle runner subcommands, resumable per (condition, bin, seed) | not started |
 
 **Later phases (not started)**
@@ -1965,6 +1971,14 @@ definition, splits, detection horizons, windows, features, cluster
 extraction, the matching rule, the model tau grid, alert budgets, the four
 test subsets, paired-comparison rules 1-3, and equal tuning effort.
 
+**Two rows above have an amendment pending.** The stage 4.1 instruction asks
+for **five seeds and both lookbacks**. That is a change to a frozen
+definition, so it is not applied: it is costed and argued in
+§[the 4.1 proposal](#stage-41-proposal-the-isolated-condition--proposed-awaiting-approval)
+and waits for an explicit decision. Until then the table above is what
+holds, and whichever way it goes it binds 4.2 and 4.3 as well, because two
+conditions are only pairable over identical cells.
+
 ### The four conditions
 
 | | Condition | Training | At detection time | What its difference measures |
@@ -1976,7 +1990,9 @@ test subsets, paired-comparison rules 1-3, and equal tuning effort.
 
 XGBoost is not a neural network, so conditions 2 and 3 need concrete
 definitions for a tree model — "averaging the weights" of a forest is not a
-meaningful operation. **Stage 4.1 proposes both and stops for approval.**
+meaningful operation. **Stages 4.2 and 4.3 propose them and stop for
+approval** — the design question moved there when 4.1 became the `isolated`
+condition.
 Whatever is approved, the **same** extraction, matching and evaluation code
 runs for all four conditions, so a difference between them can only come
 from the scores.
@@ -2088,10 +2104,368 @@ It writes `artifacts/federation_dev/institution_split.csv` and
 `institution_split_checks.csv` (gitignored, development only) and takes about
 two minutes on the sample.
 
+### Stage 4.1 proposal: the isolated condition — proposed, awaiting approval
+
+**Nothing in this subsection is implemented.** It is the design for stage
+4.1, written before any code, and it needs approval — in particular the two
+**amendments to the frozen Phase 4 scope** in (1) and the two reporting
+rules in (8) and (9), which change the pooled numbers and so must be fixed
+before anything runs.
+
+**What 4.1 is.** Each institution alone: trained on its own visible
+transactions, scoring its own visible transactions, forming clusters inside
+its own view. No model averaging, no boundary-account sharing, no
+coordination of any kind. Its purpose is to produce **the floor the later
+conditions must beat.**
+
+**Renumbering.** 4.1 was previously "define FedAvg and embedding exchange
+for a tree model". Those definitions move to **4.2** (`fedavg`) and **4.3**
+(`fedavg_exchange`, with the gate), and the Kaggle runner work stays at
+**4.4**. The sub-stage table above is updated accordingly. The reservations
+already recorded about calling probability-averaging "FedAvg" are unaffected
+and are raised when 4.2 is designed.
+
+#### 1. Two amendments to the frozen scope, which 4.1 cannot decide for itself
+
+The instruction for 4.1 asks for **five seeds and both lookbacks**. The
+Phase 4 scope frozen on 2026-11-14 says **seeds 0-2 and L = 48 only**.
+Those are frozen research definitions, so per `CLAUDE.md` they are not
+changed without explicit approval — and the choice is not local to 4.1:
+
+> **Whatever is chosen binds 4.2 and 4.3 as well.** Rule 1 pairs two
+> conditions only over identical cells. A floor measured at five seeds and
+> two lookbacks cannot be compared against a `fedavg` arm measured at three
+> seeds and one lookback: the paired comparison would have no matching
+> keys, and the cross-condition difference, which is the entire research
+> result, would be unavailable.
+
+The cost, from the stage 3.3 measurements (207-217s per booster at L = 24
+and 282-289s at L = 48; `evaluate` 1.59h for 20 models across 3 splits and
+4 operating points), scaled by the measured per-institution view size of
+~23.5% of the central row count:
+
+| | Cells (institution × target × seed × L) | Estimated CPU | 12h sessions |
+|---|---:|---:|---:|
+| **Frozen scope** — 3 seeds, L = 48 | 8 × 4 × 3 × 1 = **96** | **7-12 h** | 1-2 |
+| **As instructed** — 5 seeds, both lookbacks | 8 × 4 × 5 × 2 = **320** | **20-34 h** | 3-4 |
+
+Per cell that is one booster (~70-110s on a view of ~2.1M rows), one
+evaluation across 3 splits and 4 operating points (~120-200s), and one
+oracle pass for that institution's own ceiling (~40-90s). The same
+multiplier then applies to `fedavg` and `fedavg_exchange`, so the real
+decision is **~25-35 CPU hours for the rest of Phase 4 against ~90-110** —
+and `fedavg_exchange` is the more expensive of the two, because its clusters
+span institutions.
+
+**Recommendation: keep the frozen scope for 4.1 — three seeds, L = 48.**
+Not because five seeds are worse (they are better) but because the remaining
+three conditions, the gate, the runner and the write-up have to fit the same
+two weeks, and a floor is only useful if the conditions it floors actually
+get measured. If one of the two is to widen, widen **seeds** and not
+lookbacks: wider CIs are already a stated limitation and a fourth and fifth
+seed narrow them, whereas L is not an open question — the frozen Phase 3
+protocol selected L = 48 on validation, and re-opening it would re-litigate
+a settled selection rule at double the cost.
+
+#### 2. Model: the XGBoost baseline, frozen configuration, full feature set
+
+Already a recorded Phase 4 research decision (Decision log, 2026-11-14) and
+unchanged here: 300 trees, depth 6, eta 0.1, subsample and colsample 0.8,
+`hist`, `binary:logistic` with `aucpr`, the per-window class weight
+`n_negative / n_positive`, and the full 66-feature variant. The reason
+specific to the federated conditions is recorded with it: federating the
+weaker model would confound a federation result with a model result, so the
+model is held fixed and only visibility and coordination vary.
+
+#### 3. How an institution is restricted: the scorer, not the data
+
+There are two ways to make `evaluate_split` see only one institution's
+edges. The proposal takes the second.
+
+**Rejected: pass the institution's view as `full_df`.** It restricts the
+right thing for the wrong reason, and it silently moves the ground truth.
+`evaluate_split` derives the unassigned-laundering account set — the set
+that makes a cluster `ambiguous` rather than a `false_alarm` — from its
+`full_df` argument. Hand it a view and laundering the institution cannot
+see stops counting as laundering, so an alert landing on it is recorded as
+a false alarm instead. The institution's false-alarm rate, and with it every
+tau chosen against a budget, would then depend on which rows were filtered
+out.
+
+**Proposed: a masking scorer.** `full_df`, `camp`, `pattern_df`,
+`accounts_by_campaign`, the detection grid, the horizons and the deadlines
+all stay **global and identical to Phase 3**. Institution *i*'s scorer
+receives the global window, computes `views.visible_mask` over its rows,
+builds features from `institution_view(window, i, assignment)` alone, and
+returns
+
+```
+scores = zeros(len(window))
+scores[mask] = booster.predict(view_features)
+```
+
+Because a view is a row subset in the window's own order, the alignment is
+positional and needs no join. Because the smallest tau on `MODEL_TAU_GRID`
+is 0.05 > 0, an invisible edge can never be kept, so a cluster can only form
+inside the view — which is the definition of the isolated condition. **No
+line of the Phase 3 evaluation code changes**, so the extraction, the purity
+≥ 0.5 and coverage ≥ 3 matching rule, the false-alarm-clusters-per-day
+accounting and the four test subsets are the same code that produced the
+centralized numbers, and a difference between conditions can only come from
+the scores.
+
+*Visibility restricts what can be scored. It never restricts what is true.*
+
+#### 4. The ceiling, per institution per target — and a measured surprise
+
+The centralized ceiling (0.821 at L = 24, 0.893 at L = 48) is a property of
+the centralized view and is **not** reused for an institution's number.
+Instead, for every `(institution, target, seed, L, split)` the oracle runs
+**through the same masking scorer**: `oracle_scores` on the visible rows, 0
+elsewhere. That institution's own oracle recall is its ceiling, and
+`recall_relative_to_ceiling` is taken against it, **never clamped** — a
+model detecting a campaign its own oracle misses is a real event at the
+institution level for the same reason it is centrally.
+
+Two consequences for the comparison rules:
+
+- The `oracle_reachable` subset is defined by **that institution's own**
+  oracle, so its campaign set differs per institution. **Two institutions
+  are therefore never paired on `oracle_reachable`** — that would pair over
+  different sets, which rule 1 forbids. All pairing happens on `all`, and
+  `oracle_reachable` carries the ratio only.
+- An institution whose own ceiling is 0 on a subset has an **undefined**
+  ratio, not 0 and not infinity. `recall_relative_to_ceiling` already
+  returns `None` when the oracle recall is 0; those cells are counted and
+  listed, never averaged in as zeros.
+
+**Measured now, on the 1% sample, as evidence for this design** — a
+*structural* proxy for the per-institution ceiling: does institution *i*'s
+view contain a connected component of ≥ 3 of a campaign's accounts, over
+that campaign's own laundering edges? It ignores the 6-hour detection grid
+and the deadline, so it is an **upper bound** on the real per-institution
+ceiling. Over all 258 `eval_ok` campaigns, seeds 0-2:
+
+| Target | Per-institution mean | Weakest institution | Union of all 8 | Institutions reaching a campaign |
+|---|---:|---:|---:|---:|
+| 1.00 | **0.255** | 0.182 | **0.884** | 2.04 |
+| 0.75 | 0.445 | 0.353 | **0.884** | 3.56 |
+| 0.50 | 0.502 | 0.411 | **0.884** | 4.01 |
+| 0.25 | **0.546** | 0.461 | **0.884** | 4.37 |
+
+Two things in that table matter more than their size.
+
+**(a) The per-institution mean runs backwards.** A single bank's structural
+reach is *worst* at the 100 bin (0.255) and *best* at the 25 bin (0.546) —
+the opposite of the intuition the sweep is built on. The mechanism is the
+frozen visibility definition, and it is the same one stage 4.0 found in the
+training loads: at target 1.0 a campaign's accounts are all moved to one
+institution, so its laundering edges are intra-institution and ~2
+institutions can see a connected triple of it; at target 0.25 the campaign
+is deliberately scattered, its edges cross institutions, and because **both
+endpoints** see a cross-institution transaction, ~4.4 institutions each hold
+a connected fragment. Fragmenting a campaign spreads partial evidence more
+widely than it hides it.
+
+**(b) The union's structural ceiling is 0.884 at every target, exactly.**
+Not approximately — identically, and identical to the centralized structural
+value: 228 of 258 campaigns, in all twelve `(target, seed)` runs. This is a
+theorem, and the measurement confirms it: a 3-account connected component
+contains a vertex with ≥ 2 distinct neighbours, and that vertex's
+institution is an endpoint of both of its edges, so it sees that component
+**whatever the assignment does with the other accounts**. The campaigns with
+such a vertex number 228 of 258 — the same 228.
+
+So the isolated-**union** condition is **not structurally handicapped at
+all**. Whatever the federation buys in 4.2 and 4.3, it cannot be "the
+cluster cannot be assembled from one view", because structurally it always
+can. It has to come from one of three places, and 4.1 is what separates
+them: the two edges of that degree-2 vertex must fall in the **same lookback
+window** before the deadline; the institution must hold enough positives to
+**learn** (stage 4.0: thinnest at the 100 bin); and the features an
+institution computes from a partial view are **weaker inputs** than the
+central ones. This sharpens what the stage is for, and it is a reason to
+expect the union floor to be **high** — which makes 4.2's job harder and the
+result more interesting either way.
+
+*Caveat, stated plainly:* the 1% sample thins the background and not the
+campaign edges, and these numbers use only campaign edges and the
+assignment, so they should transfer — but they are a proxy measured on the
+sample, they ignore time entirely, and the real per-institution ceilings are
+whatever 4.1 measures on the full data.
+
+Reproduce with:
+
+```
+cd backend
+python scripts/run_structural_ceiling.py --config configs/local.yaml
+```
+
+Under 10 seconds on the sample; it prints the centralized value and the
+degree-2 count beside the union so the identity can be seen rather than
+taken on trust.
+
+#### 5. The two pooled numbers, and the alert budget they are read at
+
+Both are reported, kept separate, and never averaged into one figure.
+
+**(a) The per-institution mean** — "what does a typical bank achieve alone".
+The mean over the 8 institutions of that institution's recall, each against
+**its own** ceiling. A bank operating alone has its own analysts, so each
+institution is operated at the **full** budget B (10, 50, 100 false-alarm
+clusters a day), exactly as the centralized model is.
+
+**(b) The union** — "8 banks each reporting separately, nobody
+coordinating". A campaign counts as discovered if **any** institution
+discovers it alone, and the union's detection time is the **earliest** across
+institutions, so earliness is reported for it too. Its ceiling is the union
+of the per-institution oracle detections, which by (4b) is expected to sit at
+or near the centralized ceiling.
+
+**The budget problem, which is the substantive objection to reading the
+union naively.** Eight institutions each at 10 false alarms a day put up to
+80 a day in front of whoever receives the reports. Against a centralized
+model at 10 a day, that union is not a floor — it has bought its coverage
+with eight times the alert volume, and 4.2 would then be measured against a
+floor that outspends it. The proposal:
+
+- **The union's primary operating point matches total volume.** Each
+  institution's tau is chosen on validation so the **summed** false-alarm
+  rate meets B, instantiated as the equal split **B / K** per institution.
+  Equal rather than proportional to volume: a volume-proportional split
+  would add a second free parameter to the floor, and the floor should be as
+  unparameterised as possible.
+- **Duplicate alerts are deduplicated.** Two institutions raising the same
+  account set at the same detection time is one case on a desk, so the union
+  counts a cluster identity (the sorted account tuple at a detection time)
+  once, for hits and false alarms alike.
+- **A second union row is reported, clearly labelled**, at per-institution
+  budget B, with its **measured total** false-alarm rate printed beside it.
+  That is the honest "eight banks with eight sets of analysts" reading, and
+  printing its volume is what stops it being quoted as if it were matched.
+
+**The per-institution mean is a statistic, not a detector.** It has no
+per-campaign outcome records, so it **cannot** be the subject of a paired
+comparison against the centralized model or against `fedavg`. The union
+**is** a detector — it has a per-campaign detected flag and an earliest
+detection time — so it is what rule-1 pairing uses. Recorded here so that a
+later session cannot mistake the mean for something pairable.
+
+#### 6. Tau, per institution, on validation
+
+Tau is chosen per `(institution, target, seed, L)` by the frozen rule:
+validation only, campaign-level F1, `MODEL_TAU_GRID` with its near-1 tail,
+ties broken by `best_tau`. Eight institutions therefore hold eight different
+thresholds, which is correct — each bank calibrates its own detector on what
+it can see — and **equal tuning effort is preserved**, because every
+institution gets the identical protocol, not identical attention.
+
+A tau at the edge of the grid is recorded per cell (`tau_at_grid_edge`) and
+**does not abort the run**: all cells finish, every report is written, and
+the runner returns **exit 3** at the end if any cell selected at an edge.
+That is the pattern `evaluate` and `evaluate-gnn` already use — reports
+complete, then stop loudly — and with 96 cells, aborting on the first edge
+tau would throw away hours of finished work.
+
+#### 7. Class weights
+
+No new rule: the frozen per-window weight `n_negative / n_positive`,
+computed **within the institution's own view window**, positives carrying
+their window's weight and negatives 1.0. Stage 4.0 measured the consequence
+on the sample — the weight band widens to 24-71 at target 1.0 against 18-37
+at the other targets — and that is reported per cell, not corrected.
+
+#### 8. First decision requested: institutions with too few positives
+
+**The premise needs one correction first.** The instruction asks about "too
+few positive edges to train on at the 25% target". Stage 4.0 measured the
+opposite ordering: on the 1% sample the positives-per-institution spread is
+**3.13× at target 1.0 and 1.60× at target 0.25**, the thinnest cell of all is
+at target 1.0 (institution 2, seed 1: 274 positives), and **no institution is
+starved at any target**. Scarcity of *training* positives is a **100-bin**
+risk, for the reason in (4a). What is genuinely thin at the 25 bin is not
+training data but **window-level reachability** — the institution has
+positives to learn from, but the three accounts it needs may not be connected
+inside any one window — and that is measured as its ceiling, not patched as a
+training problem.
+
+**Proposed rule — three tiers, nothing silently dropped:**
+
+| Positives in the pooled training matrix | What happens | How it is reported |
+|---|---|---|
+| **0** | Cannot train: XGBoost needs both classes | cell recorded `untrained`, recall **0**, contributes nothing to the union, listed by `(institution, target, seed)` |
+| **1-9** | **Trains**, flagged `thin` | a normal cell, carrying the flag and its positive count |
+| **≥ 10** | Trains | a normal cell |
+
+`MIN_POSITIVES_TO_TRAIN = 10` therefore stays what stage 4.0 made it — a
+**reporting threshold, not a gate**. Refusing to train at 9 positives and
+training at 10 would delete a real outcome on an arbitrary boundary, and what
+matters about a thin institution is what it achieves, which is measurable.
+
+An `untrained` cell is recall **0 and not undefined**, because "this bank has
+nothing to learn from and therefore catches nothing" is the honest answer to
+"what does a bank achieve alone" — an outcome of the condition, not missing
+data. The count of `untrained` cells is printed beside every pooled number
+that includes them.
+
+**And no institution is ever rescued by another's data.** Pooling to fix a
+thin institution is federation, which is exactly what 4.2 measures; doing it
+inside the floor would destroy the comparison.
+
+#### 9. Second decision requested: zero qualifying clusters at a budget
+
+**Recall 0 and undefined are both needed, for two different events** — a
+detector that found nothing, and a detector that cannot be operated there at
+all:
+
+| Event | Recorded as | Why |
+|---|---|---|
+| A tau exists at the budget; clusters form; none matches a campaign | **recall 0** | A real outcome. Phase 3 precedent: the no-format GNN produces **zero qualifying clusters at 10 FA/day in all five seeds at L = 24**, and that is reported as a finding, not as missing data |
+| A tau exists at the budget; **no cluster forms at all** | **recall 0** | Same reason: the detector was operable and detected nothing |
+| **No tau on the grid meets the budget** — even the highest exceeds B false alarms a day | **undefined (empty)** | The operating point does not exist. `select_tau_for_budget` already returns `None` for exactly this case, deliberately, rather than silently falling back. Recording 0 would conflate "detects nothing" with "cannot be run at this volume", and would drag the pooled mean down with a cell that was never measured |
+| The institution's **own ceiling is 0** on a subset | ratio **undefined**, recall still reported | Existing behaviour of `recall_relative_to_ceiling` |
+
+**The reporting rule that makes this safe:** every pooled number is printed
+with its denominator — how many cells it averages, out of 8 institutions ×
+the seed count, so 24 under the frozen scope — and every excluded cell is
+listed by `(institution, target, seed, budget)` with its reason. A mean over
+21 cells is never allowed to look like a mean over 24. This matters most at the
+union's matched-total budget, where B / K is **1.25 false alarms a day per
+institution** at the 10/day budget — the likeliest place on the whole matrix
+for the grid to hold no affordable tau.
+
+#### 10. Outputs
+
+| File | Contents |
+|---|---|
+| `phase4_isolated_outcomes.csv` | Per-campaign records, the **same columns** as `evaluate_outcomes.csv` plus `condition`, `institution`, `visibility_target` and `visibility_bin`, so `compare-models` can pair 4.2 and 4.3 against it. The **union** is written as its own detector rows (`institution = "union"`), since it has genuine per-campaign outcomes |
+| `phase4_isolated.json` / `.md` | The evidence report: per-institution summaries, per-institution ceilings, the two pooled numbers with their denominators, the `untrained` / `thin` / no-affordable-tau lists, tau curves, timings |
+| `phase4_isolated_ceilings.csv` | The oracle ceiling per `(institution, target, seed, L, split, subset)` — the thing that must never be confused with the centralized ceiling |
+| `phase4_isolated_summary.csv` | One row per `(target, seed, L, split, operating_point, institution)`, plus the two pooled rows |
+
+All four go to `docs/reference/`. One integration point to settle in 4.2
+rather than now: `compare-models` refuses to run when two detectors collapse
+into one pairing key, so it needs `institution` and `visibility_target` in
+its key before it can read these files — a small additive change to a command
+that already exists, and no change to what it computes.
+
+New runner subcommands, `train-isolated` and `evaluate-isolated`, resumable
+per `(target, seed, institution)` so a lost session costs one cell.
+
+#### 11. What 4.1 will not do
+
+No model averaging, no boundary-account sharing, no cross-institution
+clusters — those are 4.2 and 4.3. No tuning of anything in response to a weak
+institution, and no change to the extraction rule, the matching rule or the
+budget accounting. If the floor comes out higher than expected, that is the
+result.
+
 ## Decision log
 
 | Date | Decision | Reason | Evidence |
 |---|---|---|---|
+| 2026-11-14 | **Stage 4.1 is the `isolated` condition**, not the FedAvg design proposal; the tree-model definitions of `fedavg` and `fedavg_exchange` move to **4.2** and **4.3**, and the Kaggle runner stays at 4.4 | 4.1 produces the floor every later condition is measured against, so it comes first: a federation that does not beat uncoordinated banks each reporting separately has bought nothing. The `fedavg` definition is not needed to measure the floor, and deciding it later keeps the reservations about calling probability-averaging "FedAvg" open until the condition that depends on them is designed | user decision, 2026-11-14; §[the 4.1 proposal](#stage-41-proposal-the-isolated-condition--proposed-awaiting-approval) |
+| 2026-11-14 | **A per-institution ceiling is computed per institution per target, and the centralized ceiling is never reused for an institution's number**. The oracle runs through the same masking scorer as the model | An institution that sees a quarter of a campaign's edges has its own, much lower ceiling, because the three-account component may not exist in its slice at all; dividing its recall by 0.893 would understate it against a bound it was never able to reach. Measured consequence of getting this wrong: the per-institution **structural** reach is 0.255 at target 1.0 against 0.546 at target 0.25, so the ceiling moves in the opposite direction to the intuition the sweep is built on | user instruction, 2026-11-14; `scripts/run_structural_ceiling.py` |
 | 2026-11-14 | **Phase 3 is COMPLETE. The gate question is answered: a centralized model can discover campaigns early, and the graph model does not beat the non-graph baseline.** XGBoost reaches 0.679 test recall at L = 48 (0.760 of the ceiling); at a matched 10 FA/day budget the GNN reaches **0.525 against XGBoost's 0.654** | Five seeds, two lookbacks, two variants, on the full data, with the stage 3.3 retrain reproducing every recorded number to three decimals — so the baseline is a confirmed regression check, not a single run. The GNN's F1-point recall at L = 24 (0.661) is inside seed noise of XGBoost's (0.654) but costs **5× the alerts** (20.3 against 3.8 a day), and it is noisier across seeds (sd 0.046–0.065 against 0.009–0.016) | `docs/reference/evaluate_baseline.*`, `evaluate_gnn.*`, `compare_models.*`; tag `v0.3-phase3` |
 | 2026-11-14 | **The GNN's shortfall is located at CLUSTER EXTRACTION, not at edge ranking** — and this is recorded as a **finding, not a defect to fix**. Neither the GNN nor the extraction rule is changed in response | Edge-level AP on test at L = 24 is **0.394 (XGBoost) against 0.392 (GNN)**, and on the four validation-detection windows the GNN early-stops on the **GNN ranks better**, 0.435 against 0.425 — yet its campaign recall at 10 FA/day is 0.525 against 0.654. The mechanism is in the false-alarm cluster shape: at the F1 point (test, L = 24, seed 0) XGBoost produces **16** false-alarm clusters, **all exactly 3 accounts**, while the GNN produces **158**, mean **3.20** accounts and up to **6**. Message passing correlates the scores of adjacent edges, so the GNN's high scores arrive in connected neighbourhoods and form spurious connected components; XGBoost scores transactions independently, so its high scores are scattered and rarely form a connected triple. The property that should help a graph model works against it under connected-component extraction. Tuning the model or relaxing the extraction rule now would make the comparison a record of how much attention each model received — equal tuning effort was the condition that made it a comparison of models at all | `compare_models_edge_ap.csv`, `false_alarm_cluster_shape` in `compare_models.json` |
 | 2026-11-14 | **At L = 48 the GNN is behind on edge ranking too** — 0.350 against 0.387 — which is a separate deficit from the extraction effect and is reported as such | Reported rather than merged into the extraction finding, because the two have different causes and different implications: at L = 24 the ranking is equal and only extraction costs the GNN, while at L = 48 it loses at both stages. Conflating them would overstate how general the extraction mechanism is | `compare_models_edge_ap.csv` |
@@ -2334,6 +2708,8 @@ project-root/
       run_xgb_baseline.py         stage 3.3 locally on the 1% sample: train, tau, evaluate, paired
       run_institution_split.py    stage 4.0: per-institution training rows and positives at
                                     every (seed, target), + the visibility cross-check
+      run_structural_ceiling.py   evidence for the 4.1 proposal: the per-institution STRUCTURAL
+                                    ceiling (upper bound on its oracle ceiling), and the union
       run_pipeline.py             runs the pipeline end to end; prints every Verified-numbers value; --export writes artifacts
       kaggle/
         run_on_kaggle.md          the exact notebook cells for running this repo on Kaggle
@@ -2494,6 +2870,22 @@ project-root/
   must be 0. `--lookbacks`, `--seeds` and `--targets` narrow the run. Writes
   `artifacts/federation_dev/` (gitignored, development only). About two
   minutes on the sample.
+- **Measure the per-institution structural ceiling (evidence for the 4.1
+  proposal):**
+  ```
+  cd backend
+  python scripts/run_structural_ceiling.py --config configs/local.yaml
+  ```
+  For every `(target, seed)` and institution it asks whether that
+  institution's view holds a connected component of 3+ of a campaign's
+  accounts, over the campaign's own laundering edges — an **upper bound** on
+  that institution's oracle ceiling, since it ignores the detection grid and
+  the deadline. It also prints the centralized value and the count of
+  campaigns holding an account with 2+ distinct campaign counterparties,
+  which must be equal (see
+  §[the 4.1 proposal](#stage-41-proposal-the-isolated-condition--proposed-awaiting-approval)).
+  Writes `artifacts/federation_dev/structural_ceiling.csv`. Under 10 seconds
+  on the sample.
 - **Train and evaluate the baseline on the full data (on Kaggle):**
   ```
   cd backend
@@ -3601,6 +3993,25 @@ is recorded here rather than in the suite.
   full data's 0.102%. The full-data figures land with the first Kaggle run in
   stage 4.4; until then, "no institution is starved" is a sample result with
   a stated extrapolation behind it.
+- **The isolated condition's union is not structurally handicapped, which
+  constrains what Phase 4 can claim.** Measured on the sample: the union over
+  institutions of "this institution's own view holds a connected triple of
+  this campaign" is **0.884 at every visibility target**, identical to the
+  centralized value (228 of 258 `eval_ok` campaigns) — because a three-account
+  component always contains an account with two campaign counterparties, and
+  that account's institution sees both of its edges whatever the assignment
+  does. So any benefit `fedavg_exchange` shows over `isolated` cannot be
+  attributed to "the cluster could not be assembled from one view"; it has to
+  be attributed to **timing** (both edges inside one lookback window),
+  **learning** (thin positives) or **weaker features** from a partial view.
+  This is a structural proxy on the sample that ignores time, not the
+  measured ceiling, and stage 4.1 is what measures the real one.
+- **Stage 4.1's scope is not settled.** Its instruction asks for five seeds
+  and both lookbacks where the frozen Phase 4 scope says three seeds and
+  L = 48; the amendment is costed in the proposal (96 cells against 320, and
+  ~25-35 CPU hours against ~90-110 for the rest of Phase 4) and **awaits an
+  explicit decision**. Whichever is chosen binds 4.2 and 4.3, because two
+  conditions are only pairable over identical cells.
 - The **1% research sample is present locally** (`backend/data/sample/`), so
   local development runs against the real sample rather than the synthetic
   generator. Stage 3.2's sanity-scorer numbers in this README still come from
@@ -3689,6 +4100,64 @@ Tagged points in the repository, newest first. Check one out with
 | `v0.1-data-pipeline` | 2026-10-08 | Phase 2 complete, plus the stage 3.0 Kaggle runner. The research pipeline (campaign ground truth, splits, topology groups, institutions, visibility), the artifact export, the read-only FastAPI server, and the full React frontend — 69 backend tests and 48 frontend tests passing. **No models and no experiment results**: the four conditions are defined and the result schema is fixed, but nothing has been trained or run, and the full-data regression numbers are still unverified (that is what stage 3.0's Kaggle run is for). |
 
 ## Changelog
+
+- **2026-11-14 (stage 4.1 — PROPOSAL ONLY, awaiting approval)** — **the
+  isolated condition is designed, nothing is implemented.**
+
+  *What changed in the plan.* Stage 4.1 is now the **`isolated` condition** —
+  each institution trained and scoring on its own view alone — and the
+  tree-model definitions of `fedavg` and `fedavg_exchange` move to **4.2** and
+  **4.3**. The floor comes first because a federation that cannot beat
+  uncoordinated banks each reporting separately has bought nothing.
+
+  *The design.* An institution is restricted by its **scorer**, not by its
+  data: `full_df`, `camp`, the detection grid, the horizons and the deadlines
+  stay global and identical to Phase 3, and institution *i*'s scorer returns 0
+  outside `views.visible_mask` and its booster's probability inside, with
+  features built from the view alone. **No line of the Phase 3 evaluation code
+  changes.** Passing the view as `full_df` is rejected and why is recorded: it
+  would move the ground truth, because the unassigned-laundering set that
+  makes a cluster `ambiguous` is derived from that argument. Each institution
+  gets **its own oracle ceiling** per target, through the same mask, never
+  clamped and never the centralized 0.821/0.893.
+
+  *Measured for the proposal*, `scripts/run_structural_ceiling.py` (new,
+  under 10s on the sample): the per-institution **structural** reach runs
+  **backwards** — 0.255 at target 1.0 against 0.546 at 0.25, because at
+  target 1.0 a campaign sits inside one institution while at 0.25 its
+  scattered edges are each seen by both endpoints — and the **union is 0.884
+  at every target, exactly the centralized value** (228 of 258 campaigns).
+  That identity is a theorem the script checks: a three-account component
+  contains an account with two campaign counterparties, whose institution is
+  an endpoint of both edges. Consequence recorded under Known limitations:
+  any `exchange`-over-`isolated` benefit cannot be attributed to "the cluster
+  could not be assembled from one view".
+
+  *Two decisions requested, with the premise of one corrected.* The thin-data
+  risk is at the **100 bin**, not the 25 bin (stage 4.0: 3.13× positive spread
+  at target 1.0 against 1.60× at 0.25). Proposed: 0 positives → `untrained`
+  and recall **0** (an outcome, not missing data); 1-9 → trains, flagged
+  `thin`; `MIN_POSITIVES_TO_TRAIN` stays a reporting threshold, not a gate.
+  And zero qualifying clusters at an existing tau → recall **0** (Phase 3
+  precedent: the no-format GNN at 10 FA/day), while **no affordable tau on the
+  grid** → **undefined**, excluded from the pooled mean and listed, because
+  `select_tau_for_budget` already returns `None` for exactly that and 0 would
+  conflate "found nothing" with "cannot be run here".
+
+  *Raised as an objection.* Eight institutions each at 10 false alarms a day
+  spend 80 a day, so the **union's primary operating point matches total
+  volume** (B / K per institution, duplicate cluster identities
+  deduplicated), with the per-institution-B union reported separately and its
+  measured total volume printed beside it. The per-institution mean is a
+  **statistic, not a detector**, so it is never the subject of a paired
+  comparison; the union is.
+
+  *Awaiting a decision.* The instruction's **five seeds and both lookbacks**
+  are a change to the frozen Phase 4 scope and are **not applied**: 96 cells
+  against 320, ~7-12 CPU hours against ~20-34, and ~25-35 hours against
+  ~90-110 for the rest of Phase 4. Recommendation: keep three seeds and
+  L = 48; if one widens, widen seeds, not lookbacks. Whatever is chosen binds
+  4.2 and 4.3, since two conditions are only pairable over identical cells.
 
 - **2026-11-14 (stage 3.4.4 + 3.4.5 — PHASE 3 COMPLETE, tag `v0.3-phase3`)** —
   **the full run is in, the GNN does not beat the baseline, and the reason is
