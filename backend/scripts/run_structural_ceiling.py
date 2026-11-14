@@ -12,10 +12,12 @@ exists to answer one design question before 4.1 is built: does an
 institution's ceiling collapse as its visibility shrinks, and does the union
 over institutions collapse with it?
 
-Measured answer on the 1% sample (2026-11-14): the per-institution mean rises
-as visibility falls (0.255 at target 1.0, 0.546 at 0.25), and the union sits
-at 0.884 at **every** target - identical to the centralized structural value,
-228 of 258 campaigns. That identity is a theorem, not a coincidence: a
+Measured answer on the 1% sample (2026-11-14): the per-institution figure -
+a **mean over the 8 institutions**, which is why it is low wherever reach is
+concentrated - rises as visibility falls (0.255 at target 1.0, 0.546 at
+0.25), and the union sits at 0.884 at **every** target - identical to the
+centralized structural value, 228 of 258 campaigns. That identity is a
+theorem, not a coincidence: a
 three-account connected component contains a vertex with at least two
 distinct neighbours, and that vertex's institution is an endpoint of both of
 its edges, so it sees the whole component whatever the assignment does with
@@ -135,6 +137,8 @@ def main() -> int:
             reached = {i: 0 for i in range(k)}
             union = 0
             institutions_per_campaign = []
+            reach_histogram = Counter()
+            single_holder = 0
             for cid in eval_ok:
                 edges = result.edges_by_campaign.get(cid, [])
                 count = 0
@@ -147,8 +151,14 @@ def main() -> int:
                         reached[i] += 1
                         count += 1
                 institutions_per_campaign.append(count)
+                reach_histogram[count] += 1
                 if count:
                     union += 1
+                # how concentrated the campaign's ACCOUNTS are, which is a
+                # different question from how concentrated its visibility is
+                accounts = {account for edge in edges for account in edge}
+                if len({institution_of(account) for account in accounts}) == 1:
+                    single_holder += 1
             fractions = sorted(reached[i] / n for i in range(k))
             rows.append({
                 "target": target,
@@ -158,14 +168,23 @@ def main() -> int:
                 "strongest_institution": fractions[-1],
                 "union": union / n,
                 "institutions_per_campaign": sum(institutions_per_campaign) / n,
+                "campaigns_reached_by_exactly_one": reach_histogram[1],
+                "campaigns_reached_by_none": reach_histogram[0],
+                "campaigns_in_one_institution": single_holder,
             })
             print(
-                f"  target {target:<5} seed {seed}: per-institution mean "
+                f"  target {target:<5} seed {seed}: per-institution MEAN "
                 f"{rows[-1]['per_institution_mean']:.3f} "
                 f"(weakest {fractions[0]:.3f}, strongest {fractions[-1]:.3f}), "
                 f"union {rows[-1]['union']:.3f}, "
                 f"{rows[-1]['institutions_per_campaign']:.2f} institutions reach a campaign",
                 flush=True,
+            )
+            print(
+                f"      reached by exactly one institution: {reach_histogram[1]}, "
+                f"by none: {reach_histogram[0]}, "
+                f"by two or more: {n - reach_histogram[0] - reach_histogram[1]}; "
+                f"all accounts in one institution: {single_holder}/{n}"
             )
 
     frame = pd.DataFrame(rows)
@@ -174,8 +193,11 @@ def main() -> int:
         frame.groupby("target").agg(
             per_institution_mean=("per_institution_mean", "mean"),
             weakest_institution=("weakest_institution", "min"),
+            strongest_institution=("strongest_institution", "max"),
             union=("union", "mean"),
             institutions_per_campaign=("institutions_per_campaign", "mean"),
+            reached_by_one=("campaigns_reached_by_exactly_one", "mean"),
+            accounts_in_one_institution=("campaigns_in_one_institution", "mean"),
         ).to_string(float_format=lambda v: f"{v:.3f}")
     )
 
