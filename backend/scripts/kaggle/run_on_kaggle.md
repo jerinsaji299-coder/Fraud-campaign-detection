@@ -1187,7 +1187,13 @@ cannot paper over one. Paste B1-B6 in order.
 #      its own view - that is the point of the condition - so every booster
 #      directory carries its own `feature_spec.json`, and all 96 are checked
 #      below.
-import json, pathlib, shutil, subprocess
+#
+#      The sys.path insert is here and not only in the pre-flight: this cell
+#      loads boosters, so it needs `fraudcamp` importable, and it now runs
+#      BEFORE the pre-flight that used to be the first cell to set the path.
+import pathlib, shutil, subprocess, sys
+
+sys.path.insert(0, "/kaggle/temp/repo/backend/src")
 
 found = sorted(subprocess.run(
     ["find", "/kaggle/input", "-maxdepth", "6", "-type", "d",
