@@ -161,7 +161,7 @@ feature set only, three seeds, one lookback**. See
 | Stage | Description | Status |
 |---|---|---|
 | 4.0 | Institution-split data: per-institution views of every window, and the account features each institution can compute from its own view alone | **done** — `federation/views.py`, 31 tests, per-institution training loads measured on the sample, visibility cross-check exact on all 370 campaigns |
-| 4.1 | **The `isolated` condition**: each institution trained and scoring on its own view alone, with its **own** oracle ceiling per target, and the two pooled numbers (per-institution mean, and the union over institutions) | **built and tested** — `federation/isolated.py`, 46 tests, backend 408 passed / 25 skipped; `train-isolated` and `evaluate-isolated` runner subcommands, resumable. Measured on the sample; the full-data run is a Kaggle session. §[stage 4.1](#stage-41-the-isolated-condition--approved-and-implemented-2026-11-14) |
+| 4.1 | **The `isolated` condition**: each institution trained and scoring on its own view alone, with its **own** oracle ceiling per target, and the two pooled numbers (per-institution mean, and the union over institutions) | **built and tested** — `federation/isolated.py`, 49 tests, backend 411 passed / 25 skipped; `train-isolated` and `evaluate-isolated` runner subcommands, resumable. Measured on the sample; the full-data run is a Kaggle session. §[stage 4.1](#stage-41-the-isolated-condition--approved-and-implemented-2026-11-14) |
 | 4.2 | `fedavg`: what "FedAvg" means for a tree model, then implementation and tests, reusing the Phase 3 evaluation code unchanged | not started — the design question moved here from 4.1 |
 | 4.3 | `fedavg_exchange`: what crosses the institution boundary, then the gate — centralized vs `fedavg_exchange` at the 100 bin, full data. A failed gate stops the sweep | not started |
 | 4.4 | Kaggle runner subcommands, resumable per (condition, bin, seed) | not started |
@@ -2567,7 +2567,7 @@ That last row is a refinement of the rule as first stated, and it is not a
 small one: on the sample **166 of 224** `(institution, operating point)` cells
 chose tau = 0.05, of which **163 are budget points** and only **3 are F1
 points**. Treating every low edge alike would have excluded or stopped on
-three quarters of the matrix for the uninteresting reason that `budget_100`
+three quarters of the matrix for the uninteresting reason that `uncapped_100`
 is easy to satisfy.
 
 A high-edge cell is excluded for exactly the reason an unaffordable budget is,
@@ -2629,7 +2629,7 @@ is beyond what can be resolved, so the operating point was not found.
 |---|---|
 | `federation/isolated.py` | the condition: the masking scorer, per-institution training, the per-institution oracle ceiling, the union (outcomes, and the deduplicating cluster pass), the two pooled means, the seven operating points, and `run_cell`, which both runners call so the local and Kaggle reports come from one code path |
 | `constants.PHASE4_SEEDS`, `constants.PHASE4_LOOKBACK_H` | the frozen scope **in code** — `[0, 1, 2]` and `48` — so a runner cannot drift from this README. `evaluate-isolated` refuses more than one lookback outright |
-| `tests/test_federation_isolated.py` | **46 tests**, including the grid-edge policy and the budget-binding audit; backend suite **408 passed, 25 skipped** |
+| `tests/test_federation_isolated.py` | **49 tests**, including the grid-edge policy, the budget-binding audit and the primary-point designation; backend suite **411 passed, 25 skipped** |
 | `scripts/run_isolated.py` | the condition on the 1% sample, for development |
 | `train-isolated` | one booster per institution per `(target, seed)`, saved as it finishes, **resumable per institution** |
 | `evaluate-isolated` | tau, ceilings, the per-institution and union reports, **resumable per `(target, seed)`**; it **never trains**, so a lost evaluation session cannot silently retrain on different boosters; exit 3 on an edge tau after every report is written |
@@ -2640,17 +2640,39 @@ the `evaluate_outcomes.csv` columns plus `condition`, `institution`,
 its own detector rows), then `_summary`, `_pooled`, `_union`, `_ceilings`,
 `_taus`, `_institutions`, and `phase4_isolated.json` / `.md`.
 
-**Seven operating points, not four.** `f1` and `budget_10/50/100` give each
+**Seven operating points, not four — and two of them are PRIMARY.**
+`f1` and `uncapped_10/50/100` give each
 institution its own full budget — a bank alone has its own analysts — and
 `total_10/50/100` give each institution `B / K` so the union's summed volume
 is the one being budgeted. The sample run shows why both are needed: at
 target 0.25 the union's deduplicated volume is **39.8** false alarms a day at
-`budget_10` and **18.3** at `total_10`. Eight institutions each inside 10 a
+`uncapped_10` and **18.3** at `total_10`. Eight institutions each inside 10 a
 day are not together inside 10 a day.
 
 *A budget is a **validation-chosen** operating point, as in Phase 3, so the
 realized test volume is not the budget: at `total_10` the union realizes
 12.4-18.3 a day across the four targets. That is reported, not corrected.*
+
+**Why they are called `uncapped_*` and not `budget_*`.** For an isolated
+institution they are **not budgeted operating points at all**. An institution
+seeing a fraction of the traffic cannot raise 10 alarms a day even at the most
+sensitive threshold on the grid, so the budget never binds and the threshold
+is set by the grid's floor instead. Measured on the sample: the budget binds
+in **0 of 8** institutions at every target at `uncapped_10/50/100`, against
+**5-7 of 8** at `total_10`. The name says so, and `budget_binding` remains the
+authoritative answer per cell — a full-data cell that does bind will say so
+there.
+
+**The two PRIMARY points, designated 2026-11-14 before any federated arm
+existed:** **`f1`** and **`total_10`**. They are the only two where the
+threshold is determined by *something* — the frozen selection rule on
+validation, and a budget that actually binds. Every Phase 4 comparison
+between conditions is made at these two; the other five are reported and are
+not comparison points. Fixing this in advance is the same discipline as equal
+tuning effort: a comparison point chosen after seeing which arm it favoured
+is not a comparison point. The designation travels in the data as a
+`primary` column on the tau and union rows, so 4.2 and 4.3 cannot quietly
+compare somewhere else.
 
 **Verified across processes.** Training and evaluation are separate Kaggle
 sessions, so the two paths have to agree. For target 1.0 seed 0 they do
@@ -2771,7 +2793,7 @@ missing because the grid stopped too early, not because the detector could
 not be operated.
 
 **And the budgets mostly do not bind, exactly as predicted.** At the
-per-institution budgets, `budget_10/50/100`, the budget binds in **0 of 8**
+per-institution budgets, `uncapped_10/50/100`, the budget binds in **0 of 8**
 institutions at every target: an institution that sees a fraction of the
 traffic cannot raise 10 alarms a day even at the most sensitive threshold on
 the grid, so "recall at 10 FA/day" is not a budgeted operating point for it
@@ -2806,6 +2828,40 @@ never has to work out which one a number is. A fixture in the test suite
 builds the case where they differ — and in it the only institution that can
 see the campaign is one that had no positives to train on, which is the
 conflation the second mean exists to prevent.)*
+
+#### What stage 4.1 means for 4.2 and 4.3 — recorded before either is designed
+
+Two findings of this stage combine into a constraint on what the federated
+conditions can possibly buy, and it is written down **now**, before `fedavg`
+is defined, so that it cannot be adjusted afterwards to fit a result.
+
+**One: the isolated union already reaches the centralized ceiling.** Not
+approximately — by the argument from the frozen visibility rule, exactly, and
+with the detection grid and deadlines in force. Whatever a campaign's
+structure, some institution holds an account with two of its counterparties
+and therefore sees a qualifying component in the same window at the same
+detection time. There is **no structural headroom**: federation cannot buy
+"the cluster could not be assembled from one view", because it always can be.
+
+**Two: isolated institutions are evidence-limited, not alert-limited.** Each
+reaches **0.6-0.9 of its own ceiling** on the sample while its recall is a
+fraction of the union's, and at the per-institution budgets the alert budget
+binds in **0 of 8** institutions. An institution is not straining against an
+alert cap and it is not a poor detector on what it holds. It simply holds
+little.
+
+**Therefore any benefit in 4.2 or 4.3 must come from improving the scorer** —
+better features or better learning on the same visible edges — and **not**
+from assembling clusters that could not otherwise be assembled, and **not**
+from relieving alert pressure. That narrows what each condition is even
+testing: `fedavg` shares learning, which is the mechanism still available;
+`fedavg_exchange` shares evidence, which is the one the structural result
+says has nowhere obvious to go unless partial evidence improves the *scores*
+rather than the clusters.
+
+**A null result for either is an expected possible outcome and is reported as
+a finding**, not treated as a failure to tune — the same rule Phase 3 applied
+to the GNN, declared here in advance for the same reason.
 
 #### The full-data run: proposed, not yet run
 
@@ -2852,13 +2908,16 @@ rather than the run.
 
 | Date | Decision | Reason | Evidence |
 |---|---|---|---|
+| 2026-11-14 | **PRIMARY comparison points for all of Phase 4, designated 2026-11-14 before any federated arm existed: `f1` and `total_10`.** Every condition-to-condition comparison is made at these two; the other five points are reported and are not comparison points. The designation travels in the data as a `primary` column | They are the only two points where the threshold is determined by something: `f1` by the frozen selection rule on validation, `total_10` by a budget that actually binds (5-7 of 8 institutions, against 0 of 8 at the per-institution budgets). Fixed in advance for the same reason equal tuning effort was — a comparison point chosen after seeing which arm it favoured is not a comparison point, and the choice would be invisible in the result | user decision, 2026-11-14; `federation.isolated.PRIMARY_POINTS`; §[stage 4.1](#stage-41-the-isolated-condition--approved-and-implemented-2026-11-14) §5 |
+| 2026-11-14 | **The per-institution full-budget points are renamed `uncapped_10/50/100`** (from `budget_*`) in the schema, the reports and every table, with the binding count kept beside them | For an isolated institution they are **not budgeted operating points**: an institution seeing a fraction of the traffic cannot raise 10 alarms a day even at the grid's most sensitive threshold, so the budget never binds and the threshold is set by the grid floor. Measured: binding in **0 of 8** institutions at every target. A name reading `budget_10` invites a reader to compare it against a centralized model's genuinely budgeted 10/day, which is the error the binding count exists to prevent; the name should not have to be corrected by a footnote | user decision, 2026-11-14; `phase4_isolated_taus.csv` |
+| 2026-11-14 | **Recorded before 4.2 is designed: any benefit from `fedavg` or `fedavg_exchange` must come from improving the SCORER** — not from assembling clusters that could not otherwise be assembled, and not from relieving alert pressure | Two stage 4.1 findings combine. The isolated **union** already reaches the centralized ceiling, by the argument from the frozen visibility rule, so there is no structural headroom. And isolated institutions are **evidence-limited, not alert-limited**: each reaches 0.6-0.9 of its own ceiling while holding a fraction of the evidence, and the alert budget binds in 0 of 8 at the per-institution budgets. Written down before the conditions are designed so the claim cannot be adjusted afterwards to fit a result; a null result stays an expected possible outcome, reported as a finding | user decision, 2026-11-14; §[stage 4.1](#stage-41-the-isolated-condition--approved-and-implemented-2026-11-14) |
 | 2026-11-14 | **`MODEL_TAU_GRID` extended to `1 - 1e-7`, approved and applied**: six points added — 0.99995, 0.99999, 0.999995, 0.999999, 0.9999995, 0.9999999 — before the full-data run. 1.0 is excluded | Headroom was one grid point (the highest tau ever chosen on full data was 0.9995 against a top of 0.9999) and stage 4.1 makes 672 threshold choices; a sweep step above 0.99 costs 2.6s against 9.1s at 0.05, so the six points add ~26 min to a 96-cell run; and the tail stops where float32 does, since the largest float32 below 1.0 is 0.99999994 while `1 - 1e-8` **is** 1.0. **A finer tail does give selection slightly more freedom, and that is acceptable because the selection rule is fixed in advance and applied identically across every model and condition** — so it is not a tuning advantage for any arm. 1.0 is excluded because `score >= 1.0` would keep whatever rounds to exactly 1.0, which depends on the build and is not reproducible | user decision, 2026-11-14; §[stage 4.1 §12](#12-grid-edge-policy-and-the-extension-of-model_tau_grid); `tests/test_tau_and_budgets.py` |
 | 2026-11-14 | **Every `(institution, operating point)` cell carries a `budget_binding` flag, and every pooled budget number prints how many of its cells had a binding budget**, with the non-binding institutions listed. If the binding fraction differs materially between two conditions, the README says so rather than averaging over it | An isolated institution sees a fraction of the traffic, so a nominal 100 alarms a day is often more than it could raise at its loosest threshold, while the centralized model at the same nominal budget is in the opposite position. Pooling the two into one "recall at 100 FA/day" compares a **budgeted** operating point against an **unbudgeted** one, and the difference would be invisible in the recall alone. The F1 point has no budget and reports no binding fraction rather than a misleading zero | user decision, 2026-11-14; `federation.isolated.binding_summary`; `tests/test_federation_isolated.py` |
 | 2026-11-14 | **Grid-edge policy, fixed before the full-data run. A chosen tau at the TOP of the model grid makes that operating point UNDEFINED** — excluded from both pooled means, listed with its rejected tau, **never scored 0** — because the optimum lies beyond the grid and the point was therefore not found | Identical in kind to an unaffordable budget, and reported the same way: a detector that could not be operated at a point was not measured at that point, and a mean that absorbs it as 0 reports a measurement that was never made. Decided in advance so that no cell's treatment can depend on having seen which cells hit the edge | user decision, 2026-11-14; §[stage 4.1 §12](#12-grid-edge-policy-and-the-extension-of-model_tau_grid); `tests/test_federation_isolated.py` |
 | 2026-11-14 | **A chosen F1 tau at the BOTTOM of the grid stops the full-data run and is NOT recorded** (`--allow-low-edge-tau` overrides, for the thinned sample only). **A bottom-edge *budget* tau is neither flagged nor excluded** | At the full data's 0.102% prevalence the most sensitive threshold on the grid should not be the best one; if it is, something is wrong with the data, the weighting or the grid, and recording the cell would bury that. The budget exception is measured, not assumed: on the sample **166 of 224** (institution, operating point) cells chose tau = 0.05, of which **163 are budget points** — a low budget tau says only that the budget is loose, not that an optimum is missing, so treating every low edge alike would have excluded three quarters of the matrix for no reason | user decision, 2026-11-14, with the budget refinement measured; §[stage 4.1 §12](#12-grid-edge-policy-and-the-extension-of-model_tau_grid) |
 | 2026-11-14 | **Proposed, awaiting approval: `MODEL_TAU_GRID` gains six points at the top** — 0.99995, 0.99999, 0.999995, 0.999999, 0.9999995, 0.9999999 — **before** the full-data run, not in response to results. The grid is a frozen definition, so the code is unchanged until this is approved | Three measured reasons. The current headroom is **one grid point**: on the full data the highest tau ever chosen was 0.9995 (GNN at a budget) and 0.999 for XGBoost, against a top of 0.9999, and 4.1 has 672 (institution, operating point) chances to need the next step. It is nearly free: a sweep step costs 9.1s at tau 0.05 but **2.6s** from 0.99 up, so six points is ~16s per institution-cell, ~26 min across the run. And it stops where float32 does: the largest float32 below 1.0 is 0.99999994, so `1 - 1e-7` is the last distinguishable threshold while `1 - 1e-8` **is** 1.0. **1.0 itself is excluded on purpose** — `score >= 1.0` would keep whatever rounds to exactly 1.0, which depends on the arithmetic and the build and is not reproducible | §[stage 4.1 §12](#12-grid-edge-policy-and-the-extension-of-model_tau_grid); `docs/reference/evaluate_baseline_tau_curve.csv`, `evaluate_baseline_budgets.csv` |
 | 2026-11-14 | **The isolated union's oracle ceiling equals the centralized oracle ceiling** — not structurally but **with the 6-hour detection grid, the lookback and the deadlines in force**. Recorded as an **argument from the frozen visibility rule, with no figure attached** until the full-data run confirms one; the sample run is cited only as a consistency check, in which the two agreed exactly in every cell (2026-11-14 amendment) | The proof is the same degree-2 argument, carried through time: if the centralized oracle detects a campaign at `t`, some window-local component held three of its accounts; that component contains an account with two campaign counterparties; that account's institution is an endpoint of **both** of those edges, so it sees the same component in the same window at the same `t` — the same detection time, hence the same lead time and the same side of the deadline. Consequence, declared in advance: a null result for 4.2 or 4.3 is an expected possible outcome, because there is no structural headroom for coordination to recover | `scripts/run_isolated.py`, `scripts/run_structural_ceiling.py`; §[stage 4.1](#stage-41-the-isolated-condition--approved-and-implemented-2026-11-14) |
-| 2026-11-14 | **Stage 4.1 evaluates SEVEN operating points, not four**: `f1` and `budget_10/50/100` at each institution's own full budget, plus `total_10/50/100` at `B / K` each so the union's summed volume meets `B` | Measured on the sample at target 1.0: the union's deduplicated volume at `budget_10` is **23.3 false alarms a day**, because eight institutions each inside 10/day are not together inside 10/day, while at `total_10` it is **4.0**. Comparing a 23.3/day union against a centralized model at 10/day would measure a floor that outspends what it floors. Both readings are kept because they answer different questions — eight banks with their own analysts, and one supervisory desk — and the per-institution-budget union prints its realized total beside it so it cannot be quoted as matched | `phase4_isolated_union.csv`; §[stage 4.1](#stage-41-the-isolated-condition--approved-and-implemented-2026-11-14) §5 |
+| 2026-11-14 | **Stage 4.1 evaluates SEVEN operating points, not four**: `f1` and `uncapped_10/50/100` at each institution's own full budget, plus `total_10/50/100` at `B / K` each so the union's summed volume meets `B` | Measured on the sample at target 1.0: the union's deduplicated volume at `uncapped_10` is **23.3 false alarms a day**, because eight institutions each inside 10/day are not together inside 10/day, while at `total_10` it is **4.0**. Comparing a 23.3/day union against a centralized model at 10/day would measure a floor that outspends what it floors. Both readings are kept because they answer different questions — eight banks with their own analysts, and one supervisory desk — and the uncapped-budget union prints its realized total beside it so it cannot be quoted as matched | `phase4_isolated_union.csv`; §[stage 4.1](#stage-41-the-isolated-condition--approved-and-implemented-2026-11-14) §5 |
 | 2026-11-14 | **The union's alert volume is counted by a second pass over the detection grid, and that pass is cross-checked against `evaluate_split` per institution** | `EvaluationResult` keeps cluster **sizes** and not account sets — deliberately, since it never stores account names — so there is nothing in it to deduplicate by. The second pass calls the same frozen `extract_clusters` and `classify_cluster`, and a test requires its per-institution false-alarm and hit counts to equal `evaluate_split`'s for every institution at two taus. Without that check the union's volume could be measured by a different rule from every per-institution number in the same table | `tests/test_federation_isolated.py` |
 | 2026-11-14 | **Stage 4.1 approved, 2026-11-14.** The `isolated` condition is implemented as designed: an institution is restricted by its **scorer**, not by its data, so the Phase 3 evaluation code runs unchanged, and each institution gets **its own oracle ceiling** per target | The centralized ceiling (0.821 / 0.893) is a property of the centralized view; dividing an institution's recall by it would measure against a bound that institution could never reach. Restricting by the scorer rather than by `full_df` keeps the ground truth global - the unassigned-laundering set that makes a cluster `ambiguous` is derived from that argument, so filtering rows would silently reclassify ambiguous clusters as false alarms and move every budget-chosen tau | user approval, 2026-11-14; §[stage 4.1](#stage-41-the-isolated-condition--approved-and-implemented-2026-11-14) |
 | 2026-11-14 | **The earlier "five seeds, both lookbacks" instruction for Phase 4 is WITHDRAWN. The frozen scope stands: 3 seeds, L = 48.** Standing rule for any future widening: **seeds widen, lookbacks do not** | The instruction was written from Phase 3 habit. L = 48 was settled by the Phase 3 selection rule on validation, and re-opening a decided rule inside a later phase is drift. Cost measured: 96 cells against 320, ~7-12 CPU hours against ~20-34 for 4.1 alone and ~25-35 against ~90-110 for the rest of Phase 4, inside a two-week finish. Any widening binds 4.2 and 4.3 too, since two conditions are only pairable over identical cells | user decision, 2026-11-14; §[stage 4.1](#stage-41-the-isolated-condition--approved-and-implemented-2026-11-14) §1 |
@@ -4116,7 +4175,7 @@ campaign_id)`:
   reducing `visible_mask` to sender-only breaks 4 tests, looping
   `range(k - 1)` in `all_views` breaks 2, and replacing the `max` over
   institutions with a `mean` breaks 13.
-- **Backend isolated-condition tests** (`test_federation_isolated.py`, 46
+- **Backend isolated-condition tests** (`test_federation_isolated.py`, 49
   tests, stage 4.1): that a masked scorer scores the visible rows and
   **zeroes the rest**, that the scores land on the rows they describe (the
   values are row-identifying, so a misalignment shows), and that the clusters
@@ -4528,11 +4587,15 @@ is recorded here rather than in the suite.
   rather than silently now.
 - **Declared before 4.2 runs: a null result for `fedavg` or
   `fedavg_exchange` is an expected possible outcome and is reported as a
-  finding, not treated as a failure to tune.** It follows from the line
-  above: since the isolated union already reaches the centralized structural
-  ceiling, there is no structural headroom for coordination to recover, and
-  any benefit has to come from timing, learning or feature quality — none of
-  which is guaranteed to be large. This is written down **in advance**, on
+  finding, not treated as a failure to tune.** It follows from two stage 4.1
+  findings together. The isolated union already reaches the centralized
+  ceiling, so there is no structural headroom for coordination to recover;
+  and isolated institutions are **evidence-limited rather than
+  alert-limited** — each reaches 0.6-0.9 of its own ceiling, and the alert
+  budget binds in 0 of 8 at the per-institution budgets. Any benefit must
+  therefore come from **improving the scorer**, not from assembling clusters
+  that could not otherwise be assembled and not from relieving alert
+  pressure — and nothing guarantees that improvement is large. This is written down **in advance**, on
   2026-11-14, for the same reason equal tuning effort was: a result that only
   counts as a result when it is positive is not a measurement. If a condition
   shows no benefit, nothing is tuned in response and the mechanism is
@@ -4632,6 +4695,47 @@ Tagged points in the repository, newest first. Check one out with
 
 ## Changelog
 
+- **2026-11-14 (stage 4.1 — naming, primary points, and the 4.2 constraint)**
+  — three things fixed before any federated arm exists.
+
+  *The per-institution full-budget points are renamed `uncapped_10/50/100`*,
+  in the schema, the reports and every table. For an isolated institution
+  they are not budgeted operating points at all — the budget binds in **0 of
+  8** institutions at every target — and a name reading `budget_10` invites
+  exactly the comparison against a centralized model's genuinely budgeted
+  10/day that the binding count exists to prevent. The binding count stays
+  beside them, and remains authoritative per cell.
+
+  *Two PRIMARY comparison points designated: `f1` and `total_10`*, the only
+  two where the threshold is determined by something — the frozen selection
+  rule on validation, and a budget that actually binds (5-7 of 8, against 0
+  of 8 at the uncapped points). Every Phase 4 condition comparison is made at
+  these two. Fixed now, before any federated arm exists, for the same reason
+  equal tuning effort was: a comparison point chosen after seeing which arm
+  it favoured is not a comparison point. It travels in the data as a
+  `primary` column, so 4.2 and 4.3 cannot quietly compare somewhere else.
+
+  *The combined reframing is recorded before 4.2 is designed:* the isolated
+  union already reaches the centralized ceiling, **and** isolated
+  institutions are **evidence-limited rather than alert-limited** — 0.6-0.9
+  of their own ceiling, with the alert budget binding in 0 of 8. **Any
+  benefit from 4.2 or 4.3 must therefore come from improving the scorer**,
+  not from assembling clusters that could not otherwise be assembled and not
+  from relieving alert pressure. A null result stays an expected possible
+  outcome, reported as a finding.
+
+  *Sessions B and C now assert their inputs in the first minute* — all 96
+  booster directories present, complete, non-empty and spot-loaded at L = 48
+  with 66 features — **before** the scope and grid pre-flight, because a
+  missing booster is the likelier failure and `evaluate-isolated` never
+  trains. One correction to the instruction: there is no shared `spec_L24` /
+  `spec_L48` pair to check as there was for the GNN. Each institution fits
+  its **own** feature spec on its own view — that is the condition — so every
+  booster directory carries its own `feature_spec.json` and all 96 are
+  checked.
+
+  49 tests, backend 411 passed / 25 skipped.
+
 - **2026-11-14 (stage 4.1 — the grid applied, budgets audited, the run
   planned)** — four approved changes, and the full-data session plan.
 
@@ -4665,7 +4769,7 @@ Tagged points in the repository, newest first. Check one out with
   — now has one, and no cell on the sample is undefined any longer: the
   missing operating point was missing because the grid stopped too early. And
   the per-institution budgets **never bind**: 0 of 8 institutions at
-  `budget_10/50/100` at every target, against 5-7 of 8 at `total_10`. An
+  `uncapped_10/50/100` at every target, against 5-7 of 8 at `total_10`. An
   institution that sees a fraction of the traffic cannot reach 10 alarms a
   day even at the loosest threshold, which is precisely why the binding count
   is now printed beside every pooled budget number. The re-run also came in
@@ -4712,7 +4816,7 @@ Tagged points in the repository, newest first. Check one out with
   cells on the sample chose tau = 0.05, of which **163 are budget points** and
   only **3 are F1 points**. Treating every low edge alike would have stopped
   on or excluded three quarters of the matrix for the uninteresting reason
-  that `budget_100` is easy to satisfy.
+  that `uncapped_100` is easy to satisfy.
 
   *Proposed, awaiting approval:* six more grid points at the top — 0.99995
   through 0.9999999 — continuing the existing tail's halving pattern.
@@ -4783,7 +4887,7 @@ Tagged points in the repository, newest first. Check one out with
 
   *Seven operating points, because four would have flattered the floor.* At
   target 0.25 the union's deduplicated volume is 39.8 false alarms a day at
-  `budget_10` against 18.3 at `total_10` — eight institutions each inside 10 a
+  `uncapped_10` against 18.3 at `total_10` — eight institutions each inside 10 a
   day are not together inside 10 a day. Both readings are kept, and the
   per-institution-budget union prints its realized total beside it.
 

@@ -593,14 +593,47 @@ def budget_share(budget: float, k: int = constants.K_INSTITUTIONS) -> float:
 #: union's summed volume meets ``B``, which is the only way to compare the
 #: union against a centralized model at ``B`` without letting it outspend it
 #: eight to one.
+#: The two operating points Phase 4 **compares conditions at**, designated on
+#: 2026-11-14 before any federated arm existed, so that the comparison point
+#: cannot be said to have been picked after seeing which arm it favoured.
+#:
+#: They are the only two points where the threshold is determined by
+#: something. ``f1`` is set by the frozen selection rule on validation.
+#: ``total_10`` is set by a budget that actually binds. The ``uncapped_*``
+#: points are set by neither - see the naming note in `operating_points`.
+PRIMARY_POINTS = ("f1", "total_10")
+
+
 def operating_points(k: int = constants.K_INSTITUTIONS) -> list[dict]:
-    points = [{"operating_point": "f1", "kind": "f1", "budget": None, "per_institution_budget": None}]
+    """The seven points a cell is evaluated at.
+
+    **Naming.** The points that give each institution the *full* budget B are
+    called ``uncapped_*`` and not ``budget_*``, because for an isolated
+    institution they are **not budgeted operating points**: an institution
+    seeing a fraction of the traffic cannot raise B alarms a day even at the
+    most sensitive threshold on the grid, so the budget never binds and the
+    threshold is set by the grid's floor rather than by the budget. Measured
+    on the sample: the budget binds in **0 of 8** institutions at every
+    target at ``uncapped_10/50/100``, against 5-7 of 8 at ``total_10``. The
+    name records that; the per-cell ``budget_binding`` flag remains the
+    authoritative answer, and on the full data a cell that does bind will say
+    so there.
+
+    ``total_*`` give each institution ``B / K`` so the **union's** summed
+    volume meets B, which is the only reading in which a budget constrains
+    anything here.
+    """
+    points = [{
+        "operating_point": "f1", "kind": "f1", "budget": None,
+        "per_institution_budget": None, "primary": True,
+    }]
     for budget in evaluation.FALSE_ALARM_BUDGETS:
         points.append({
-            "operating_point": f"budget_{budget}",
+            "operating_point": f"uncapped_{budget}",
             "kind": "per_institution_budget",
             "budget": float(budget),
             "per_institution_budget": float(budget),
+            "primary": f"uncapped_{budget}" in PRIMARY_POINTS,
         })
     for budget in evaluation.FALSE_ALARM_BUDGETS:
         points.append({
@@ -608,6 +641,7 @@ def operating_points(k: int = constants.K_INSTITUTIONS) -> list[dict]:
             "kind": "matched_total_budget",
             "budget": float(budget),
             "per_institution_budget": budget_share(budget, k),
+            "primary": f"total_{budget}" in PRIMARY_POINTS,
         })
     return points
 
@@ -969,6 +1003,7 @@ def run_cell(
                 **common, "institution": institution, "operating_point": name,
                 "point_kind": point["kind"], "budget": point["budget"],
                 "per_institution_budget": point["per_institution_budget"],
+                "primary": point["primary"],
                 "tau": evaluations[institution].taus.get(name),
                 "defined": evaluations[institution].taus.get(name) is not None,
                 "rejected_tau": evaluations[institution].rejected_taus.get(name),
@@ -1142,6 +1177,7 @@ def run_cell(
                 union_rows.append({
                     **common, "institution": "union", "operating_point": name,
                     "eval_split": split, "point_kind": point["kind"],
+                    "primary": point["primary"],
                     "budget": point["budget"],
                     "per_institution_budget": point["per_institution_budget"],
                     "n_institutions_operating": len(operating),

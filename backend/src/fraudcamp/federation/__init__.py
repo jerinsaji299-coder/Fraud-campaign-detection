@@ -23,6 +23,7 @@ per-row and no cluster, purity or ambiguity logic is involved.
 
 from .isolated import (
     CONDITION,
+    PRIMARY_POINTS,
     TIER_NORMAL,
     TIER_THIN,
     TIER_UNTRAINED,
@@ -62,6 +63,7 @@ from .views import (
 
 __all__ = [
     "CONDITION",
+    "PRIMARY_POINTS",
     "IsolatedModel",
     "PooledMean",
     "TIER_NORMAL",

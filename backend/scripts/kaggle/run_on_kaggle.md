@@ -1109,7 +1109,9 @@ room to spare.
 ```python
 # A3 - pre-flight: fail in one minute rather than three hours in.
 #      Checks the frozen Phase 4 scope and the extended tau grid are the
-#      ones this run assumes.
+#      ones this run assumes. Sessions B and C run this cell too, AFTER
+#      their input check (B3 / C3): inputs first, because a missing booster
+#      is the likelier failure and the cheaper one to detect.
 import sys
 sys.path.insert(0, "/kaggle/temp/repo/backend/src")
 from fraudcamp import constants, evaluation
@@ -1154,10 +1156,24 @@ print("train-isolated exit code:", code)
 # B1, B2 - identical to A1 and A2
 ```
 
+**Cell order in B and C matters:** the input check (B3 / C3) comes **first**,
+then the pre-flight (A3), then the long cell. A missing booster is both the
+likelier failure and the cheaper one to detect, and `evaluate-isolated` never
+trains, so it cannot paper over one.
+
 ```python
-# B3 - bring A's boosters into /kaggle/working, where the runner looks.
-#      `--model-dir` takes one path and the input is read-only, so copy.
-import pathlib, shutil, subprocess
+# B3 - bring A's boosters into /kaggle/working, where the runner looks, and
+#      ASSERT THE INPUTS IN THE FIRST MINUTE. `evaluate-isolated` never
+#      trains, so a missing or half-written booster stops the run hours in
+#      rather than being quietly recreated - this cell is what makes that
+#      failure happen now instead.
+#
+#      Note on specs: unlike the GNN sessions there is no shared spec_L24 /
+#      spec_L48 pair to check. Each institution fits its OWN feature spec on
+#      its own view - that is the point of the condition - so every booster
+#      directory carries its own `feature_spec.json`, and all 96 are checked
+#      below.
+import json, pathlib, shutil, subprocess
 
 found = sorted(subprocess.run(
     ["find", "/kaggle/input", "-maxdepth", "6", "-type", "d",
@@ -1174,11 +1190,44 @@ for tree in found:
         if not target.exists():
             shutil.copytree(cell, target)
 
-cells = sorted(d.name for d in dest.iterdir() if d.is_dir())
-print(len(cells), "institution-cells")
-# fail here rather than hours in: evaluate-isolated never trains, so a
-# missing booster stops the run instead of being quietly recreated
-assert len(cells) == 96, f"expected 96, found {len(cells)}"
+cells = sorted(d for d in dest.iterdir() if d.is_dir())
+print(len(cells), "institution-cell directories")
+
+REQUIRED = ("xgb_model.json", "feature_spec.json", "model_meta.json")
+trained, untrained, broken = [], [], []
+for cell in cells:
+    if (cell / "untrained.json").exists():
+        untrained.append(cell.name)       # a real outcome, not a failure
+        continue
+    missing = [name for name in REQUIRED if not (cell / name).exists()]
+    empty = [
+        name for name in REQUIRED
+        if (cell / name).exists() and (cell / name).stat().st_size == 0
+    ]
+    if missing or empty:
+        broken.append((cell.name, missing, empty))
+    else:
+        trained.append(cell.name)
+
+print(f"  trained: {len(trained)}   untrained (recorded): {len(untrained)}")
+if untrained:
+    print("  untrained institutions:", untrained)
+if broken:
+    for name, missing, empty in broken:
+        print("  BROKEN", name, "missing:", missing, "empty:", empty)
+
+assert len(cells) == 96, f"expected 96 institution-cells, found {len(cells)}"
+assert not broken, f"{len(broken)} booster(s) incomplete - re-run session A"
+
+# every trained booster must also load: a file that exists but will not
+# parse is the failure this check is really for
+from fraudcamp.models import xgb_baseline
+sample = trained[:: max(1, len(trained) // 8)]
+for name in sample:
+    model = xgb_baseline.TrainedBaseline.load(dest / name)
+    assert model.lookback_h == 48, (name, model.lookback_h)
+    assert len(model.feature_names) == 66, (name, len(model.feature_names))
+print(f"  spot-loaded {len(sample)} boosters, all at L = 48 with 66 features")
 ```
 
 ```python
@@ -1204,7 +1253,11 @@ print("evaluate-isolated exit code:", code)
 **Inputs:** the IBM dataset, **session A's output**, **session B's output**.
 
 ```python
-# C1, C2, C3 - as A1, A2 and B3 (B3 copies the boosters again)
+# C1, C2 - as A1 and A2
+# C3    - as B3, VERBATIM: copy A's boosters and assert all 96 are present,
+#         complete and loadable. Run it before C4 and before the pre-flight,
+#         so a missing input fails in the first minute rather than after the
+#         six cells C does evaluate.
 ```
 
 ```python
