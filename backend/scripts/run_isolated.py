@@ -157,8 +157,24 @@ def main() -> int:
     )
 
     edge_taus = _edge_tau_rows(collected["institution_rows"])
+    high_edge = [
+        (cell["target"], cell["seed"], institution, point)
+        for cell in cells
+        for institution, point in cell["flags"]["tau_at_high_edge"]
+    ]
     print(f"\nwrote {len(files) + 1} files to {out_dir}")
     print(f"total {time.time() - t0:.1f}s")
+
+    if high_edge:
+        print(
+            f"\n{len(high_edge)} (institution, operating point) cell(s) were "
+            "EXCLUDED as undefined: the chosen tau sat at the top of the grid, "
+            "so the optimum lies beyond it and the operating point was not "
+            "found. Excluded from the pooled means and listed, never scored 0."
+        )
+        for target, seed, institution, point in high_edge:
+            print(f"  target {target} seed {seed} institution {institution}: {point}")
+
     if edge_taus:
         print("\nSTOPPING: a chosen tau is at an edge of the model grid.")
         for row in edge_taus:
@@ -174,8 +190,9 @@ def main() -> int:
         print("Reports above are complete. On the SAMPLE a LOW edge is")
         print("expected: the thinned background leaves a ~3.3% positive rate")
         print("against the full data's 0.102%, so class weights are ~30 rather")
-        print("than ~500+ and the most sensitive threshold wins. On full data")
-        print("either edge has to be explained before the numbers are used.")
+        print("than ~500+ and the most sensitive threshold wins — which is why")
+        print("this script records it and the full-data runner stops on it.")
+        print("A HIGH edge has to be explained wherever it appears.")
         return 3
     return 0
 

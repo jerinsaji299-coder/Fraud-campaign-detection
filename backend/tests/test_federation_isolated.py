@@ -777,7 +777,8 @@ def test_run_cell_produces_every_report_and_flags_what_it_should(cell):
     for row in cell["pooled_rows"]:
         assert "n_institutions_in_mean" in row and "n_trained_in_mean" in row
     assert set(cell["flags"]) == {
-        "untrained", "thin", "tau_at_grid_edge", "no_affordable_tau"
+        "untrained", "thin", "tau_at_grid_edge", "tau_at_high_edge",
+        "tau_at_low_edge", "no_affordable_tau",
     }
 
 
@@ -965,15 +966,33 @@ def test_an_untrained_institution_is_reported_apart_from_the_blind_ones():
             assert row["campaign_recall"] == 0.0
             assert row["defined"] is True
 
-    # and the two means are reported with their own denominators
+    # and the two means are reported with their own denominators, derived
+    # from the rows above them rather than assumed: on this fixture the
+    # grid-edge policy also excludes whichever trained institutions chose a
+    # tau at the top of the grid, so the denominators are not simply K.
+    defined = {}
+    for row in cell["summary_rows"]:
+        if row.get("test_subset") != "all":
+            continue
+        defined.setdefault(row["operating_point"], {})[row["institution"]] = bool(
+            row.get("defined")
+        )
     recall_means = [
         row for row in cell["pooled_rows"] if row["metric"] == "campaign_recall"
     ]
     assert recall_means
     for row in recall_means:
+        by_institution = defined[row["operating_point"]]
+        in_mean = [i for i, ok in by_institution.items() if ok]
         assert row["untrained_institutions"] == "6,7"
-        assert row["n_institutions_in_mean"] == K
-        assert row["n_trained_in_mean"] == K - len(untrained)
+        assert row["n_institutions_in_mean"] == len(in_mean)
+        assert row["n_trained_in_mean"] == len(
+            [i for i in in_mean if i not in untrained]
+        )
+        # an untrained institution is always IN the mean, at 0: it was
+        # operable and detected nothing
+        for institution in untrained:
+            assert by_institution[institution] is True
 
     # the relative-to-own-ceiling mean excludes the blind institutions as
     # UNDEFINED (0 / 0), which is why it is a separate metric
@@ -987,6 +1006,125 @@ def test_an_untrained_institution_is_reported_apart_from_the_blind_ones():
             "an institution whose own ceiling is 0 has no ratio, and must be "
             "listed rather than counted as 0"
         )
+
+
+# ---------------------------------------------------------------------------
+# the grid-edge policy, decided before the full-data run
+# ---------------------------------------------------------------------------
+
+
+def test_tau_grid_edge_names_the_direction():
+    grid = evaluation.MODEL_TAU_GRID
+    assert isolated.tau_grid_edge(min(grid)) == "low"
+    assert isolated.tau_grid_edge(max(grid)) == "high"
+    assert isolated.tau_grid_edge(0.5) is None
+    assert isolated.tau_grid_edge(None) is None
+    # and it follows whatever grid is in force, so extending the grid moves
+    # the edge rather than leaving the check behind
+    assert isolated.tau_grid_edge(0.9999, (0.05, 0.9999)) == "high"
+    assert isolated.tau_grid_edge(0.9999, (0.05, 0.9999, 0.99999)) is None
+
+
+def _evaluate_with_curve(monkeypatch, chosen_tau, budget_tau, world):
+    """Run `evaluate_institution` with tau selection stubbed to a known value.
+
+    The policy is about what happens *after* a tau is chosen, so the choice
+    itself is stubbed: that keeps the test about the policy instead of about
+    coaxing a fixture into producing a particular threshold.
+    """
+    result, assignment = world
+    monkeypatch.setattr(
+        isolated.evaluation, "select_tau",
+        lambda *a, **k: (chosen_tau, [{"tau": chosen_tau, "campaign_f1": 1.0,
+                                       "false_alarms_per_day": 0.0}]),
+    )
+    monkeypatch.setattr(
+        isolated.evaluation, "select_tau_for_budget",
+        lambda curve, budget: budget_tau,
+    )
+    model = isolated.train_isolated(result.full_df, 0, assignment, lookback_h=48)
+    assert model.trained
+    return isolated.evaluate_institution(
+        result.full_df, result.camp, result.pattern_df,
+        result.accounts_by_campaign, model, assignment,
+        lookback_h=48, seed=0, splits=("test",),
+    )
+
+
+def test_a_tau_at_the_top_of_the_grid_is_undefined_not_zero(monkeypatch, trainable_world):
+    """POLICY: a high edge means the optimum lies beyond the grid, so the
+    operating point was not found. It is excluded and listed, exactly like an
+    unaffordable budget - never recorded as recall 0, which would be a
+    measurement of a detector that was never operated there."""
+    high = max(evaluation.MODEL_TAU_GRID)
+    ev = _evaluate_with_curve(monkeypatch, high, high, trainable_world)
+
+    for point in (p["operating_point"] for p in isolated.operating_points()):
+        assert ev.taus[point] is None, point
+        assert ev.tau_edges[point] == "high", point
+        assert ev.rejected_taus[point] == high, point
+        assert ev.undefined_reason[point] == isolated.TAU_BEYOND_GRID
+        # and nothing was evaluated at it
+        assert ("test", point) not in ev.results
+
+
+def test_a_low_edge_is_flagged_for_the_f1_point_and_not_for_a_budget(
+    monkeypatch, trainable_world
+):
+    """POLICY: the two edges are not symmetric.
+
+    A low **F1** tau says the optimum may lie below the grid - a real signal,
+    which the full-data runner stops on. A low **budget** tau says only that
+    the most sensitive threshold already fits the budget, which is a loose
+    budget and not a missing optimum, so it is not flagged and not excluded.
+    """
+    low = min(evaluation.MODEL_TAU_GRID)
+    ev = _evaluate_with_curve(monkeypatch, low, low, trainable_world)
+
+    assert ev.tau_edges["f1"] == "low"
+    assert ev.taus["f1"] == low, "a low edge is recorded, not excluded"
+    for point in ("budget_10", "total_10"):
+        assert ev.taus[point] == low
+        assert point not in ev.tau_edges, "a loose budget is not a finding"
+
+
+def test_run_cell_separates_the_two_edges_in_its_flags(monkeypatch, _module_world):
+    """What a runner acts on: high-edge pairs are excluded, low-edge F1 taus
+    are a stop signal, and the no-affordable-tau list stays separate."""
+    result, _ = _module_world
+    high = max(evaluation.MODEL_TAU_GRID)
+    monkeypatch.setattr(
+        isolated.evaluation, "select_tau",
+        lambda *a, **k: (high, [{"tau": high, "campaign_f1": 1.0,
+                                 "false_alarms_per_day": 0.0}]),
+    )
+    monkeypatch.setattr(
+        isolated.evaluation, "select_tau_for_budget", lambda curve, budget: high
+    )
+    cell = isolated.run_cell(
+        result, target=1.0, seed=0, lookback_h=48, splits=("test",),
+    )
+    flags = cell["flags"]
+    assert flags["tau_at_high_edge"], "every point should be excluded here"
+    assert flags["tau_at_low_edge"] == []
+    assert flags["no_affordable_tau"] == [], (
+        "a tau beyond the grid is its own reason and must not be filed as an "
+        "unaffordable budget"
+    )
+
+    # the excluded cells carry the rejected tau and the reason
+    rows = [r for r in cell["tau_rows"] if r["tau_edge"] == "high"]
+    assert rows
+    for row in rows:
+        assert row["tau"] is None and row["rejected_tau"] == high
+        assert row["undefined_reason"] == isolated.TAU_BEYOND_GRID
+
+    # and they are excluded from the pooled means, not scored 0
+    for row in cell["pooled_rows"]:
+        if row["metric"] == "campaign_recall":
+            assert row["n_institutions_in_mean"] == 0
+            assert row["mean_over_all_institutions"] is None
+            assert row["undefined_institutions"]
 
 
 # ---------------------------------------------------------------------------

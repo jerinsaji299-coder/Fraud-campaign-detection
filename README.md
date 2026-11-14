@@ -48,8 +48,9 @@ git clone https://github.com/jerinsaji299-coder/Fraud-campaign-detection.git
     - [The four conditions](#the-four-conditions)
     - [Stage 4.0: institution-split data](#stage-40-institution-split-data--done)
     - [Stage 4.1: the isolated condition](#stage-41-the-isolated-condition--approved-and-implemented-2026-11-14)
+        - [Grid-edge policy](#12-grid-edge-policy-and-a-proposed-extension-of-model_tau_grid)
         - [What was built](#what-was-built)
-        - [Measured on the 1% sample](#measured-on-the-1-sample--one-result-and-three-development-readings)
+        - [Measured on the 1% sample — development only](#measured-on-the-1-sample--development-only-not-for-quotation)
 20. [Version history](#version-history)
 21. [Changelog](#changelog)
 
@@ -160,7 +161,7 @@ feature set only, three seeds, one lookback**. See
 | Stage | Description | Status |
 |---|---|---|
 | 4.0 | Institution-split data: per-institution views of every window, and the account features each institution can compute from its own view alone | **done** — `federation/views.py`, 31 tests, per-institution training loads measured on the sample, visibility cross-check exact on all 370 campaigns |
-| 4.1 | **The `isolated` condition**: each institution trained and scoring on its own view alone, with its **own** oracle ceiling per target, and the two pooled numbers (per-institution mean, and the union over institutions) | **built and tested** — `federation/isolated.py`, 35 tests, backend 397 passed / 25 skipped; `train-isolated` and `evaluate-isolated` runner subcommands, resumable. Measured on the sample; the full-data run is a Kaggle session. §[stage 4.1](#stage-41-the-isolated-condition--approved-and-implemented-2026-11-14) |
+| 4.1 | **The `isolated` condition**: each institution trained and scoring on its own view alone, with its **own** oracle ceiling per target, and the two pooled numbers (per-institution mean, and the union over institutions) | **built and tested** — `federation/isolated.py`, 40 tests, backend 402 passed / 25 skipped; `train-isolated` and `evaluate-isolated` runner subcommands, resumable. Measured on the sample; the full-data run is a Kaggle session. §[stage 4.1](#stage-41-the-isolated-condition--approved-and-implemented-2026-11-14) |
 | 4.2 | `fedavg`: what "FedAvg" means for a tree model, then implementation and tests, reusing the Phase 3 evaluation code unchanged | not started — the design question moved here from 4.1 |
 | 4.3 | `fedavg_exchange`: what crosses the institution boundary, then the gate — centralized vs `fedavg_exchange` at the 100 bin, full data. A failed gate stops the sweep | not started |
 | 4.4 | Kaggle runner subcommands, resumable per (condition, bin, seed) | not started |
@@ -2527,13 +2528,80 @@ institution, and no change to the extraction rule, the matching rule or the
 budget accounting. If the floor comes out higher than expected, that is the
 result.
 
+#### 12. Grid-edge policy, and a proposed extension of `MODEL_TAU_GRID`
+
+Decided **before** the full-data run, on 2026-11-14, so that no cell's
+treatment depends on having seen which cells hit an edge.
+
+**The two edges mean opposite things, and only one of them invalidates a
+cell.** `isolated.tau_grid_edge` names the direction, and the asymmetry is
+the point:
+
+| The chosen tau sits at | What it means | What happens |
+|---|---|---|
+| the **top** of the grid | the optimum lies **beyond** the grid, so this operating point was **not found** | the cell is **undefined**: excluded from both pooled means, listed by `(institution, operating point)` with its **rejected tau** and the reason, and **never scored 0**. The run finishes and exits 3 |
+| the **bottom**, for the **F1** point | the most sensitive threshold on the grid is still the best one, so the optimum may lie **below** it | on the full data this **should not happen** at 0.102% prevalence. The runner **stops and does not record that cell** (`--allow-low-edge-tau` overrides, for the sample only). On the sample it is expected, and `run_isolated.py` records it and exits 3 |
+| the **bottom**, for a **budget** point | the most sensitive threshold on the grid already fits the budget | **nothing.** This is a loose budget, not a missing optimum, and it is neither flagged nor excluded |
+
+That last row is a refinement of the rule as first stated, and it is not a
+small one: on the sample **166 of 224** `(institution, operating point)` cells
+chose tau = 0.05, of which **163 are budget points** and only **3 are F1
+points**. Treating every low edge alike would have excluded or stopped on
+three quarters of the matrix for the uninteresting reason that `budget_100`
+is easy to satisfy.
+
+A high-edge cell is excluded for exactly the reason an unaffordable budget is,
+and is reported the same way: *a detector that could not be operated at a
+point was not measured at that point, and a mean that silently absorbs it as
+0 is reporting a measurement that was never made.*
+
+**Proposed: six more points at the top of the grid — awaiting approval.**
+`MODEL_TAU_GRID` is a frozen definition, so this is a proposal and the code is
+unchanged until it is approved. The extension continues the existing tail's
+construction exactly — each step halves the remaining distance to 1, in the
+alternating 5/1 pattern the current tail already uses:
+
+```
+current (16):  0.05 0.1 0.2 0.3 0.4 0.5 0.6 0.7 0.8 0.9 0.95
+               0.99 0.995 0.999 0.9995 0.9999
+proposed (22): ... 0.9999 | 0.99995 0.99999 0.999995 0.999999 0.9999995 0.9999999
+1 - tau:       ... 1e-4   | 5e-5    1e-5    5e-6     1e-6     5e-7      1e-7
+```
+
+Three measured reasons, none of them a response to a result:
+
+1. **The current headroom is one grid point.** On the full data the highest
+   tau ever chosen was **0.9995** (the GNN at a budget) and **0.999** for
+   XGBoost; the F1-chosen taus were **0.99-0.995**. The top of the grid,
+   0.9999, was never reached — by one step. Stage 4.1 trains each institution
+   on ~23.5% of the rows at a similar prevalence, and 96 institution-cells ×
+   7 operating points is 672 chances to need the step that is not there.
+2. **It is nearly free, measured.** On the full data a validation sweep step
+   costs 9.1s at tau 0.05 and **2.6s (max 3.4s)** at every point from 0.99
+   upward, because almost nothing survives those thresholds and clustering
+   cost scales with the edges kept. Six more points is **~16s per
+   institution-cell**, about **26 minutes** across the whole 96-cell run.
+3. **It stops where float32 does.** XGBoost returns float32 probabilities, and
+   the largest float32 below 1.0 is **0.99999994**, i.e. `1 - 6.0e-8`. So
+   `1 - 1e-7` is the last threshold still comfortably distinguishable from
+   1.0, while `1 - 1e-8` **is** 1.0 in float32. Beyond that a finer grid
+   cannot separate anything.
+
+**And 1.0 itself is deliberately not in the grid.** Because the rule is
+`score >= tau`, a tau of 1.0 would keep whichever scores happen to round to
+exactly 1.0 in float32 — which depends on the arithmetic, the library build
+and the hardware, and so is not reproducible. Stopping at `1 - 1e-7` keeps
+every threshold meaningful *and* reproducible, and keeps "the chosen tau is at
+the top of the grid" meaning what the policy above says it means: the optimum
+is beyond what can be resolved, so the operating point was not found.
+
 #### What was built
 
 | | |
 |---|---|
 | `federation/isolated.py` | the condition: the masking scorer, per-institution training, the per-institution oracle ceiling, the union (outcomes, and the deduplicating cluster pass), the two pooled means, the seven operating points, and `run_cell`, which both runners call so the local and Kaggle reports come from one code path |
 | `constants.PHASE4_SEEDS`, `constants.PHASE4_LOOKBACK_H` | the frozen scope **in code** — `[0, 1, 2]` and `48` — so a runner cannot drift from this README. `evaluate-isolated` refuses more than one lookback outright |
-| `tests/test_federation_isolated.py` | **36 tests**; backend suite **397 passed, 25 skipped** |
+| `tests/test_federation_isolated.py` | **40 tests**, including the grid-edge policy; backend suite **402 passed, 25 skipped** |
 | `scripts/run_isolated.py` | the condition on the 1% sample, for development |
 | `train-isolated` | one booster per institution per `(target, seed)`, saved as it finishes, **resumable per institution** |
 | `evaluate-isolated` | tau, ceilings, the per-institution and union reports, **resumable per `(target, seed)`**; it **never trains**, so a lost evaluation session cannot silently retrain on different boosters; exit 3 on an edge tau after every report is written |
@@ -2578,7 +2646,23 @@ requires its **per-institution** counts to equal `evaluate_split`'s
 they ever disagree, the union's volume is being measured by a different rule
 from every per-institution number beside it, and the suite fails.
 
-#### Measured on the 1% sample — one result, and three development readings
+#### Measured on the 1% sample — DEVELOPMENT ONLY, not for quotation
+
+> **Every figure in this subsection is a development check on the 1% sample
+> and none of them may be quoted in the report, the deck or the paper.** They
+> exist to show the code runs and behaves as designed, not to say what the
+> system achieves. The tau behaviour diagnosed in Reading 4 is exactly what
+> will not transfer: the sample's positive rate is **3.3%** against the full
+> data's **0.102%**, which moves the class weights by an order of magnitude
+> and with them every chosen threshold, and therefore every recall, precision
+> and alert rate downstream of one. The quotable numbers come from
+> `train-isolated` / `evaluate-isolated` on the full data, and do not exist
+> yet.
+>
+> One claim here is **not** a sample measurement: that the isolated union's
+> oracle ceiling equals the centralized one rests on an argument about the
+> frozen visibility rule, not on this run. Its *figures* below are still
+> sample figures, and its confirmation on the full data is still pending.
 
 The sample thins the background to 1%, so **precision, false alarms per day
 and every budget-chosen tau do not transfer**. The **ceilings** do, because
@@ -2696,6 +2780,9 @@ rather than the run.
 
 | Date | Decision | Reason | Evidence |
 |---|---|---|---|
+| 2026-11-14 | **Grid-edge policy, fixed before the full-data run. A chosen tau at the TOP of the model grid makes that operating point UNDEFINED** — excluded from both pooled means, listed with its rejected tau, **never scored 0** — because the optimum lies beyond the grid and the point was therefore not found | Identical in kind to an unaffordable budget, and reported the same way: a detector that could not be operated at a point was not measured at that point, and a mean that absorbs it as 0 reports a measurement that was never made. Decided in advance so that no cell's treatment can depend on having seen which cells hit the edge | user decision, 2026-11-14; §[stage 4.1 §12](#12-grid-edge-policy-and-a-proposed-extension-of-model_tau_grid); `tests/test_federation_isolated.py` |
+| 2026-11-14 | **A chosen F1 tau at the BOTTOM of the grid stops the full-data run and is NOT recorded** (`--allow-low-edge-tau` overrides, for the thinned sample only). **A bottom-edge *budget* tau is neither flagged nor excluded** | At the full data's 0.102% prevalence the most sensitive threshold on the grid should not be the best one; if it is, something is wrong with the data, the weighting or the grid, and recording the cell would bury that. The budget exception is measured, not assumed: on the sample **166 of 224** (institution, operating point) cells chose tau = 0.05, of which **163 are budget points** — a low budget tau says only that the budget is loose, not that an optimum is missing, so treating every low edge alike would have excluded three quarters of the matrix for no reason | user decision, 2026-11-14, with the budget refinement measured; §[stage 4.1 §12](#12-grid-edge-policy-and-a-proposed-extension-of-model_tau_grid) |
+| 2026-11-14 | **Proposed, awaiting approval: `MODEL_TAU_GRID` gains six points at the top** — 0.99995, 0.99999, 0.999995, 0.999999, 0.9999995, 0.9999999 — **before** the full-data run, not in response to results. The grid is a frozen definition, so the code is unchanged until this is approved | Three measured reasons. The current headroom is **one grid point**: on the full data the highest tau ever chosen was 0.9995 (GNN at a budget) and 0.999 for XGBoost, against a top of 0.9999, and 4.1 has 672 (institution, operating point) chances to need the next step. It is nearly free: a sweep step costs 9.1s at tau 0.05 but **2.6s** from 0.99 up, so six points is ~16s per institution-cell, ~26 min across the run. And it stops where float32 does: the largest float32 below 1.0 is 0.99999994, so `1 - 1e-7` is the last distinguishable threshold while `1 - 1e-8` **is** 1.0. **1.0 itself is excluded on purpose** — `score >= 1.0` would keep whatever rounds to exactly 1.0, which depends on the arithmetic and the build and is not reproducible | §[stage 4.1 §12](#12-grid-edge-policy-and-a-proposed-extension-of-model_tau_grid); `docs/reference/evaluate_baseline_tau_curve.csv`, `evaluate_baseline_budgets.csv` |
 | 2026-11-14 | **MEASURED RESULT, recorded as a result: the isolated union's oracle ceiling equals the centralized oracle ceiling exactly** — not structurally but **with the 6-hour detection grid, the lookback and the deadlines in force**. Sample, L = 48: val 0.7692 against 0.7692, test 0.8929 against 0.8929, at targets 1.0 and 0.25 alike | The proof is the same degree-2 argument, carried through time: if the centralized oracle detects a campaign at `t`, some window-local component held three of its accounts; that component contains an account with two campaign counterparties; that account's institution is an endpoint of **both** of those edges, so it sees the same component in the same window at the same `t` — the same detection time, hence the same lead time and the same side of the deadline. Consequence, declared in advance: a null result for 4.2 or 4.3 is an expected possible outcome, because there is no structural headroom for coordination to recover | `scripts/run_isolated.py`, `scripts/run_structural_ceiling.py`; §[stage 4.1](#stage-41-the-isolated-condition--approved-and-implemented-2026-11-14) |
 | 2026-11-14 | **Stage 4.1 evaluates SEVEN operating points, not four**: `f1` and `budget_10/50/100` at each institution's own full budget, plus `total_10/50/100` at `B / K` each so the union's summed volume meets `B` | Measured on the sample at target 1.0: the union's deduplicated volume at `budget_10` is **23.3 false alarms a day**, because eight institutions each inside 10/day are not together inside 10/day, while at `total_10` it is **4.0**. Comparing a 23.3/day union against a centralized model at 10/day would measure a floor that outspends what it floors. Both readings are kept because they answer different questions — eight banks with their own analysts, and one supervisory desk — and the per-institution-budget union prints its realized total beside it so it cannot be quoted as matched | `phase4_isolated_union.csv`; §[stage 4.1](#stage-41-the-isolated-condition--approved-and-implemented-2026-11-14) §5 |
 | 2026-11-14 | **The union's alert volume is counted by a second pass over the detection grid, and that pass is cross-checked against `evaluate_split` per institution** | `EvaluationResult` keeps cluster **sizes** and not account sets — deliberately, since it never stores account names — so there is nothing in it to deduplicate by. The second pass calls the same frozen `extract_clusters` and `classify_cluster`, and a test requires its per-institution false-alarm and hit counts to equal `evaluate_split`'s for every institution at two taus. Without that check the union's volume could be measured by a different rule from every per-institution number in the same table | `tests/test_federation_isolated.py` |
@@ -3158,7 +3245,10 @@ project-root/
   `(target, seed)` cell's rows as it finishes and resumes past them. It
   **never trains**, so a lost evaluation session can never silently retrain
   on different boosters. `--targets`, `--seeds` and `--force` narrow or redo a
-  run; more than one `--lookbacks` is refused, because Phase 4 runs one.
+  run; more than one `--lookbacks` is refused, because Phase 4 runs one. It
+  **stops without recording a cell** whose F1 tau lands at the bottom of the
+  tau grid, which should not happen at full-data prevalence;
+  `--allow-low-edge-tau` overrides that and is only for the thinned sample.
 - **Train and evaluate the baseline on the full data (on Kaggle):**
   ```
   cd backend
@@ -3952,7 +4042,7 @@ campaign_id)`:
   reducing `visible_mask` to sender-only breaks 4 tests, looping
   `range(k - 1)` in `all_views` breaks 2, and replacing the `max` over
   institutions with a `mean` breaks 13.
-- **Backend isolated-condition tests** (`test_federation_isolated.py`, 35
+- **Backend isolated-condition tests** (`test_federation_isolated.py`, 40
   tests, stage 4.1): that a masked scorer scores the visible rows and
   **zeroes the rest**, that the scores land on the rows they describe (the
   values are row-identifying, so a misalignment shows), and that the clusters
@@ -3981,7 +4071,16 @@ campaign_id)`:
   a scorer that fills positions instead of rows leaves non-zero scores on
   invisible rows, a union that sums instead of deduplicating disagrees with
   the deduplicated count, and an untrained institution recorded as undefined
-  lifts the pooled mean from 0.40 to 0.80.
+  lifts the pooled mean from 0.40 to 0.80. And the grid-edge policy, with tau
+  selection **stubbed** so the tests are about the policy rather than about
+  coaxing a fixture into choosing a particular threshold: that a tau at the
+  top of the grid makes every operating point undefined, carrying its rejected
+  tau and its reason and leaving the pooled means empty rather than 0; that a
+  bottom-edge F1 tau is flagged while a bottom-edge **budget** tau is not,
+  because a loose budget is not a missing optimum; that `tau_grid_edge`
+  follows whatever grid is in force, so extending the grid moves the edge
+  instead of leaving the check behind; and that a tau beyond the grid is filed
+  under its own reason and never as an unaffordable budget.
 - **Backend cross-model comparison tests** (`test_compare_models.py`, 22
   tests): the three that matter are the ones whose failure would be
   invisible. That a per-campaign record survives a CSV round trip with
@@ -4328,6 +4427,16 @@ is recorded here rather than in the suite.
   **learning** (thin positives) or **weaker features** from a partial view.
   This is a structural proxy on the sample that ignores time, not the
   measured ceiling, and stage 4.1 is what measures the real one.
+- **No stage 4.1 figure may be quoted yet.** Everything measured so far is
+  on the 1% sample, whose 3.3% positive rate against the full data's 0.102%
+  moves the class weights by an order of magnitude and with them every chosen
+  tau — and three of the 32 institution-cells chose the most sensitive
+  threshold on the grid, which at full-data prevalence should not happen. The
+  ceilings are the one family of figures expected to transfer, because they
+  are a property of the campaign edges and the assignment, which the sample
+  preserves. Until the Kaggle run, stage 4.1 has **no** reportable result
+  except the union-ceiling argument, which rests on the visibility rule rather
+  than on data.
 - **The condition names in code and in this README do not match yet, and
   4.2 has to settle it.** `constants.CONDITIONS` and the frontend's theme use
   `isolated`, `fedavg_only`, `fedavg_embedding`, `centralized`, while this
@@ -4441,6 +4550,55 @@ Tagged points in the repository, newest first. Check one out with
 | `v0.1-data-pipeline` | 2026-10-08 | Phase 2 complete, plus the stage 3.0 Kaggle runner. The research pipeline (campaign ground truth, splits, topology groups, institutions, visibility), the artifact export, the read-only FastAPI server, and the full React frontend — 69 backend tests and 48 frontend tests passing. **No models and no experiment results**: the four conditions are defined and the result schema is fixed, but nothing has been trained or run, and the full-data regression numbers are still unverified (that is what stage 3.0's Kaggle run is for). |
 
 ## Changelog
+
+- **2026-11-14 (stage 4.1 — grid-edge policy, and the sample figures fenced
+  off)** — both decided before the full-data run, so no cell's treatment can
+  depend on having seen which cells hit an edge.
+
+  *Every 4.1 figure is now marked development-only and not quotable*, in the
+  subsection itself and under Known limitations. The reason is the tau
+  behaviour diagnosed yesterday: the sample's 3.3% positive rate against the
+  full data's 0.102% moves the class weights by an order of magnitude and with
+  them every chosen threshold, and so every recall, precision and alert rate
+  downstream of one. The exception is noted rather than quietly relied on —
+  the union-ceiling claim rests on an argument about the frozen visibility
+  rule, not on this run, but its figures are still sample figures and its
+  full-data confirmation is pending.
+
+  *A tau at the TOP of the grid now makes that operating point undefined* —
+  excluded from both pooled means, listed with its **rejected tau** and the
+  reason, never scored 0 — because the optimum lies beyond the grid and the
+  point was not found. It is reported exactly like an unaffordable budget, and
+  for the same reason: a detector that could not be operated at a point was
+  not measured there.
+
+  *A bottom-edge F1 tau stops the full-data run and is not recorded*, with
+  `--allow-low-edge-tau` for the sample only. Both paths were verified on the
+  sample: the default stops with nothing written, the override writes the cell
+  and still exits 3.
+
+  *One refinement to the rule as stated, and it is not small.* A bottom-edge
+  **budget** tau is neither flagged nor excluded, because it says only that
+  the budget is loose. Measured: **166 of 224** (institution, operating point)
+  cells on the sample chose tau = 0.05, of which **163 are budget points** and
+  only **3 are F1 points**. Treating every low edge alike would have stopped
+  on or excluded three quarters of the matrix for the uninteresting reason
+  that `budget_100` is easy to satisfy.
+
+  *Proposed, awaiting approval:* six more grid points at the top — 0.99995
+  through 0.9999999 — continuing the existing tail's halving pattern.
+  `MODEL_TAU_GRID` is frozen, so the code is unchanged. Evidence: the current
+  headroom is **one** grid point (the highest tau ever chosen on full data was
+  0.9995), the extension is nearly free (**2.6s** per sweep step above 0.99
+  against 9.1s at 0.05, so ~26 minutes across the 96-cell run), and it stops
+  where float32 does (the largest float32 below 1.0 is 0.99999994, and
+  `1 - 1e-8` **is** 1.0). **1.0 itself is excluded on purpose**: `score >= 1.0`
+  would keep whatever rounds to exactly 1.0, which is not reproducible across
+  builds.
+
+  40 tests in `test_federation_isolated.py`; the policy is pinned by tests
+  that stub tau selection, so they are about the policy rather than about
+  coaxing a fixture into producing a particular threshold.
 
 - **2026-11-14 (stage 4.1 — BUILT)** — **the isolated condition exists, is
   tested, and has already produced one result.**

@@ -5152,6 +5152,7 @@ def command_evaluate_isolated(args: argparse.Namespace) -> int:
     }
     cell_reports = []
     edge_taus = []
+    high_edge = []
 
     for target in targets:
         for seed in seeds:
@@ -5214,20 +5215,61 @@ def command_evaluate_isolated(args: argparse.Namespace) -> int:
                     progress=lambda line: print(line, flush=True),
                 )
 
+            flags = cell["flags"]
+
+            # POLICY, decided before the run: an F1 tau at the LOW edge of the
+            # grid should not happen at the full data's 0.102% prevalence. If
+            # it does, stop and report it rather than recording it - so this
+            # cell's rows are NOT written. Finished cells keep their own files,
+            # so a restart resumes past them and nothing else is lost.
+            if flags["tau_at_low_edge"] and not args.allow_low_edge_tau:
+                print(
+                    f"{_NEWLINE}STOPPING, and NOT recording {name}: an F1 tau "
+                    "sits at the LOW edge of the model grid."
+                )
+                for institution, point in flags["tau_at_low_edge"]:
+                    chosen = next(
+                        (
+                            row["tau"] for row in cell["tau_rows"]
+                            if row["institution"] == institution
+                            and row["operating_point"] == point
+                        ),
+                        None,
+                    )
+                    print(
+                        f"  institution {institution}, point {point}: "
+                        f"tau = {chosen}"
+                    )
+                print(
+                    "At 0.102% prevalence the most sensitive threshold on the "
+                    "grid should not be the best one. Expected on the 1% "
+                    "sample, where the positive rate is ~3.3%, and the sample "
+                    "runner allows it; here it means something is wrong with "
+                    "the training data, the weighting or the grid. Nothing "
+                    "from this cell is recorded. Pass --allow-low-edge-tau "
+                    "only if you have decided to record it anyway."
+                )
+                return 3
+
             for key, suffix in keys.items():
                 pd.DataFrame(cell[key]).to_csv(
                     cells_dir / f"{name}_{suffix}.csv", index=False
                 )
                 collected[key].extend(cell[key])
             cell_reports.append({k: v for k, v in cell.items() if not k.endswith("_rows")})
-            flags = cell["flags"]
-            if flags["tau_at_grid_edge"]:
+            if flags["tau_at_grid_edge"] or flags["tau_at_high_edge"]:
                 edge_taus.extend(_edge_tau_rows(cell["institution_rows"]))
+            high_edge.extend(
+                {"visibility_target": target, "seed": seed,
+                 "institution": institution, "operating_point": point}
+                for institution, point in flags["tau_at_high_edge"]
+            )
             print(
                 f"  done in {cell['seconds']}s - untrained {flags['untrained']}, "
-                f"thin {flags['thin']}, edge taus {flags['tau_at_grid_edge']}, "
+                f"thin {flags['thin']}, "
                 f"{len(flags['no_affordable_tau'])} (institution, point) pair(s) "
-                "with no affordable tau"
+                f"with no affordable tau, {len(flags['tau_at_high_edge'])} "
+                "excluded for a tau at the top of the grid"
             )
 
     files = {
@@ -5339,6 +5381,20 @@ def command_evaluate_isolated(args: argparse.Namespace) -> int:
         "exists - it needs `institution` and `visibility_target` in its pairing "
         "key first."
     )
+    if high_edge:
+        print(
+            f"{_NEWLINE}{len(high_edge)} (institution, operating point) cell(s) "
+            "were EXCLUDED as undefined because the chosen tau sat at the top "
+            "of the grid - the optimum lies beyond it, so the operating point "
+            "was not found. They are listed in phase4_isolated_taus.csv with "
+            "their rejected tau, and they are excluded from the pooled means "
+            "rather than scored 0."
+        )
+        for row in high_edge:
+            print(
+                f"  target {row['visibility_target']} seed {row['seed']} "
+                f"institution {row['institution']}: {row['operating_point']}"
+            )
     if edge_taus:
         print(f"{_NEWLINE}STOPPING: a chosen tau is at an edge of the model grid.")
         for row in edge_taus:
@@ -5471,6 +5527,14 @@ def main() -> int:
         help=(
             "train-isolated/evaluate-isolated: comma-separated visibility "
             "targets (default: 1.0,0.75,0.5,0.25)"
+        ),
+    )
+    parser.add_argument(
+        "--allow-low-edge-tau", action="store_true",
+        help=(
+            "evaluate-isolated: record a cell whose F1 tau sits at the LOW "
+            "edge of the model grid instead of stopping. Only for the thinned "
+            "1% sample, where a low edge is expected"
         ),
     )
     parser.add_argument(

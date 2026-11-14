@@ -82,6 +82,37 @@ def training_tier(n_positive: int) -> str:
     return TIER_NORMAL
 
 
+#: Why an operating point has no tau. Both are **undefined** — excluded from
+#: the pooled means and listed — and never recall 0, because a detector that
+#: cannot be operated at a point was not measured at that point.
+NO_AFFORDABLE_TAU = "no tau on the grid meets this budget"
+TAU_BEYOND_GRID = "the chosen tau is at the top of the grid: the optimum lies beyond it"
+
+
+def tau_grid_edge(tau: float | None, tau_grid=None) -> str | None:
+    """``"low"``, ``"high"`` or ``None`` for a tau at an edge of the grid.
+
+    The direction matters because the two mean opposite things. **High** is
+    the stage 3.3 phenomenon: per-window class weights of 495-3,461 crush
+    scores against 1, and a chosen tau at the top says the optimum lies
+    beyond the grid. **Low** is the reverse — the most sensitive threshold on
+    the grid is still the best one, so the optimum may lie below it. On the 1%
+    sample a low edge is expected, because the thinned background leaves a
+    ~3.3% positive rate against the full data's 0.102%; on the full data it is
+    not, and the runner stops rather than recording it.
+    """
+    if tau is None:
+        return None
+    grid = tuple(tau_grid if tau_grid is not None else evaluation.MODEL_TAU_GRID)
+    if not grid:
+        return None
+    if float(tau) <= min(grid):
+        return "low"
+    if float(tau) >= max(grid):
+        return "high"
+    return None
+
+
 # ---------------------------------------------------------------------------
 # scorers: the one place an institution's visibility is applied
 # ---------------------------------------------------------------------------
@@ -564,10 +595,19 @@ class InstitutionEvaluation:
     tau_f1: float | None = None
     tau_at_grid_edge: bool = False
     tau_curve: list[dict] = field(default_factory=list)
-    #: operating point -> tau, or ``None`` when no tau on the grid meets that
-    #: budget. ``None`` means the detector cannot be *operated* there, which
-    #: is not the same as detecting nothing.
+    #: operating point -> tau, or ``None`` when the point has no operating
+    #: point at all: either no tau on the grid meets that budget, or the
+    #: chosen tau sat at the **top** of the grid, which means the optimum lies
+    #: beyond it. ``None`` means the detector cannot be *operated* there,
+    #: which is not the same as detecting nothing.
     taus: dict[str, float | None] = field(default_factory=dict)
+    #: operating point -> why it has no tau, for the report
+    undefined_reason: dict[str, str] = field(default_factory=dict)
+    #: operating point -> the tau that was rejected for sitting at the top of
+    #: the grid, kept so the report shows the value and not just its absence
+    rejected_taus: dict[str, float] = field(default_factory=dict)
+    #: operating point -> "low" or "high" for a tau at a grid edge
+    tau_edges: dict[str, str] = field(default_factory=dict)
     #: ``(operating_point, split) -> outcomes``. Missing for an undefined point.
     outcomes: dict[tuple[str, str], list] = field(default_factory=dict)
     results: dict[tuple[str, str], object] = field(default_factory=dict)
@@ -658,11 +698,41 @@ def evaluate_institution(
     for point in points:
         name = point["operating_point"]
         if point["kind"] == "f1":
-            out.taus[name] = tau_f1
+            chosen = tau_f1
         else:
-            out.taus[name] = evaluation.select_tau_for_budget(
+            chosen = evaluation.select_tau_for_budget(
                 curve, point["per_institution_budget"]
             )
+        if chosen is None:
+            out.taus[name] = None
+            out.undefined_reason[name] = NO_AFFORDABLE_TAU
+            continue
+
+        edge = tau_grid_edge(chosen)
+        # The two edges mean opposite things, and only one of them invalidates
+        # the point.
+        #
+        # **High** — the chosen tau is the most extreme on the grid, so the
+        # optimum lies beyond it and this operating point was not found. It is
+        # recorded as undefined and excluded from the pooled means, never as
+        # recall 0, for the same reason an unaffordable budget is: a detector
+        # that cannot be operated here was not measured here.
+        #
+        # **Low** for a *budget* point is not a problem at all — it says the
+        # most sensitive threshold on the grid already fits the budget, which
+        # is a loose budget and not a missing optimum. **Low for the F1
+        # point** does say the optimum may lie below the grid, so it is
+        # flagged for the caller to act on; at the full data's 0.102%
+        # prevalence it is not expected to happen.
+        if edge == "high":
+            out.tau_edges[name] = "high"
+            out.rejected_taus[name] = chosen
+            out.taus[name] = None
+            out.undefined_reason[name] = TAU_BEYOND_GRID
+            continue
+        if edge == "low" and point["kind"] == "f1":
+            out.tau_edges[name] = "low"
+        out.taus[name] = chosen
 
     # --- every defined operating point, on every split ---
     for point in points:
@@ -856,6 +926,9 @@ def run_cell(
                 "per_institution_budget": point["per_institution_budget"],
                 "tau": evaluations[institution].taus.get(name),
                 "defined": evaluations[institution].taus.get(name) is not None,
+                "rejected_tau": evaluations[institution].rejected_taus.get(name),
+                "tau_edge": evaluations[institution].tau_edges.get(name),
+                "undefined_reason": evaluations[institution].undefined_reason.get(name),
                 "tier": tiers[institution],
             })
 
@@ -888,7 +961,9 @@ def run_cell(
                 res = ev.results.get((name, split))
 
                 if res is None and ev.tier != TIER_UNTRAINED:
-                    # no affordable tau on the grid: undefined, never zero
+                    # no operating point here - either no affordable tau, or a
+                    # chosen tau at the top of the grid with the optimum beyond
+                    # it. Undefined, never zero.
                     recall_by_institution[institution] = None
                     relative_by_institution[institution] = None
                     for subset in constants.TEST_SUBSETS:
@@ -897,7 +972,10 @@ def run_cell(
                             "operating_point": name, "eval_split": split,
                             "test_subset": subset, "tier": ev.tier,
                             "tau": None, "defined": False,
-                            "undefined_reason": "no tau on the grid meets this budget",
+                            "rejected_tau": ev.rejected_taus.get(name),
+                            "undefined_reason": ev.undefined_reason.get(
+                                name, NO_AFFORDABLE_TAU
+                            ),
                         })
                     continue
 
@@ -1023,11 +1101,27 @@ def run_cell(
         "tau_at_grid_edge": [
             i for i, ev in evaluations.items() if ev.tau_at_grid_edge
         ],
+        # (institution, operating point) pairs, by why they have no tau. A
+        # HIGH edge is an operating point that was not found and is excluded
+        # like an unaffordable budget; a LOW edge on the F1 point is not
+        # excluded but must not occur on the full data, and the runner stops
+        # on it rather than recording it.
+        "tau_at_high_edge": sorted(
+            (i, name)
+            for i, ev in evaluations.items()
+            for name, edge in ev.tau_edges.items() if edge == "high"
+        ),
+        "tau_at_low_edge": sorted(
+            (i, name)
+            for i, ev in evaluations.items()
+            for name, edge in ev.tau_edges.items() if edge == "low"
+        ),
         "no_affordable_tau": sorted(
             (i, name)
             for i, ev in evaluations.items()
             for name, tau in ev.taus.items()
             if tau is None and ev.tier != TIER_UNTRAINED
+            and ev.undefined_reason.get(name) == NO_AFFORDABLE_TAU
         ),
     }
 
