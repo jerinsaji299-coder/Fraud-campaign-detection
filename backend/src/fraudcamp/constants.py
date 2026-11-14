@@ -115,6 +115,18 @@ STATIC_TEST_SUBSETS = ["all", "fully_observed", "no_shared_accounts"]
 CONDITIONS = ["isolated", "fedavg_only", "fedavg_embedding", "centralized"]
 
 # ---------------------------------------------------------------------------
+# Phase 4 frozen scope (README "Phase 4 frozen scope", frozen 2026-11-14)
+# ---------------------------------------------------------------------------
+# Here so a runner cannot drift from the README: three seeds, not Phase 3's
+# five, and ONE lookback, L = 48, which the frozen Phase 3 protocol selected
+# on validation. Both cuts are timeline decisions and both are stated as
+# limitations. Widening either is a change to a frozen definition, and it
+# binds every Phase 4 condition at once, because two conditions are only
+# pairable over identical cells.
+PHASE4_SEEDS = [0, 1, 2]
+PHASE4_LOOKBACK_H = 48
+
+# ---------------------------------------------------------------------------
 # Phase 3 detection windows
 # ---------------------------------------------------------------------------
 # A detection time t is a moment at which a model is asked "is a campaign

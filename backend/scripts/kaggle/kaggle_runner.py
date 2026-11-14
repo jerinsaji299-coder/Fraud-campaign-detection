@@ -4862,6 +4862,467 @@ def command_compare_models(args: argparse.Namespace) -> int:
 # --------------------------------------------------------------------------
 
 
+# --------------------------------------------------------------------------
+# stage 4.1: the isolated condition
+# --------------------------------------------------------------------------
+
+
+def _isolated_dir(args: argparse.Namespace, target: float, seed: int, institution: int) -> Path:
+    """Where one institution's booster lives, named by the cell it belongs to.
+
+    Under `--out` so it survives in /kaggle/working between `train-isolated`
+    and `evaluate-isolated`, and so a restarted session can see which cells
+    are already done. The name comes from `federation.isolated.cell_name`,
+    which both subcommands call, so they cannot disagree about it.
+    """
+    from fraudcamp.federation import isolated
+
+    root = Path(args.model_dir) if args.model_dir else Path(args.out) / "models"
+    return root / "isolated" / isolated.cell_name(target, seed, institution)
+
+
+def _isolated_requested(args: argparse.Namespace):
+    """The (targets, seeds, lookback) this invocation covers.
+
+    Defaults are the **frozen Phase 4 scope**: targets 1.0/0.75/0.5/0.25,
+    seeds 0-2, and the single lookback L = 48 chosen by the Phase 3 protocol
+    on validation. Widening either is a change to a frozen definition, so it
+    has to be asked for explicitly on the command line and recorded.
+    """
+    from fraudcamp import constants
+
+    targets = (
+        [float(v) for v in args.targets.split(",") if v.strip()]
+        if args.targets else list(constants.VISIBILITY_TARGETS)
+    )
+    seeds = (
+        [int(v) for v in args.seeds.split(",") if v.strip()]
+        if args.seeds else list(constants.PHASE4_SEEDS)
+    )
+    lookbacks = (
+        [int(v) for v in args.lookbacks.split(",") if v.strip()]
+        if args.lookbacks else [constants.PHASE4_LOOKBACK_H]
+    )
+    if len(lookbacks) != 1:
+        raise SystemExit(
+            f"Phase 4 runs ONE lookback, frozen at L = {constants.PHASE4_LOOKBACK_H}h; "
+            f"got {lookbacks}. Carrying two would double a 96-cell matrix and "
+            "re-open a selection the Phase 3 protocol already made on validation."
+        )
+    return targets, seeds, lookbacks[0]
+
+
+def command_train_isolated(args: argparse.Namespace) -> int:
+    """Train one booster per institution per (target, seed): stage 4.1.
+
+    Resumable **per (target, seed, institution)**: a finished booster is
+    saved immediately and skipped on a restart, so a lost session costs one
+    institution rather than a cell.
+
+    An institution with no positive rows in its pooled training matrix is
+    recorded as `untrained` and the run continues. That is the approved rule:
+    it is a measurable outcome of the condition - a bank with nothing to
+    learn from catches nothing - not an error, and a 96-cell run must not
+    stop on it.
+    """
+    import pandas as pd
+
+    from fraudcamp import constants, pipeline
+    from fraudcamp.federation import isolated
+    from fraudcamp.federation import views as fv
+
+    out = Path(args.out)
+    out.mkdir(parents=True, exist_ok=True)
+    targets, seeds, lookback = _isolated_requested(args)
+
+    with step("build pipeline"):
+        result = pipeline.build(Path(args.config))
+    print(
+        f"  rows: {len(result.full_df):,}, campaigns: {len(result.camp):,}, "
+        f"eval_ok: {int(result.camp['eval_ok'].sum())}, "
+        f"K = {constants.K_INSTITUTIONS}"
+    )
+    print(
+        f"  frozen scope: targets {targets}, seeds {seeds}, L = {lookback}h -> "
+        f"{len(targets) * len(seeds) * constants.K_INSTITUTIONS} boosters"
+    )
+
+    rows = []
+    for target in targets:
+        for seed in seeds:
+            with step(f"assignment target={target} seed={seed}"):
+                assignment, _ = fv.assignment_from_pipeline(
+                    result, target=target, seed=seed
+                )
+            print(f"    {assignment.n_reassigned:,} accounts reassigned")
+            for institution in range(constants.K_INSTITUTIONS):
+                directory = _isolated_dir(args, target, seed, institution)
+                marker = directory / "model_meta.json"
+                if marker.exists() and not args.force:
+                    print(f"    {directory.name}: already trained, skipping")
+                    rows.append({
+                        "visibility_target": target, "seed": seed,
+                        "lookback_h": lookback, "institution": institution,
+                        "skipped": True, "directory": str(directory),
+                    })
+                    continue
+                with step(f"train {directory.name}"):
+                    model = isolated.train_isolated(
+                        result.full_df, institution, assignment,
+                        lookback_h=lookback,
+                    )
+                row = {
+                    "visibility_target": target, "seed": seed,
+                    "lookback_h": lookback, "skipped": False,
+                    "directory": str(directory), **model.as_row(),
+                }
+                if model.trained:
+                    model.model.save(directory)
+                else:
+                    directory.mkdir(parents=True, exist_ok=True)
+                    (directory / "untrained.json").write_text(
+                        json.dumps(
+                            {
+                                "institution": institution,
+                                "visibility_target": target, "seed": seed,
+                                "lookback_h": lookback,
+                                "n_rows": model.n_rows,
+                                "n_positive": model.n_positive,
+                                "reason": model.training.get("reason"),
+                            },
+                            indent=2,
+                        ),
+                        encoding="utf-8",
+                    )
+                print(
+                    f"    institution {institution}: {model.n_rows:,} rows, "
+                    f"{model.n_positive:,} positives, {model.tier}"
+                )
+                rows.append(row)
+
+    frame = pd.DataFrame(rows)
+    frame.to_csv(out / "train_isolated.csv", index=False)
+    (out / "train_isolated.json").write_text(
+        json.dumps(
+            {
+                "stage": "4.1",
+                "condition": isolated.CONDITION,
+                "params": vars(xgb_params_for_report()),
+                "targets": targets, "seeds": seeds, "lookback_h": lookback,
+                "k_institutions": constants.K_INSTITUTIONS,
+                "min_positives_to_train": fv.MIN_POSITIVES_TO_TRAIN,
+                "models": rows,
+            },
+            indent=2, default=str,
+        ),
+        encoding="utf-8",
+    )
+    trained = frame[~frame.get("skipped", False).astype(bool)] if len(frame) else frame
+    untrained = (
+        trained[trained["tier"] == isolated.TIER_UNTRAINED]
+        if len(trained) and "tier" in trained else trained
+    )
+    thin = (
+        trained[trained["tier"] == isolated.TIER_THIN]
+        if len(trained) and "tier" in trained else trained
+    )
+    (out / "train_isolated.md").write_text(
+        _NEWLINE.join([
+            "# Stage 4.1: training the isolated condition",
+            "",
+            "One booster per institution per (visibility target, seed), on that",
+            "institution's **own view** of the rule-3 training windows, with the",
+            "feature spec fitted on those same views - an institution",
+            "standardises with its own statistics, which is what 'alone' means.",
+            "",
+            "Hyperparameters are the frozen Phase 3 configuration, identical for",
+            "every institution, target and seed: tuning per institution would",
+            "make the condition a comparison of tuning effort.",
+            "",
+            f"**Tiers.** 0 positives cannot train (XGBoost needs both classes) and",
+            f"is recorded as `untrained` with recall 0; 1-{fv.MIN_POSITIVES_TO_TRAIN - 1}",
+            "positives trains and is flagged `thin`. `MIN_POSITIVES_TO_TRAIN` is a",
+            "reporting threshold, never a gate.",
+            "",
+            f"- untrained: **{len(untrained)}** cell(s)",
+            f"- thin: **{len(thin)}** cell(s)",
+            "",
+            "## Per institution",
+            "",
+            _markdown_table(frame),
+            "",
+            "## Timing",
+            "",
+            steps_markdown(),
+            "",
+        ]),
+        encoding="utf-8",
+    )
+    print(f"\nWrote {out / 'train_isolated.md'} (+ .json and .csv)")
+    print("Next: `evaluate-isolated`, which reads these boosters.")
+    return 0
+
+
+def xgb_params_for_report():
+    """The frozen hyperparameters, for the report header."""
+    from fraudcamp.models import xgb_baseline
+
+    return xgb_baseline.XGBParams()
+
+
+def command_evaluate_isolated(args: argparse.Namespace) -> int:
+    """Evaluate the isolated condition: stage 4.1.
+
+    Reads the boosters `train-isolated` saved, chooses each institution's tau
+    on **validation only**, computes each institution's **own** oracle
+    ceiling through the same mask, and reports the two pooled numbers - the
+    per-institution mean (twice: over all institutions and over trained ones)
+    and the union, whose primary operating point matches **total** alert
+    volume at B / K per institution.
+
+    Resumable per (target, seed): a finished cell's rows are written
+    immediately, and a restart skips cells whose CSV already exists.
+
+    Exit 3 if any chosen tau sits at an edge of the model grid - after every
+    report is written, because with 96 cells aborting on the first edge tau
+    would throw away hours of finished work.
+    """
+    import pandas as pd
+
+    from fraudcamp import constants, pipeline
+    from fraudcamp.federation import isolated
+    from fraudcamp.federation import views as fv
+
+    out = Path(args.out)
+    out.mkdir(parents=True, exist_ok=True)
+    cells_dir = out / "isolated_cells"
+    cells_dir.mkdir(parents=True, exist_ok=True)
+    targets, seeds, lookback = _isolated_requested(args)
+    splits = [s.strip() for s in args.splits.split(",") if s.strip()]
+
+    with step("build pipeline"):
+        result = pipeline.build(Path(args.config))
+
+    training = None
+    training_csv = out / "train_isolated.csv"
+    if training_csv.exists():
+        training = pd.read_csv(training_csv)
+
+    collected: dict[str, list[dict]] = {
+        "institution_rows": [], "tau_rows": [], "ceiling_rows": [],
+        "summary_rows": [], "pooled_rows": [], "union_rows": [], "outcome_rows": [],
+    }
+    keys = {
+        "institution_rows": "institutions", "tau_rows": "taus",
+        "ceiling_rows": "ceilings", "summary_rows": "summary",
+        "pooled_rows": "pooled", "union_rows": "union",
+        "outcome_rows": "outcomes",
+    }
+    cell_reports = []
+    edge_taus = []
+
+    for target in targets:
+        for seed in seeds:
+            name = isolated.cell_name(target, seed)
+            done = cells_dir / f"{name}_summary.csv"
+            if done.exists() and not args.force:
+                print(f"\n=== {name}: already evaluated, loading ===", flush=True)
+                for key, suffix in keys.items():
+                    path = cells_dir / f"{name}_{suffix}.csv"
+                    if path.exists():
+                        collected[key].extend(
+                            pd.read_csv(path).to_dict("records")
+                        )
+                continue
+
+            print(
+                f"\n=== target {target}, seed {seed}, L = {lookback}h ===",
+                flush=True,
+            )
+            with step(f"assignment {name}"):
+                assignment, _ = fv.assignment_from_pipeline(
+                    result, target=target, seed=seed
+                )
+
+            models = {}
+            for institution in range(constants.K_INSTITUTIONS):
+                directory = _isolated_dir(args, target, seed, institution)
+                meta = directory / "model_meta.json"
+                if meta.exists():
+                    saved = json.loads(meta.read_text(encoding="utf-8"))
+                    trained = saved.get("training", {})
+                    models[institution] = isolated.loaded_model(
+                        directory, institution, lookback,
+                        n_rows=trained.get("n_rows", 0),
+                        n_positive=trained.get("n_positive", 0),
+                    )
+                    continue
+                untrained = directory / "untrained.json"
+                if untrained.exists():
+                    saved = json.loads(untrained.read_text(encoding="utf-8"))
+                    models[institution] = isolated.IsolatedModel(
+                        institution=institution, lookback_h=lookback,
+                        tier=isolated.TIER_UNTRAINED,
+                        n_rows=int(saved.get("n_rows", 0)),
+                        n_positive=int(saved.get("n_positive", 0)),
+                        training={"reason": saved.get("reason")},
+                    )
+                    continue
+                raise SystemExit(
+                    f"no saved model or untrained marker for {directory}; run "
+                    "`train-isolated` first - this command never trains, so that "
+                    "a lost evaluation session never silently retrains on "
+                    "different boosters"
+                )
+
+            with step(f"evaluate {name}"):
+                cell = isolated.run_cell(
+                    result, target=target, seed=seed, lookback_h=lookback,
+                    splits=tuple(splits), models=models,
+                    progress=lambda line: print(line, flush=True),
+                )
+
+            for key, suffix in keys.items():
+                pd.DataFrame(cell[key]).to_csv(
+                    cells_dir / f"{name}_{suffix}.csv", index=False
+                )
+                collected[key].extend(cell[key])
+            cell_reports.append({k: v for k, v in cell.items() if not k.endswith("_rows")})
+            flags = cell["flags"]
+            if flags["tau_at_grid_edge"]:
+                edge_taus.append({
+                    "visibility_target": target, "seed": seed,
+                    "institutions": flags["tau_at_grid_edge"],
+                })
+            print(
+                f"  done in {cell['seconds']}s - untrained {flags['untrained']}, "
+                f"thin {flags['thin']}, edge taus {flags['tau_at_grid_edge']}, "
+                f"{len(flags['no_affordable_tau'])} (institution, point) pair(s) "
+                "with no affordable tau"
+            )
+
+    files = {
+        "phase4_isolated_institutions.csv": collected["institution_rows"],
+        "phase4_isolated_taus.csv": collected["tau_rows"],
+        "phase4_isolated_ceilings.csv": collected["ceiling_rows"],
+        "phase4_isolated_summary.csv": collected["summary_rows"],
+        "phase4_isolated_pooled.csv": collected["pooled_rows"],
+        "phase4_isolated_union.csv": collected["union_rows"],
+        "phase4_isolated_outcomes.csv": collected["outcome_rows"],
+    }
+    for filename, rows in files.items():
+        pd.DataFrame(rows).to_csv(out / filename, index=False)
+
+    pooled = pd.DataFrame(collected["pooled_rows"])
+    union = pd.DataFrame(collected["union_rows"])
+    # the headline is test when test was evaluated, and says so otherwise
+    # rather than printing an empty table
+    headline_split = "test" if "test" in splits else splits[-1]
+    headline_pooled = pooled
+    headline_union = union
+    if len(pooled):
+        headline_pooled = pooled[
+            (pooled["eval_split"] == headline_split)
+            & (pooled["metric"] == "campaign_recall")
+        ]
+    if len(union):
+        headline_union = union[
+            (union["eval_split"] == headline_split) & (union["test_subset"] == "all")
+        ][[
+            "visibility_target", "seed", "operating_point", "campaign_recall",
+            "oracle_recall", "recall_relative_to_ceiling", "false_alarms_per_day",
+            "summed_false_alarms_per_day", "duplicate_clusters",
+            "n_institutions_operating",
+        ]]
+
+    (out / "phase4_isolated.json").write_text(
+        json.dumps(
+            {
+                "stage": "4.1",
+                "condition": isolated.CONDITION,
+                "targets": targets, "seeds": seeds, "lookback_h": lookback,
+                "splits": splits,
+                "k_institutions": constants.K_INSTITUTIONS,
+                "operating_points": isolated.operating_points(),
+                "cells": cell_reports,
+                "tau_at_grid_edge": edge_taus,
+            },
+            indent=2, default=str,
+        ),
+        encoding="utf-8",
+    )
+    (out / "phase4_isolated.md").write_text(
+        _NEWLINE.join([
+            "# Stage 4.1: the isolated condition",
+            "",
+            "Each institution alone: trained on its own visible transactions,",
+            "scoring its own visible transactions, forming clusters inside its",
+            "own view. No model averaging, no boundary-account sharing. This is",
+            "the floor `fedavg` and `fedavg_exchange` have to beat.",
+            "",
+            "**An institution is restricted by its scorer, not by its data.**",
+            "The transactions, campaigns, deadlines, detection grid and horizons",
+            "are the global ones Phase 3 used; the scorer returns 0 outside the",
+            "institution's view. Visibility restricts what can be scored, never",
+            "what is true.",
+            "",
+            "**Each institution has its own ceiling**, the oracle through the",
+            "same mask. The centralized ceiling is never reused for an",
+            "institution's number: an institution that sees a quarter of a",
+            "campaign's edges could not reach it.",
+            "",
+            "**Two pooled numbers, never averaged together.** The",
+            "per-institution mean is reported twice - over all institutions and",
+            "over trained institutions only - because one mean conflates 'cannot",
+            "see the campaign' with 'had no labels to learn from'. The union is a",
+            "**supervisory** number: a regulator or FIU receiving all K alert",
+            "streams, not a bank. No bank can compute it or benefit from the",
+            "deduplication.",
+            "",
+            "A booster loaded from disk carries no training detail, so the row",
+            "counts, positive counts and class weights are in",
+            "`train_isolated.csv` rather than here. The taus are identical",
+            "either way: a booster trained in process and the same booster",
+            "saved and reloaded choose the same threshold.",
+            "",
+            f"## The two pooled numbers ({headline_split}, campaign recall)",
+            "",
+            _markdown_table(headline_pooled),
+            "",
+            f"## The union ({headline_split}, subset all)",
+            "",
+            "`total_*` points give each institution B / K so the summed volume",
+            "meets B; `budget_*` points give each institution the full B, and",
+            "their summed volume is printed beside them.",
+            "",
+            _markdown_table(headline_union),
+            "",
+            "## Timing",
+            "",
+            steps_markdown(),
+            "",
+        ]),
+        encoding="utf-8",
+    )
+    print(f"\nWrote {out / 'phase4_isolated.md'} (+ .json and 7 CSVs)")
+    print(
+        "Next: `compare-models` against phase4_isolated_outcomes.csv once 4.2 "
+        "exists - it needs `institution` and `visibility_target` in its pairing "
+        "key first."
+    )
+    if edge_taus:
+        print(f"{_NEWLINE}STOPPING: a chosen tau is at an edge of the model grid.")
+        for row in edge_taus:
+            print(
+                f"  target {row['visibility_target']} seed {row['seed']}: "
+                f"institutions {row['institutions']}"
+            )
+        print("Reports above are complete. Send them back and decide the grid")
+        print("before these numbers are used.")
+        return 3
+    return 0
+
+
 def command_not_yet(args: argparse.Namespace) -> int:
     print(
         f"`{args.command}` is not implemented yet. It arrives with Phase 3 "
@@ -4882,7 +5343,7 @@ def main() -> int:
             "verify", "pipeline", "features-smoke", "evaluate-scorers",
             "oracle-diagnose", "make-sample", "train", "evaluate",
             "gpu-check", "gpu-probe-windows", "train-gnn", "evaluate-gnn",
-            "compare-models",
+            "compare-models", "train-isolated", "evaluate-isolated",
         ],
     )
     parser.add_argument(
@@ -4971,6 +5432,20 @@ def main() -> int:
         "--b-label", default="",
         help="compare-models: name for the second model (default: gnn)",
     )
+    parser.add_argument(
+        "--targets", default="",
+        help=(
+            "train-isolated/evaluate-isolated: comma-separated visibility "
+            "targets (default: 1.0,0.75,0.5,0.25)"
+        ),
+    )
+    parser.add_argument(
+        "--force", action="store_true",
+        help=(
+            "train-isolated/evaluate-isolated: redo cells that are already "
+            "finished instead of resuming past them"
+        ),
+    )
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument(
         "--bootstrap", type=int, default=1000,
@@ -4996,6 +5471,8 @@ def main() -> int:
         "train": command_train,
         "evaluate": command_evaluate,
         "compare-models": command_compare_models,
+        "train-isolated": command_train_isolated,
+        "evaluate-isolated": command_evaluate_isolated,
     }
     started = time.perf_counter()
     code = handlers[args.command](args)
