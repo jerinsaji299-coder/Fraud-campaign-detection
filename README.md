@@ -2654,6 +2654,19 @@ below, against **3-8** at target 1.0 — exactly as the mechanism predicts,
 since a fragmented campaign is seen by more institutions at once and a
 concentrated one by about two.
 
+**Reading 4: the sample run exits 3, at the LOW edge of the tau grid.**
+Three of the 32 institution-cells chose **tau = 0.05**, the most sensitive
+threshold on the grid — target 0.50 institution 2, and target 0.25
+institutions 0 and 3. That is the **opposite** direction from stage 3.3's
+problem, which was taus pinned near 1 and prompted the near-1 tail, and the
+mechanism is the sample itself: a 3.3% positive rate against the full data's
+0.102% puts the per-window class weights around 30 instead of 495-3,461, so
+scores are not crushed against 1 and campaign F1 is maximised by keeping
+almost everything. On the sample this is expected and is one more reason its
+taus cannot transfer. On the full data **either** edge has to be explained
+before the numbers are used, and both runners now print **which** edge each
+cell hit rather than only that it hit one.
+
 *(No institution is `untrained` anywhere on the sample, so the two
 per-institution means are identical here. Both are still printed, so a reader
 never has to work out which one a number is. A fixture in the test suite
@@ -4471,6 +4484,13 @@ Tagged points in the repository, newest first. Check one out with
   that cell is undefined and the pooled mean is over 7 institutions and says
   so, while deduplication sheds **80-138** duplicate clusters a cell at
   targets 0.75 and below against **3-8** at target 1.0.
+
+  *The sample run exits 3, at the LOW edge of the tau grid* — three of 32
+  institution-cells chose tau = 0.05, the opposite direction from stage 3.3's
+  near-1 problem, because the sample's 3.3% positive rate puts class weights
+  near 30 instead of 495-3,461. Expected on the sample; on full data either
+  edge must be explained. Both runners now print **which** edge was hit, and
+  the explanation of the two directions lives in `_edge_tau_rows`.
 
   *Seven operating points, because four would have flattered the floor.* At
   target 0.25 the union's deduplicated volume is 39.8 false alarms a day at

@@ -32,8 +32,38 @@ for path in (BACKEND / "src", BACKEND):
 
 import pandas as pd  # noqa: E402
 
-from fraudcamp import constants, pipeline  # noqa: E402
+from fraudcamp import constants, evaluation, pipeline  # noqa: E402
 from fraudcamp.federation import isolated  # noqa: E402
+
+
+def _edge_tau_rows(institution_rows: list[dict]) -> list[dict]:
+    """The cells whose chosen tau sits at an edge of the model grid.
+
+    Carries the tau and **which** edge, because the two directions mean
+    opposite things. A tau at the **top** is the stage 3.3 phenomenon:
+    per-window class weights of 495-3,461 crush scores against 1 and the
+    optimum lies beyond the grid. A tau at the **bottom** is the opposite --
+    the most sensitive threshold on the grid is still the best one, so the
+    optimum may lie below it. On the 1% sample the bottom edge is expected,
+    because the thinned background leaves a positive rate of ~3.3% against the
+    full data's 0.102%, so the class weights are ~30 rather than ~500+ and a
+    very sensitive detector maximises campaign F1. On the full data either
+    edge has to be explained before the numbers are used.
+    """
+    low, high = min(evaluation.MODEL_TAU_GRID), max(evaluation.MODEL_TAU_GRID)
+    rows = []
+    for row in institution_rows:
+        if not row.get("tau_at_grid_edge"):
+            continue
+        tau = row.get("tau_f1")
+        rows.append({
+            "visibility_target": row["visibility_target"],
+            "seed": row["seed"],
+            "institution": row["institution"],
+            "tau": tau,
+            "edge": "low" if tau == low else ("high" if tau == high else "?"),
+        })
+    return rows
 
 
 def main() -> int:
@@ -126,20 +156,26 @@ def main() -> int:
         json.dumps(report, indent=2, default=str), encoding="utf-8"
     )
 
-    edge_taus = [
-        (cell["target"], cell["seed"], cell["flags"]["tau_at_grid_edge"])
-        for cell in cells if cell["flags"]["tau_at_grid_edge"]
-    ]
+    edge_taus = _edge_tau_rows(collected["institution_rows"])
     print(f"\nwrote {len(files) + 1} files to {out_dir}")
     print(f"total {time.time() - t0:.1f}s")
     if edge_taus:
         print("\nSTOPPING: a chosen tau is at an edge of the model grid.")
-        for target, seed, institutions in edge_taus:
-            print(f"  target {target} seed {seed}: institutions {institutions}")
-        print("Reports above are complete. On the sample this is expected —")
-        print("the thinned background leaves a positive rate two orders of")
-        print("magnitude too high — but on full data it must be investigated")
-        print("before the numbers are used.")
+        for row in edge_taus:
+            print(
+                f"  target {row['visibility_target']} seed {row['seed']} "
+                f"institution {row['institution']}: tau = {row['tau']} "
+                f"({row['edge']} edge)"
+            )
+        print(
+            f"  {len(edge_taus)} of {len(collected['institution_rows'])} "
+            "institution-cells"
+        )
+        print("Reports above are complete. On the SAMPLE a LOW edge is")
+        print("expected: the thinned background leaves a ~3.3% positive rate")
+        print("against the full data's 0.102%, so class weights are ~30 rather")
+        print("than ~500+ and the most sensitive threshold wins. On full data")
+        print("either edge has to be explained before the numbers are used.")
         return 3
     return 0
 

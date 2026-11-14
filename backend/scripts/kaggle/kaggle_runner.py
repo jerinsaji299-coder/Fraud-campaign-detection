@@ -4912,6 +4912,38 @@ def _isolated_requested(args: argparse.Namespace):
     return targets, seeds, lookbacks[0]
 
 
+def _edge_tau_rows(institution_rows: list[dict]) -> list[dict]:
+    """The cells whose chosen tau sits at an edge of the model grid.
+
+    Carries the tau and **which** edge, because the two directions mean
+    opposite things. A tau at the **top** is the stage 3.3 phenomenon:
+    per-window class weights of 495-3,461 crush scores against 1 and the
+    optimum lies beyond the grid. A tau at the **bottom** is the opposite -
+    the most sensitive threshold on the grid is still the best one, so the
+    optimum may lie below it. On the 1% sample the bottom edge is expected,
+    because the thinned background leaves a positive rate of ~3.3% against the
+    full data's 0.102%, so the class weights are ~30 rather than ~500+ and a
+    very sensitive detector maximises campaign F1. On the full data either
+    edge has to be explained before the numbers are used.
+    """
+    from fraudcamp import evaluation
+
+    low, high = min(evaluation.MODEL_TAU_GRID), max(evaluation.MODEL_TAU_GRID)
+    rows = []
+    for row in institution_rows:
+        if not row.get("tau_at_grid_edge"):
+            continue
+        tau = row.get("tau_f1")
+        rows.append({
+            "visibility_target": row["visibility_target"],
+            "seed": row["seed"],
+            "institution": row["institution"],
+            "tau": tau,
+            "edge": "low" if tau == low else ("high" if tau == high else "?"),
+        })
+    return rows
+
+
 def command_train_isolated(args: argparse.Namespace) -> int:
     """Train one booster per institution per (target, seed): stage 4.1.
 
@@ -5190,10 +5222,7 @@ def command_evaluate_isolated(args: argparse.Namespace) -> int:
             cell_reports.append({k: v for k, v in cell.items() if not k.endswith("_rows")})
             flags = cell["flags"]
             if flags["tau_at_grid_edge"]:
-                edge_taus.append({
-                    "visibility_target": target, "seed": seed,
-                    "institutions": flags["tau_at_grid_edge"],
-                })
+                edge_taus.extend(_edge_tau_rows(cell["institution_rows"]))
             print(
                 f"  done in {cell['seconds']}s - untrained {flags['untrained']}, "
                 f"thin {flags['thin']}, edge taus {flags['tau_at_grid_edge']}, "
@@ -5314,11 +5343,16 @@ def command_evaluate_isolated(args: argparse.Namespace) -> int:
         print(f"{_NEWLINE}STOPPING: a chosen tau is at an edge of the model grid.")
         for row in edge_taus:
             print(
-                f"  target {row['visibility_target']} seed {row['seed']}: "
-                f"institutions {row['institutions']}"
+                f"  target {row['visibility_target']} seed {row['seed']} "
+                f"institution {row['institution']}: tau = {row['tau']} "
+                f"({row['edge']} edge)"
             )
-        print("Reports above are complete. Send them back and decide the grid")
-        print("before these numbers are used.")
+        print(
+            "Reports above are complete. A HIGH edge means the optimum lies "
+            "beyond the grid, as in stage 3.3; a LOW edge means the most "
+            "sensitive threshold on the grid is still the best one. Send them "
+            "back and decide the grid before these numbers are used."
+        )
         return 3
     return 0
 
