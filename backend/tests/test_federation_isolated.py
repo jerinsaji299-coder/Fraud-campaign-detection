@@ -413,14 +413,15 @@ def test_operating_points_cover_both_readings_of_the_budget():
     names = [p["operating_point"] for p in points]
     assert names[0] == "f1"
     for budget in evaluation.FALSE_ALARM_BUDGETS:
-        # "uncapped", not "budget": for an isolated institution the full
-        # budget does not bind, so the name must not read as budgeted
-        assert f"uncapped_{budget}" in names
+        # "per_inst", not "budget": the name carries WHOSE budget it is,
+        # which is structural. It must not read as the centralized model's
+        # budgeted B a day, because the union here spends up to K x B.
+        assert f"per_inst_{budget}" in names
         assert f"total_{budget}" in names
     per_institution = {p["operating_point"]: p["per_institution_budget"] for p in points}
     for budget in evaluation.FALSE_ALARM_BUDGETS:
         # a bank alone has its own analysts; the union shares one desk
-        assert per_institution[f"uncapped_{budget}"] == float(budget)
+        assert per_institution[f"per_inst_{budget}"] == float(budget)
         assert per_institution[f"total_{budget}"] == budget / 8
 
 
@@ -914,7 +915,7 @@ def test_pooled_spread_breaks_ties_at_the_lowest_institution():
 def test_the_matched_total_budget_is_an_eighth_of_the_per_institution_one(cell):
     by_point = {row["operating_point"]: row for row in cell["tau_rows"]}
     for budget in evaluation.FALSE_ALARM_BUDGETS:
-        assert by_point[f"uncapped_{budget}"]["per_institution_budget"] == float(budget)
+        assert by_point[f"per_inst_{budget}"]["per_institution_budget"] == float(budget)
         assert by_point[f"total_{budget}"]["per_institution_budget"] == budget / K
 
 
@@ -1158,7 +1159,7 @@ def test_a_low_edge_is_flagged_for_the_f1_point_and_not_for_a_budget(
 
     assert ev.tau_edges["f1"] == "low"
     assert ev.taus["f1"] == low, "a low edge is recorded, not excluded"
-    for point in ("uncapped_10", "total_10"):
+    for point in ("per_inst_10", "total_10"):
         assert ev.taus[point] == low
         assert point not in ev.tau_edges, "a loose budget is not a finding"
 
@@ -1376,14 +1377,14 @@ def test_a_budget_tau_at_the_bottom_of_the_grid_is_not_binding(
     the most sensitive tau on the grid already fits inside it."""
     low = min(evaluation.MODEL_TAU_GRID)
     ev = _evaluate_with_curve(monkeypatch, 0.5, low, trainable_world)
-    for point in ("uncapped_10", "uncapped_100", "total_10"):
+    for point in ("per_inst_10", "per_inst_100", "total_10"):
         assert ev.budget_binding[point] is False, point
     assert "f1" not in ev.budget_binding, "the F1 point has no budget to bind"
 
 
 def test_a_budget_tau_inside_the_grid_is_binding(monkeypatch, trainable_world):
     ev = _evaluate_with_curve(monkeypatch, 0.5, 0.9, trainable_world)
-    for point in ("uncapped_10", "uncapped_100", "total_10"):
+    for point in ("per_inst_10", "per_inst_100", "total_10"):
         assert ev.budget_binding[point] is True, point
 
 
@@ -1493,12 +1494,15 @@ def test_the_guards_can_fail(frame, trainable_world):
 # ---------------------------------------------------------------------------
 
 
-def test_the_primary_points_are_the_two_where_the_threshold_is_determined():
-    """`f1` is set by the frozen selection rule; `total_10` is set by a budget
-    that actually binds. The `uncapped_*` points are set by neither - for an
-    isolated institution the full budget does not bind, so the threshold
-    falls to the grid's floor - which is why they are named `uncapped` and
-    are not comparison points."""
+def test_the_primary_points_are_the_two_where_the_comparison_is_fair():
+    """`f1` is set by the frozen selection rule on validation; `total_10` is
+    the only budget point at which the UNION's summed alarm volume is held to
+    the same B a centralized model is held to.
+
+    That justification is structural, which is why it survived the full data
+    reversing the sample's binding result. The `per_inst_*` points give each
+    institution the full B, so the union spends up to K x B and a comparison
+    there would also be a spending comparison."""
     assert isolated.PRIMARY_POINTS == ("f1", "total_10")
     points = {p["operating_point"]: p for p in isolated.operating_points()}
     assert set(isolated.PRIMARY_POINTS) <= set(points)
@@ -1514,8 +1518,8 @@ def test_no_operating_point_is_named_in_a_way_that_reads_as_budgeted():
     operating points, and the schema must not let them be read as such."""
     names = [p["operating_point"] for p in isolated.operating_points()]
     assert not any(name.startswith("budget_") for name in names), names
-    assert sorted(n for n in names if n.startswith("uncapped_")) == [
-        "uncapped_10", "uncapped_100", "uncapped_50",
+    assert sorted(n for n in names if n.startswith("per_inst_")) == [
+        "per_inst_10", "per_inst_100", "per_inst_50",
     ]
 
 

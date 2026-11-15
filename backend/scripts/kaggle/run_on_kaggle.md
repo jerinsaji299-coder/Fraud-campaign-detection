@@ -1394,6 +1394,24 @@ assert not missing_cells, (
 )
 assert not incomplete, f"{len(incomplete)} cell file(s) missing - re-send B's output"
 print("  all six of B's cells complete; C will reload them in seconds")
+
+# --- D6 migration: B ran before the rename -----------------------------
+#     Session B wrote `uncapped_10/50/100`; the code now writes
+#     `per_inst_10/50/100`. C concatenates B's rows with its own, so without
+#     this the single report would carry TWO names for one operating point and
+#     every groupby would split it. Rewriting the staged copies is safe - the
+#     originals in B's output are read-only - and it is a pure relabelling:
+#     only the operating_point string changes, never a number.
+renamed = 0
+for path in sorted(cells_dir.glob("*.csv")):
+    text = path.read_text(encoding="utf-8")
+    if "uncapped_" in text:
+        path.write_text(text.replace("uncapped_", "per_inst_"), encoding="utf-8")
+        renamed += 1
+print(f"  D6: rewrote uncapped_* -> per_inst_* in {renamed} staged cell file(s)")
+leftover = [p.name for p in cells_dir.glob("*.csv")
+            if "uncapped_" in p.read_text(encoding="utf-8")]
+assert not leftover, leftover
 ```
 
 ```python
@@ -1499,7 +1517,7 @@ reason other than exit 0 or exit 3-with-cells-excluded.
 * **Budgets that DO bind — REVERSED from the sample by session B.** Every
   per-institution budget point came back binding, `binding_fraction = 1.0`,
   against 0 of 8 on the sample: the full background is ~100x denser, so the
-  grid floor is far above 100 alarms a day. The `uncapped_*` name therefore
+  grid floor is far above 100 alarms a day. The `per_inst_*` name therefore
   says the wrong thing and becomes `own_*` after this stage completes. Read
   `budget_binding` per cell, not the column name.
 * **A low-edge F1 tau is possible at 0.50 and 0.25.** Two of B's cells chose

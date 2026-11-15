@@ -660,39 +660,38 @@ PRIMARY_POINTS = ("f1", "total_10")
 def operating_points(k: int = constants.K_INSTITUTIONS) -> list[dict]:
     """The seven points a cell is evaluated at.
 
-    **Naming, and why ``uncapped_*`` is now the wrong word.** These points
-    give each institution the *full* budget B. They were renamed from
-    ``budget_*`` to ``uncapped_*`` on 2026-11-14 for two reasons, and **one of
-    them has since reversed**:
+    **Naming (D6, resolved 2026-11-15): ``per_inst_10/50/100``.** These
+    points give each institution the *full* budget B, so the union spends up
+    to ``K x B``. The name has been through all three candidates and the
+    reasoning is worth keeping, because two of them were wrong for opposite
+    reasons:
 
-    * *Reversed.* On the 1% sample the budget bound in **0 of 8** institutions
-      at every target: an institution seeing a fraction of the traffic could
-      not raise B alarms a day even at the grid's most sensitive threshold, so
-      the threshold was set by the grid floor and the point was not a budgeted
-      operating point at all. On the **full data** it binds - session B
-      measured ``budget_binding`` True for every per-institution budget point
-      in every cell, ``binding_fraction`` 1.0. The background is ~100x denser,
-      so the grid floor now raises far more than 100 alarms a day and the
-      budget is what sets the threshold. The word "uncapped" asserts the
-      opposite of the data.
-    * *Standing.* ``budget_10`` invites a reader to compare it against a
-      centralized model's genuinely budgeted 10/day. That comparison lets the
-      union spend 8 x B, and it is the error the binding count exists to
-      prevent. So reverting the name would be a worse error than the current
-      one, not a fix: the point comparable to a centralized ``budget_10`` is
-      ``total_10``, which is why that is the PRIMARY point.
+    * ``budget_*``, the original, invites a reader to compare it against a
+      centralized model's genuinely budgeted B a day. That comparison lets the
+      union outspend the centralized model eight to one, and it is the error
+      ``budget_binding`` and ``total_*`` exist to prevent. **Rejected, and
+      still rejected** - the point comparable to a centralized ``budget_10``
+      is ``total_10``, which is why that is PRIMARY.
+    * ``uncapped_*``, used 2026-11-14 to 2026-11-15, said these were not
+      budgeted operating points at all. That was measured, on the 1% sample:
+      the budget bound in **0 of 8** institutions at every target, because an
+      institution seeing a fraction of the traffic could not raise even 10
+      alarms a day at the grid's most sensitive threshold, so the grid floor
+      set the threshold instead. **On the full data it reverses** - every
+      per-institution budget point binds, ``binding_fraction`` 1.0 - because
+      the full background is ~100x denser and the grid floor now raises far
+      more than 100 alarms a day. The sample misled because *whether a budget
+      binds is a property of data density, not of being isolated*, and a 1%
+      sample changes exactly that property.
+    * ``per_inst_*`` carries the **structure** instead: each institution at
+      its own per-institution budget. Structure does not move when a
+      measurement does, which is the whole lesson - a label must not encode a
+      finding, because a finding can reverse and a column name cannot be
+      renamed retroactively in reports already written.
 
-    The conclusion is that the label should carry the **structure** (each
-    institution at its own full B, so the union spends K x B) and never a
-    measured finding, because findings move with the data and labels should
-    not. ``own_10/50/100`` does that. The rename is **deferred until stage 4.1
-    is complete**: the per-cell CSVs under ``isolated_cells/`` carry the
-    literal operating-point string, and a session that assembles its report
-    from a mixture of its own cells and earlier sessions' would then emit two
-    names for one point. See the README decision log for the migration.
-
-    Either way the per-cell ``budget_binding`` flag is the authoritative
-    answer, and it is the thing to read rather than the name.
+    The per-cell ``budget_binding`` flag remains the authoritative answer to
+    whether any particular cell was budgeted, and it is what to read; the name
+    now says only which budget was applied to whom.
 
     ``total_*`` give each institution ``B / K`` so the **union's** summed
     volume meets B, which is the only reading in which a budget constrains
@@ -704,11 +703,11 @@ def operating_points(k: int = constants.K_INSTITUTIONS) -> list[dict]:
     }]
     for budget in evaluation.FALSE_ALARM_BUDGETS:
         points.append({
-            "operating_point": f"uncapped_{budget}",
+            "operating_point": f"per_inst_{budget}",
             "kind": "per_institution_budget",
             "budget": float(budget),
             "per_institution_budget": float(budget),
-            "primary": f"uncapped_{budget}" in PRIMARY_POINTS,
+            "primary": f"per_inst_{budget}" in PRIMARY_POINTS,
         })
     for budget in evaluation.FALSE_ALARM_BUDGETS:
         points.append({
