@@ -370,6 +370,24 @@ def averaged_evidence_scorer(
 # ---------------------------------------------------------------------------
 
 
+def _same_assignment(
+    a: fv.VisibilityAssignment, b: fv.VisibilityAssignment
+) -> bool:
+    """Do these two assignments describe the same cell?
+
+    By value: `(seed, target, k)` plus the reassignment map itself. A
+    `VisibilityAssignment` holds dicts, so it is not hashable and `==` on the
+    dataclass is not available for the cheap path; the map is what actually
+    determines every view, so it is what gets compared.
+    """
+    return (
+        a.seed == b.seed
+        and a.target == b.target
+        and a.k == b.k
+        and a.global_assignment == b.global_assignment
+    )
+
+
 class EvidenceRunner:
     """Holds the one :class:`BoundaryEvidence` a cell shares.
 
@@ -395,16 +413,22 @@ class EvidenceRunner:
             self._provider = BoundaryEvidence(
                 self.full_df, assignment, self.lookback_h, self.max_cached_windows
             )
-        elif self._provider._assignment is not assignment:
+        elif not _same_assignment(self._provider._assignment, assignment):
             # One runner is one cell. A different assignment means a different
             # (target, seed), which has a different boundary set and different
             # shared features, so reusing this cache would score one cell with
             # another cell's evidence.
+            #
+            # Compared by VALUE, not identity: `run_cell` rebuilds the
+            # assignment from the pipeline, so the trainer and the scorers are
+            # handed equal-but-distinct objects for the same cell and an
+            # identity check would reject the normal path.
+            held = self._provider._assignment
             raise RuntimeError(
                 "this EvidenceRunner already holds evidence for "
-                f"(target={self._provider._assignment.target}, "
-                f"seed={self._provider._assignment.seed}); build a new runner "
-                "per cell"
+                f"(target={held.target}, seed={held.seed}) and was asked for "
+                f"(target={assignment.target}, seed={assignment.seed}); build "
+                "a new runner per cell"
             )
         return self._provider
 

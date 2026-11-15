@@ -5523,6 +5523,654 @@ def command_not_yet(args: argparse.Namespace) -> int:
 # --------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# stages 4.2, 4.3 and 4.4, and the Phase 4 comparison
+# ---------------------------------------------------------------------------
+#
+# `command_evaluate_isolated` above is deliberately left untouched: sessions B
+# and C of stage 4.1 run it, and it is not changed while a run depends on it.
+# The three conditions added here share one driver instead, because they
+# differ only in which boosters they load and which scorer they build.
+
+
+def _condition_dir(args: argparse.Namespace, condition: str) -> Path:
+    root = Path(args.model_dir) if args.model_dir else Path(args.out) / "models"
+    return root / condition
+
+
+def _load_cell_models(args, directory_for, target, seed, lookback):
+    """The K boosters for one cell, or a clear SystemExit naming what is missing.
+
+    Never trains. A missing booster is a missing input, and the useful action
+    is always to attach the session that produced it rather than to retrain
+    silently on a different model than the one the report will claim.
+    """
+    from fraudcamp import constants
+    from fraudcamp.federation import isolated
+
+    models = {}
+    for institution in range(constants.K_INSTITUTIONS):
+        directory = directory_for(target, seed, institution)
+        meta = directory / "model_meta.json"
+        if meta.exists():
+            saved = json.loads(meta.read_text(encoding="utf-8"))
+            trained = saved.get("training", {})
+            models[institution] = isolated.loaded_model(
+                directory, institution, lookback,
+                n_rows=trained.get("n_rows", 0),
+                n_positive=trained.get("n_positive", 0),
+            )
+            continue
+        untrained = directory / "untrained.json"
+        if untrained.exists():
+            saved = json.loads(untrained.read_text(encoding="utf-8"))
+            models[institution] = isolated.IsolatedModel(
+                institution=institution, lookback_h=lookback,
+                tier=isolated.TIER_UNTRAINED,
+                n_rows=int(saved.get("n_rows", 0)),
+                n_positive=int(saved.get("n_positive", 0)),
+                training={"reason": saved.get("reason")},
+            )
+            continue
+        raise SystemExit(
+            f"no saved model or untrained marker for {directory}. This command "
+            "never trains, so that a lost session cannot silently swap the "
+            "boosters the report is about."
+        )
+    return models
+
+
+def _run_condition_cells(
+    args: argparse.Namespace,
+    conditions: list[str],
+    build_cell,
+    model_dir_for,
+    prefix: str,
+    preamble: list[str],
+) -> int:
+    """The resumable per-cell driver every Phase 4 condition shares.
+
+    `build_cell(result, target, seed, lookback, splits, models, condition,
+    say)` returns the cell dict. One call per condition per cell, so a pair
+    like 4.3a/4.3b that must share boosters is built in one place.
+
+    Resumable per `(condition, target, seed)`: a finished cell's rows are
+    written immediately and a restart reloads them. A reloaded cell's
+    exclusions are re-derived from its own rows, for the reason
+    `_reloaded_cell_edges` exists - the session that assembles the report has
+    to name every cell excluded in it.
+    """
+    import pandas as pd
+
+    from fraudcamp import constants, pipeline
+
+    out = Path(args.out)
+    out.mkdir(parents=True, exist_ok=True)
+    cells_dir = out / f"{prefix}_cells"
+    cells_dir.mkdir(parents=True, exist_ok=True)
+    targets, seeds, lookback = _isolated_requested(args)
+    splits = [s.strip() for s in args.splits.split(",") if s.strip()]
+
+    with step("build pipeline"):
+        result = pipeline.build(Path(args.config))
+
+    keys = {
+        "institution_rows": "institutions", "tau_rows": "taus",
+        "ceiling_rows": "ceilings", "summary_rows": "summary",
+        "pooled_rows": "pooled", "union_rows": "union",
+        "outcome_rows": "outcomes",
+    }
+    collected = {condition: {k: [] for k in keys} for condition in conditions}
+    cell_reports, edge_taus, high_edge = [], [], []
+    calibration = None
+
+    for target in targets:
+        for seed in seeds:
+            name = isolated_cell_name(target, seed)
+            models = None
+            for condition in conditions:
+                done = cells_dir / f"{condition}_{name}_summary.csv"
+                if done.exists() and not args.force:
+                    print(f"\n=== {condition} {name}: already evaluated, loading ===",
+                          flush=True)
+                    reloaded = {}
+                    for key, suffix in keys.items():
+                        path = cells_dir / f"{condition}_{name}_{suffix}.csv"
+                        if path.exists():
+                            rows = pd.read_csv(path).to_dict("records")
+                            reloaded[key] = rows
+                            collected[condition][key].extend(rows)
+                    cell_high, cell_edges = _reloaded_cell_edges(reloaded)
+                    high_edge.extend({**row, "condition": condition} for row in cell_high)
+                    edge_taus.extend({**row, "condition": condition} for row in cell_edges)
+                    cell_reports.append({
+                        "condition": condition, "target": target, "seed": seed,
+                        "reloaded_from": done.name,
+                    })
+                    if cell_high:
+                        print(f"  reloaded with {len(cell_high)} excluded cell(s)",
+                              flush=True)
+                    continue
+
+                if models is None:
+                    with step(f"load boosters {name}"):
+                        models = _load_cell_models(
+                            args, model_dir_for, target, seed, lookback
+                        )
+                print(f"\n=== {condition}: target {target}, seed {seed}, "
+                      f"L = {lookback}h ===", flush=True)
+                started = time.perf_counter()
+                with step(f"evaluate {condition} {name}"):
+                    cell = build_cell(
+                        result, target, seed, lookback, tuple(splits), models,
+                        condition, lambda line: print(line, flush=True),
+                    )
+                seconds = time.perf_counter() - started
+                if calibration is None:
+                    calibration = {"condition": condition, "cell": name,
+                                   "seconds": round(seconds, 1)}
+                    print(
+                        f"\n  CALIBRATION: the first cell of {condition} took "
+                        f"{seconds / 60:.1f} min. This session has "
+                        f"{len(targets) * len(seeds) * len(conditions)} cell-runs "
+                        f"in all, so expect about "
+                        f"{seconds * len(targets) * len(seeds) * len(conditions) / 3600:.1f} h. "
+                        "Every cell is written as it finishes, so stopping early "
+                        "costs the cell in flight and nothing else.",
+                        flush=True,
+                    )
+
+                flags = cell["flags"]
+                if flags["tau_at_low_edge"] and not args.allow_low_edge_tau:
+                    print(
+                        f"{_NEWLINE}STOPPING, and NOT recording {condition} "
+                        f"{name}: an F1 tau sits at the LOW edge of the grid."
+                    )
+                    for institution, point in flags["tau_at_low_edge"]:
+                        print(f"  institution {institution}, point {point}")
+                    print(
+                        "At 0.102% prevalence the most sensitive threshold on "
+                        "the grid should not be the best one. Nothing from this "
+                        "cell is recorded. Report it; pass "
+                        "--allow-low-edge-tau only if you have decided to "
+                        "record it anyway."
+                    )
+                    return 3
+
+                for key, suffix in keys.items():
+                    pd.DataFrame(cell[key]).to_csv(
+                        cells_dir / f"{condition}_{name}_{suffix}.csv", index=False
+                    )
+                    collected[condition][key].extend(cell[key])
+                cell_reports.append({
+                    "condition": condition, "target": target, "seed": seed,
+                    "seconds": round(seconds, 1),
+                    **{k: v for k, v in cell.items() if not k.endswith("_rows")},
+                })
+                if flags["tau_at_grid_edge"] or flags["tau_at_high_edge"]:
+                    edge_taus.extend(
+                        {**row, "condition": condition}
+                        for row in _edge_tau_rows(cell["institution_rows"])
+                    )
+                high_edge.extend(
+                    {"condition": condition, "visibility_target": target,
+                     "seed": seed, "institution": institution,
+                     "operating_point": point}
+                    for institution, point in flags["tau_at_high_edge"]
+                )
+                print(f"  done in {seconds:.1f}s", flush=True)
+
+    written = []
+    for condition in conditions:
+        for key, suffix in keys.items():
+            path = out / f"phase4_{condition}_{suffix}.csv"
+            pd.DataFrame(collected[condition][key]).to_csv(path, index=False)
+            written.append(path.name)
+
+    (out / f"{prefix}.json").write_text(
+        json.dumps({
+            "conditions": conditions, "targets": targets, "seeds": seeds,
+            "lookback_h": lookback, "splits": splits,
+            "calibration": calibration,
+            "cells": cell_reports, "tau_at_grid_edge": edge_taus,
+            "high_edge": high_edge, "files": written,
+        }, indent=2, default=str),
+        encoding="utf-8",
+    )
+    (out / f"{prefix}.md").write_text(
+        _NEWLINE.join(preamble + [
+            "", "## Cells", "",
+            _markdown_table(pd.DataFrame(cell_reports)) if cell_reports else "_none_",
+            "", "## Timing", "", steps_markdown(), "",
+        ]),
+        encoding="utf-8",
+    )
+    print(f"{_NEWLINE}Wrote {out / (prefix + '.md')} (+ .json and "
+          f"{len(written)} CSVs)")
+    if high_edge:
+        print(f"{_NEWLINE}{len(high_edge)} (institution, operating point) "
+              "cell(s) were EXCLUDED for a tau at the top of the grid:")
+        for row in high_edge:
+            print(f"  {row.get('condition')} target {row['visibility_target']} "
+                  f"seed {row['seed']} institution {row['institution']}: "
+                  f"{row['operating_point']}")
+    if edge_taus:
+        print(f"{_NEWLINE}STOPPING: a chosen tau is at an edge of the model grid.")
+        print("Reports above are complete. An edge tau in a RELOADED cell is "
+              "reported here too, so a session that assembles its report from "
+              "earlier cells exits 3 for their edges as well as its own.")
+        return 3
+    return 0
+
+
+def isolated_cell_name(target: float, seed: int) -> str:
+    from fraudcamp.federation import isolated
+
+    return isolated.cell_name(target, seed)
+
+
+def command_evaluate_fedavg(args: argparse.Namespace) -> int:
+    """Stage 4.2: score averaging over stage 4.1's boosters.
+
+    Trains nothing. Reads the SAME boosters stage 4.1 evaluated, applies all K
+    of them to each institution's view and averages the scores per edge, so
+    4.2 - 4.1 is a scoring contrast over identical cells with identical
+    ceilings.
+    """
+    from fraudcamp.federation import fedavg, isolated
+
+    def build(result, target, seed, lookback, splits, models, condition, say):
+        return fedavg.run_cell(
+            result, target=target, seed=seed, lookback_h=lookback,
+            splits=splits, models=models, progress=say,
+        )
+
+    return _run_condition_cells(
+        args, [fedavg.CONDITION], build,
+        lambda target, seed, institution: _isolated_dir(
+            args, target, seed, institution
+        ),
+        "evaluate_fedavg",
+        [
+            "# Stage 4.2: the fedavg condition (score averaging)",
+            "",
+            "Every institution scores **its own view** with all K stage 4.1",
+            "boosters, equal weights, nothing retrained. Models move, data",
+            "does not.",
+            "",
+            "**Trees cannot be parameter-averaged** - discrete split",
+            "structure, sequential fitting on residuals, different roots on",
+            "different views - so the combination happens at the output,",
+            "which is the standard analogue. Equal weights because unweighted",
+            "is untuned.",
+            "",
+            "**The ceilings are identical to 4.1's**, because averaging scores",
+            "cannot change what an institution can see. That is what makes",
+            "4.2 - 4.1 a clean scoring measurement.",
+        ],
+    )
+
+
+def command_train_evidence(args: argparse.Namespace) -> int:
+    """Stage 4.3: retrain the K boosters per cell on AUGMENTED views.
+
+    Resumable per `(target, seed, institution)`: a finished booster is skipped.
+    One `BoundaryEvidence` per cell, shared by the K institutions, because the
+    shared node features are a property of the cell and recomputing them per
+    institution is most of the cost.
+    """
+    import pandas as pd
+
+    from fraudcamp import constants, pipeline
+    from fraudcamp.federation import evidence as evidence_mod, views as fv
+
+    out = Path(args.out)
+    out.mkdir(parents=True, exist_ok=True)
+    targets, seeds, lookback = _isolated_requested(args)
+
+    with step("build pipeline"):
+        result = pipeline.build(Path(args.config))
+
+    rows = []
+    for target in targets:
+        for seed in seeds:
+            name = isolated_cell_name(target, seed)
+            print(f"{_NEWLINE}=== {name}: target {target}, seed {seed} ===",
+                  flush=True)
+            with step(f"assignment {name}"):
+                assignment, _ = fv.assignment_from_pipeline(
+                    result, target=target, seed=seed
+                )
+            runner = evidence_mod.EvidenceRunner(
+                result.full_df, lookback,
+                args.max_cached_windows or None,
+            )
+            provider = runner.provider(assignment)
+            print(f"  boundary accounts: {len(provider.boundary_accounts):,}",
+                  flush=True)
+            for institution in range(constants.K_INSTITUTIONS):
+                directory = _evidence_dir(args, target, seed, institution)
+                if (directory / "model_meta.json").exists() and not args.force:
+                    print(f"  {directory.name}: already trained, skipping",
+                          flush=True)
+                    rows.append({"visibility_target": target, "seed": seed,
+                                 "lookback_h": lookback, "skipped": True,
+                                 "institution": institution,
+                                 "directory": str(directory)})
+                    continue
+                with step(f"train {directory.name}"):
+                    model = evidence_mod.train_evidence(
+                        result.full_df, institution, assignment, provider,
+                        lookback_h=lookback,
+                    )
+                directory.mkdir(parents=True, exist_ok=True)
+                if model.trained:
+                    model.model.save(directory)
+                else:
+                    (directory / "untrained.json").write_text(
+                        json.dumps({"reason": model.training.get("reason"),
+                                    "n_rows": model.n_rows,
+                                    "n_positive": model.n_positive}, indent=2),
+                        encoding="utf-8",
+                    )
+                rows.append({"visibility_target": target, "seed": seed,
+                             "lookback_h": lookback, "skipped": False,
+                             "directory": str(directory), **model.as_row()})
+            print(f"  evidence cache: {provider.stats()}", flush=True)
+
+    frame = pd.DataFrame(rows)
+    frame.to_csv(out / "train_evidence.csv", index=False)
+    (out / "train_evidence.json").write_text(
+        json.dumps({"rows": rows, "params": vars(xgb_params_for_report())},
+                   indent=2, default=str),
+        encoding="utf-8",
+    )
+    (out / "train_evidence.md").write_text(
+        _NEWLINE.join([
+            "# Stage 4.3: boosters retrained on augmented views",
+            "",
+            "Each institution's view carries, for its **boundary accounts**,",
+            "the window node features computed across the views that hold",
+            "them. No labels, no raw transactions, no features for",
+            "non-boundary accounts. The spec is refitted per institution on",
+            "the augmented view, so it is fitted on the values the model is",
+            "then scored on.",
+            "",
+            "**The rows do not change.** Only what the model knows about them",
+            "does, so every per-institution ceiling is unchanged and 4.3 can",
+            "recover more of its ceiling but never lift it.",
+            "",
+            "## Per institution-cell",
+            "",
+            _markdown_table(frame) if len(frame) else "_none_",
+            "", "## Timing", "", steps_markdown(), "",
+        ]),
+        encoding="utf-8",
+    )
+    print(f"{_NEWLINE}Wrote {out / 'train_evidence.md'} (+ .json and .csv)")
+    print("Next: `evaluate-evidence`, which reads these boosters.")
+    return 0
+
+
+def _evidence_dir(args, target: float, seed: int, institution: int) -> Path:
+    from fraudcamp.federation import isolated
+
+    root = Path(args.model_dir) if args.model_dir else Path(args.out) / "models"
+    return root / "evidence" / isolated.cell_name(target, seed, institution)
+
+
+def command_evaluate_evidence(args: argparse.Namespace) -> int:
+    """Stages 4.3a and 4.3b from one set of augmented boosters.
+
+    Both conditions per cell, in one pass, sharing the boosters and the one
+    `BoundaryEvidence` - so 4.3b - 4.3a differs in the scoring rule and in
+    nothing else, and the shared node features are computed once per window
+    for both.
+    """
+    from fraudcamp.federation import evidence as evidence_mod
+
+    runners: dict[tuple, object] = {}
+
+    def build(result, target, seed, lookback, splits, models, condition, say):
+        key = (target, seed)
+        if key not in runners:
+            runners.clear()  # one cell at a time: the cache is per cell
+            runners[key] = evidence_mod.EvidenceRunner(
+                result.full_df, lookback, args.max_cached_windows or None
+            )
+        return evidence_mod.run_cell(
+            result, target=target, seed=seed, condition=condition,
+            lookback_h=lookback, splits=splits, models=models,
+            runner=runners[key], progress=say,
+        )
+
+    return _run_condition_cells(
+        args,
+        [evidence_mod.CONDITION_EVIDENCE, evidence_mod.CONDITION_FEDAVG_EVIDENCE],
+        build,
+        lambda target, seed, institution: _evidence_dir(
+            args, target, seed, institution
+        ),
+        "evaluate_evidence",
+        [
+            "# Stages 4.3a and 4.3b: boundary-account evidence",
+            "",
+            "`evidence` (4.3a) scores each view with that institution's own",
+            "augmented booster; against 4.1 this isolates the evidence.",
+            "`fedavg_evidence` (4.3b) scores each view with all K augmented",
+            "boosters averaged; against 4.2 this isolates the evidence under",
+            "federation.",
+            "",
+            "Both come from the same boosters and the same shared evidence,",
+            "so they differ in the scoring rule alone. **Ceilings are",
+            "unchanged from 4.1**: node features are shared, rows are not.",
+        ],
+    )
+
+
+def command_evaluate_centralized(args: argparse.Namespace) -> int:
+    """Stage 4.4: the centralized model re-reported in the Phase 4 cell grid.
+
+    Loads the Phase 3 booster - it does not retrain unless asked - evaluates
+    it as the `K = 1` case, and replicates the result across the
+    `(target, seed)` cells with each cell's seed as the bootstrap seed.
+    """
+    import pandas as pd
+
+    from fraudcamp import pipeline
+    from fraudcamp.federation import centralized as centralized_mod
+    from fraudcamp.models import xgb_baseline
+
+    out = Path(args.out)
+    out.mkdir(parents=True, exist_ok=True)
+    targets, seeds, lookback = _isolated_requested(args)
+    splits = [s.strip() for s in args.splits.split(",") if s.strip()]
+    policy = args.model_seed_policy or centralized_mod.PHASE4_POLICY
+    model_seeds = centralized_mod.model_seed_policy(policy)
+    print(f"model-seed policy {policy!r} -> model seed(s) {list(model_seeds)}")
+
+    with step("build pipeline"):
+        result = pipeline.build(Path(args.config))
+
+    boosters = {}
+    for model_seed in model_seeds:
+        directory = _model_dir(args, "xgboost_centralized", lookback, model_seed)
+        if directory.exists() and (directory / "xgb_model.json").exists():
+            with step(f"load centralized L{lookback} s{model_seed}"):
+                boosters[model_seed] = xgb_baseline.TrainedBaseline.load(directory)
+            print(f"  loaded {directory}")
+            continue
+        if not args.retrain:
+            raise SystemExit(
+                f"no Phase 3 centralized booster at {directory}. Attach the "
+                "Phase 3 model output, or pass --retrain to train one here - "
+                "which is a retrain and is reported as such."
+            )
+        print(f"  RETRAINING centralized L{lookback} s{model_seed}: no saved "
+              "booster. This is a retrain and the report says so.")
+        with step(f"train centralized L{lookback} s{model_seed}"):
+            boosters[model_seed] = xgb_baseline.train_baseline(
+                result.full_df, lookback_h=lookback,
+                params=xgb_baseline.XGBParams(seed=model_seed),
+                variant="xgboost_centralized",
+            )
+        boosters[model_seed].save(directory)
+
+    with step("evaluate centralized"):
+        central = centralized_mod.run(
+            result, boosters, policy, targets=targets, seeds=seeds,
+            lookback_h=lookback, splits=tuple(splits),
+            progress=lambda line: print(line, flush=True),
+        )
+
+    written = []
+    for key, suffix in (("rows", "summary"), ("tau_rows", "taus"),
+                        ("ceiling_rows", "ceilings"),
+                        ("outcome_rows", "outcomes")):
+        path = out / f"phase4_centralized_{suffix}.csv"
+        pd.DataFrame(central[key]).to_csv(path, index=False)
+        written.append(path.name)
+    (out / "phase4_centralized.json").write_text(
+        json.dumps({k: v for k, v in central.items()
+                    if k not in ("rows", "tau_rows", "ceiling_rows",
+                                 "outcome_rows")},
+                   indent=2, default=str),
+        encoding="utf-8",
+    )
+    (out / "phase4_centralized.md").write_text(
+        _NEWLINE.join([
+            "# Stage 4.4: centralized, inside the Phase 4 cell grid",
+            "",
+            f"Model-seed policy **{policy}** -> model seed(s) "
+            f"{list(model_seeds)}.",
+            "",
+            "**Phase 4 studies fragmentation, not model seed.** Every",
+            "federated booster is model seed 0, so the comparator must be",
+            "model seed 0 or the contrast carries a model-seed difference",
+            "inside it. Phase 3's headline 0.679 / 0.760 is the mean over its",
+            "FIVE model seeds and is a different summary of the same",
+            "experiment, not a disagreement with this one.",
+            "",
+            "Evaluated as the `K = 1` case through a degenerate assignment,",
+            "so `total_B` and `per_inst_B` coincide by definition and every",
+            "other rule is the one the federated arms were measured by. One",
+            "detection run per model seed, replicated across the cells, with",
+            "`replicated_from_model_seed` and `n_independent_runs` on every",
+            "row so twelve cells cannot be read as twelve measurements.",
+            "",
+            "## Reproduction check against Phase 3",
+            "",
+            "```json",
+            json.dumps(central["reproduction"], indent=2, default=str),
+            "```",
+            "", "## Timing", "", steps_markdown(), "",
+        ]),
+        encoding="utf-8",
+    )
+    print(f"{_NEWLINE}Wrote {out / 'phase4_centralized.md'} (+ .json and "
+          f"{len(written)} CSVs)")
+    return 0
+
+
+def command_compare_conditions(args: argparse.Namespace) -> int:
+    """The Phase 4 comparison report: every paired contrast, primary first.
+
+    Reads whatever condition CSVs are present, so stage 4.3 can be dropped
+    without invalidating 4.1 / 4.2 / 4.4 - the skipped contrasts are listed
+    rather than silently absent. Exits **4** if a pairing rule is violated,
+    which is a stop condition and not a bad number.
+    """
+    import pandas as pd
+
+    from fraudcamp.federation import compare as compare_mod
+
+    out = Path(args.out)
+    summaries, unions = {}, {}
+    for condition in compare_mod.PER_INSTITUTION_CONDITIONS:
+        summary = out / f"phase4_{condition}_summary.csv"
+        union = out / f"phase4_{condition}_union.csv"
+        if summary.exists():
+            summaries[condition] = pd.read_csv(summary)
+        if union.exists():
+            unions[condition] = pd.read_csv(union)
+    central_path = out / "phase4_centralized_summary.csv"
+    central = pd.read_csv(central_path) if central_path.exists() else None
+
+    print(f"conditions found: {sorted(summaries) or '(none)'}")
+    print(f"centralized: {'yes' if central is not None else 'no'}")
+    if not summaries:
+        raise SystemExit(
+            "no condition summary CSVs in "
+            f"{out}. Run evaluate-isolated / evaluate-fedavg first."
+        )
+
+    try:
+        with step("compare conditions"):
+            comparison = compare_mod.compare(
+                summaries, unions, central,
+                progress=lambda line: print(line, flush=True),
+            )
+    except compare_mod.NonIdenticalCells as exc:
+        print(f"{_NEWLINE}STOPPING: a pairing rule was violated.")
+        print(f"  {exc}")
+        return 4
+
+    frame = pd.DataFrame(comparison["rows"])
+    frame.to_csv(out / "phase4_compare.csv", index=False)
+    head = compare_mod.headline(comparison["rows"])
+    head.to_csv(out / "phase4_compare_headline.csv", index=False)
+    (out / "phase4_compare.json").write_text(
+        json.dumps({k: v for k, v in comparison.items() if k != "rows"},
+                   indent=2, default=str),
+        encoding="utf-8",
+    )
+    (out / "phase4_compare.md").write_text(
+        _NEWLINE.join([
+            "# Phase 4: isolated vs fedavg vs +evidence vs centralized",
+            "",
+            "Every contrast is a **paired difference over identical cells** -",
+            "per `(target, seed, institution)` for a per-institution reading,",
+            "per `(target, seed)` for the union and for anything compared",
+            "against centralized. A cell undefined on one side removes the",
+            "pair, not just its own side.",
+            "",
+            "**No standard error is taken across institutions.** They are not",
+            "exchangeable - institution 0 deterministically holds the",
+            "dataset's largest bank - so each difference carries its median,",
+            "its range and the number of cells of each sign instead.",
+            "",
+            "**The seed-noise floor.** Phase 4's seeds vary visibility only;",
+            "all boosters are model seed 0. Phase 3 measures model-seed noise",
+            "at centralized as 0.661-0.696 recall and 0.74-0.78 relative - a",
+            "spread of ~0.04 relative, about 2 campaigns of 56. Every row",
+            "carries `below_seed_noise_floor`, and a difference flagged there",
+            "must not be written up as an effect.",
+            "",
+            "## Checks that must hold before any difference is read",
+            "",
+            "```json",
+            json.dumps(comparison["checks"], indent=2, default=str),
+            "```",
+            "",
+            "## Primary points: `f1` and `total_10`, test, subset `all`",
+            "",
+            _markdown_table(head) if len(head) else "_none_",
+            "",
+            "## Contrasts skipped, and why",
+            "",
+            "```json",
+            json.dumps(comparison["skipped"], indent=2, default=str),
+            "```",
+            "", "## Timing", "", steps_markdown(), "",
+        ]),
+        encoding="utf-8",
+    )
+    print(f"{_NEWLINE}Wrote {out / 'phase4_compare.md'} (+ .json and 2 CSVs)")
+    for key, value in comparison["checks"].items():
+        print(f"  check {key}: {value}")
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument(
@@ -5532,6 +6180,8 @@ def main() -> int:
             "oracle-diagnose", "make-sample", "train", "evaluate",
             "gpu-check", "gpu-probe-windows", "train-gnn", "evaluate-gnn",
             "compare-models", "train-isolated", "evaluate-isolated",
+            "evaluate-fedavg", "train-evidence", "evaluate-evidence",
+            "evaluate-centralized", "compare-conditions",
         ],
     )
     parser.add_argument(
@@ -5597,6 +6247,24 @@ def main() -> int:
     parser.add_argument(
         "--model-dir", default="",
         help="train/evaluate: where models live (default: <out>/models)",
+    )
+    parser.add_argument(
+        "--max-cached-windows", type=int, default=0,
+        help=(
+            "train-evidence/evaluate-evidence: cap on how many windows of "
+            "shared node features to hold at once. 0 means unbounded, which "
+            "is fastest and what the sample uses; set it if memory binds on "
+            "the full data"
+        ),
+    )
+    parser.add_argument(
+        "--model-seed-policy", default="",
+        help=(
+            "evaluate-centralized: which model seed(s) the comparator uses. "
+            "Defaults to the decided policy (matched_seed0); the others give "
+            "different centralized numbers and are there to be stated, not "
+            "guessed"
+        ),
     )
     parser.add_argument(
         "--a", default="",
@@ -5669,6 +6337,11 @@ def main() -> int:
         "compare-models": command_compare_models,
         "train-isolated": command_train_isolated,
         "evaluate-isolated": command_evaluate_isolated,
+        "evaluate-fedavg": command_evaluate_fedavg,
+        "train-evidence": command_train_evidence,
+        "evaluate-evidence": command_evaluate_evidence,
+        "evaluate-centralized": command_evaluate_centralized,
+        "compare-conditions": command_compare_conditions,
     }
     started = time.perf_counter()
     code = handlers[args.command](args)

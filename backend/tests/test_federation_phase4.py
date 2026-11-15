@@ -423,6 +423,30 @@ def test_evidence_shares_no_labels(world):
     )
 
 
+def test_evidence_runner_accepts_an_equal_assignment_for_the_same_cell(world):
+    """The guard must compare cells by VALUE, not by object identity.
+
+    `run_cell` rebuilds the assignment from the pipeline, so the trainer and
+    the two scorers are handed equal-but-distinct objects for the same cell.
+    An identity check rejected the normal path, which is how this was found:
+    4.3a could not be evaluated at all after 4.3 had trained.
+    """
+    result, assignment = world
+    runner = evidence_mod_runner = evidence.EvidenceRunner(result.full_df, L)
+    first = runner.provider(assignment)
+    rebuilt = fv.VisibilityAssignment(
+        seed=assignment.seed,
+        target=assignment.target,
+        global_assignment=dict(assignment.global_assignment),
+        bank2inst=dict(assignment.bank2inst),
+        k=assignment.k,
+    )
+    assert rebuilt is not assignment
+    assert evidence_mod_runner.provider(rebuilt) is first, (
+        "an equal assignment for the same cell must reuse the same evidence"
+    )
+
+
 def test_evidence_runner_refuses_to_mix_two_cells(world):
     """One runner is one cell: a second assignment would be another cell's
     evidence, and the cache would silently serve it."""

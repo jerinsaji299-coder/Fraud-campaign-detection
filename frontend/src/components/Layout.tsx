@@ -10,6 +10,7 @@ import {
   Moon,
   Network,
   Sun,
+  Zap,
 } from 'lucide-react'
 
 import { useHealth } from '../api/hooks'
@@ -21,6 +22,7 @@ const NAV = [
   { to: '/campaigns', label: 'Campaigns', icon: Network, end: false },
   { to: '/visibility', label: 'Visibility Lab', icon: FlaskConical, end: false },
   { to: '/results', label: 'Results', icon: LineChart, end: false },
+  { to: '/live', label: 'Live panel', icon: Zap, end: false },
   { to: '/methodology', label: 'Methodology', icon: BookOpen, end: false },
 ]
 

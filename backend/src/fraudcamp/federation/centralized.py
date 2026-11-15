@@ -87,6 +87,17 @@ MODEL_SEED_POLICIES = {
 }
 
 
+#: The policy Phase 4 uses, decided by the user as O1 on 2026-11-15.
+#: Recorded here so every runner reads the decision from one place rather than
+#: repeating a string. Phase 4 studies fragmentation, not model seed: all 96
+#: federated boosters are model seed 0, so the centralized comparator must be
+#: model seed 0 or the contrast carries a model-seed difference inside it.
+#: `phase4_seeds_as_model_seeds` was rejected explicitly - it would make
+#: centralized the only arm whose model varies per cell, so its spread would be
+#: model noise against every other arm's visibility noise.
+PHASE4_POLICY = "matched_seed0"
+
+
 def model_seed_policy(name: str) -> tuple[int, ...]:
     """The model seeds a named policy uses. Raises on an unknown name.
 
@@ -410,6 +421,7 @@ def reproduction_check(
 
 __all__ = [
     "CONDITION",
+    "PHASE4_POLICY",
     "MODEL_SEED_POLICIES",
     "PHASE3_HEADLINE",
     "PHASE3_L48_CEILING",

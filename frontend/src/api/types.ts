@@ -215,3 +215,122 @@ export type CampaignSortKey =
   | 'start'
   | 'end'
   | 'duration_h'
+
+// ---------------------------------------------------------------------------
+// the live demo panel (/api/demo/*)
+// ---------------------------------------------------------------------------
+
+export interface DemoWindowMeta {
+  detection_time: string
+  n_edges: number
+  n_accounts: number
+  n_laundering_edges: number
+  n_campaign_edges: number
+}
+
+export interface DemoManifest {
+  visibility_target: number
+  seed: number
+  lookback_h: number
+  split: string
+  k_institutions: number
+  institutions_with_a_model: number[]
+  demo_campaign: {
+    campaign_id: number
+    accounts: string[]
+    institutions_holding: number[]
+    achieved_visibility: number | null
+  }
+  selection_rule: string[]
+  selection_disclaimer: string | null
+  selection_audit: {
+    rank_chosen: number | null
+    n_candidates: number | null
+    n_skipped: number
+  }
+  windows: DemoWindowMeta[]
+  detection_times: string[]
+  primary_points: string[]
+  taus: Record<string, Record<string, number | null>>
+  match_rule: { min_account_fraction?: number; min_accounts?: number }
+  models_mb: number | null
+  modes: string[]
+  development_only: string | null
+  generated: string | null
+}
+
+export interface DemoClusterMatch {
+  n_cluster_accounts: number
+  n_campaign_accounts: number
+  overlap: number
+  purity: number
+  coverage_accounts: number
+  coverage_fraction: number
+  min_fraction: number
+  min_accounts: number
+  matches: boolean
+}
+
+export interface DemoCluster {
+  accounts: string[]
+  n_accounts: number
+  kind: string
+  hit_campaigns: number[]
+  matches_demo_campaign: boolean
+  vs_demo_campaign: DemoClusterMatch | null
+  institutions: number[]
+}
+
+export interface DemoRun {
+  detection_time: string
+  institution: number
+  mode: string
+  models_used?: number[]
+  n_models_used?: number
+  tau: number
+  tau_source?: string
+  operating_point?: string
+  n_edges_in_window: number
+  n_edges_in_view: number
+  n_flagged_edges: number
+  flagged_edges: {
+    src: string
+    dst: string
+    score: number
+    ts: string
+    is_laundering: number
+    campaign_id: number
+  }[]
+  flagged_edges_truncated?: boolean
+  clusters: DemoCluster[]
+  n_clusters: number
+  alert_count: number
+  cluster_kinds?: Record<string, number>
+  demo_campaign_id?: number | null
+  demo_campaign_detected?: boolean
+  best_purity_vs_demo_campaign?: number | null
+  best_coverage_vs_demo_campaign?: number | null
+  lead_time?: {
+    detected: boolean
+    deadline: string | null
+    campaign_end: string | null
+    hours_before_deadline: number | null
+    hours_before_end: number | null
+    beat_the_deadline: boolean | null
+  } | null
+  empty_reason?: string
+  latency_ms: {
+    featurise?: number
+    featurise_was_cached?: boolean
+    predict?: number
+    clusters?: number
+    total?: number
+  }
+}
+
+export interface DemoAggregate {
+  available: boolean
+  reason: string | null
+  rows: Record<string, unknown>[]
+  source?: string
+}

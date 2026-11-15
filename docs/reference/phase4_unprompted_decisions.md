@@ -10,21 +10,25 @@ Last updated 2026-11-15.
 
 ---
 
-## OPEN — stopped for a decision, not made
+## O1 — was open, DECIDED 2026-11-15 by the user: `matched_seed0`
 
-| # | Choice | Why it is open | Options, and what each gives |
+| # | Choice | Decision and reason of record | Rejected |
 |---|---|---|---|
-| **O1** | **Which model seed(s) the centralized arm of 4.4 uses** | Phase 3's seeds are **model** seeds; Phase 4's are **visibility** seeds, and all 96 Phase 4 boosters are trained at model seed **0** (`train_isolated` is called with `params=None` → `XGBParams(seed=0)`). So "centralized at 3 seeds" has three readings that disagree by more than a tenth of the effect being measured, and D4 asks for two things that cannot both hold: the Phase 4 scope of 3 seeds, **and** reproduction of Phase 3's 0.679 / 0.760, which is a mean over **5** seeds | `matched_seed0` → **0.696 / 0.780**; the only reading where the arms differ *only* in the condition. `phase4_seeds_as_model_seeds` → **0.6845 / 0.7667**; fits "3 seeds" literally but makes centralized the only arm whose model changes per cell. `phase3_five_seeds` → **0.679 / 0.760**; reproduces the headline, outside the 3-seed scope. Implemented as `centralized.MODEL_SEED_POLICIES` with **no default**, so nothing is chosen silently |
+| **O1** | Which model seed(s) the centralized arm of 4.4 uses | **`matched_seed0`** — model seed 0 alone, comparator **0.696 / 0.780**, constant across all 12 cells. *Phase 4 studies fragmentation, not model seed.* Every federated booster is model seed 0, so the centralized comparator must be model seed 0 or the contrast carries a model-seed difference inside it | **`phase4_seeds_as_model_seeds`** (0.6845 / 0.7667) rejected **explicitly**: it would make centralized the only arm whose model varies per cell, so its spread would be **model noise** against every other arm's **visibility noise** — not the same quantity. **`phase3_five_seeds`** (0.679 / 0.760) is outside the 3-seed scope; it remains the Phase 3 baseline headline, reported beside the comparator and never as it |
 
-**Recommendation on O1:** `matched_seed0`. The comparison is only interpretable
-if the arms differ in the condition and nothing else, and every federated arm
-is model seed 0. Under that policy the centralized comparator is **0.780**
-relative, not 0.760, which narrows session B's "0.16-0.26 of relative recall
-available" to **0.18-0.28**. The 5-seed 0.679 / 0.760 then stays what it
-already is - the Phase 3 headline - and is reported beside the Phase 4 number
-as a reproduction reference, not as the comparator.
+Three consequences, all recorded in the README:
 
----
+1. **Two centralized numbers now coexist and are explained, not reconciled** —
+   0.679 / 0.760 is the five-model-seed mean (Phase 3 headline); 0.696 / 0.780
+   is the model-seed-0 comparator (Phase 4). The note sits next to both.
+2. **Bracket notation is gone.** "0.679 [0.661, 0.696]" read as a confidence
+   interval and is a seed range; it now reads "0.679 (five-model-seed mean;
+   per-seed range 0.661-0.696)" at all five sites.
+3. **A floor on interpretable differences: ~0.04 relative recall, ~2 campaigns
+   of 56.** Phase 4's seeds vary visibility only, so model-seed noise is held
+   fixed and invisible; Phase 3 measures it at centralized as 0.661-0.696 /
+   0.74-0.78. That is a seventh to a fifth of the union → centralized gap, so
+   smaller differences between arms are not reportable as real.
 
 ## Decided — naming and reporting
 

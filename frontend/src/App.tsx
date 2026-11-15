@@ -7,6 +7,7 @@ import { CampaignExplorerPage } from './pages/CampaignExplorerPage'
 import { CampaignDetailPage } from './pages/CampaignDetailPage'
 import { VisibilityLabPage } from './pages/VisibilityLabPage'
 import { ResultsPage } from './pages/ResultsPage'
+import { LiveDemoPage } from './pages/LiveDemoPage'
 import { MethodologyPage } from './pages/MethodologyPage'
 import { EmptyState } from './components/states'
 
@@ -20,6 +21,7 @@ export function App() {
         <Route path="campaigns/:campaignId" element={<CampaignDetailPage />} />
         <Route path="visibility" element={<VisibilityLabPage />} />
         <Route path="results" element={<ResultsPage />} />
+        <Route path="live" element={<LiveDemoPage />} />
         <Route path="methodology" element={<MethodologyPage />} />
         <Route
           path="*"

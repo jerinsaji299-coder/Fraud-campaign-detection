@@ -50,8 +50,10 @@ git clone https://github.com/jerinsaji299-coder/Fraud-campaign-detection.git
     - [Stage 4.1: the isolated condition](#stage-41-the-isolated-condition--approved-and-implemented-2026-11-14)
     - [Stage 4.2: the FedAvg analogue — score averaging](#stage-42-the-fedavg-analogue-for-a-tree-ensemble--implemented-2026-11-15)
     - [Stage 4.3: boundary-account evidence](#stage-43-boundary-account-evidence--implemented-2026-11-15)
+        - [Result: evidence cannot raise a ceiling](#result-boundary-account-evidence-cannot-raise-an-institutions-ceiling)
     - [Stage 4.4: centralized in the Phase 4 grid](#stage-44-the-centralized-arm-inside-the-phase-4-cell-grid--implemented-2026-11-15)
-        - [O1: which model seeds centralized uses — OPEN](#o1-which-model-seeds-the-centralized-arm-uses)
+        - [The two centralized numbers, and why both are right](#the-two-centralized-numbers-and-why-both-are-right)
+        - [O1: which model seeds centralized uses — decided](#o1-which-model-seeds-the-centralized-arm-uses)
         - [Grid-edge policy](#12-grid-edge-policy-and-the-extension-of-model_tau_grid)
         - [What was built](#what-was-built)
         - [Measured on the 1% sample — development only](#measured-on-the-1-sample--development-only-not-for-quotation)
@@ -157,7 +159,7 @@ no visibility reassignment is used in this phase.
 | 3.0 | Kaggle runner + Phase 2 full-data verification | done — all 24 numbers PASS, determinism confirmed |
 | 3.1 | Window builder + features + leakage tests | done |
 | 3.2 | Evaluation module (extraction, matching, lead time, bootstrap CIs) + oracle and random scorers | done, **validated on full data**; ceiling, miss diagnosis and the paired lookback comparison all measured and recorded |
-| 3.3 | XGBoost baseline: train, select tau on validation, evaluate on test | **done** — 20 boosters on the full data at commit `de48b35`, exit 0, no edge taus. Selected: the full model at L = 48 (validation recall 0.531 vs 0.385); test recall 0.679 [0.661, 0.696], 0.760 of the ceiling. Format ablation settled; one campaign beats the ceiling |
+| 3.3 | XGBoost baseline: train, select tau on validation, evaluate on test | **done** — 20 boosters on the full data at commit `de48b35`, exit 0, no edge taus. Selected: the full model at L = 48 (validation recall 0.531 vs 0.385); test recall **0.679, the mean over five model seeds, per-seed range 0.661-0.696** (a seed range, *not* a confidence interval); 0.760 of the ceiling. Phase 4 compares against the model-seed-0 value, **0.696 / 0.780** — see [the two centralized numbers](#the-two-centralized-numbers-and-why-both-are-right). Format ablation settled; one campaign beats the ceiling |
 | 3.4 | GNN centralized (GINEConv edge classification) | **done** — all six sub-stages. 20 models on the full data (2 variants × 2 lookbacks × 5 seeds), both GPU sessions and the CPU session exit 0. **The GNN does not beat the baseline**: at a matched 10 FA/day budget it reaches 0.525 test recall against XGBoost's 0.654, and the gate report locates the shortfall at **cluster extraction, not edge ranking** |
 | 3.5 | Gate report | **done** as §3.4.5. The results files and the frontend Results page stay **deferred to Phase 5**, which is what populates `artifacts/results/` — Phase 3 produces no `runs.parquet`/`detections.parquet` |
 
@@ -727,7 +729,7 @@ Test split, `all` subset, mean [min, max] over seeds 0–4:
 | Variant | L | Recall | vs ceiling | FA/day | Median lead | Seed sd |
 |---|---:|---:|---:|---:|---:|---:|
 | `xgboost_centralized` | 24 | 0.654 [0.643, 0.661] | 0.796 | 3.8 | 67.2h | 0.009 |
-| `xgboost_centralized` | **48** | **0.679 [0.661, 0.696]** | 0.760 | 10.5 | 68.2h | 0.016 |
+| `xgboost_centralized` | **48** | **0.679** (5-seed mean; per-seed range 0.661-0.696) | 0.760 | 10.5 | 68.2h | 0.016 |
 | `xgboost_centralized_no_format` | 24 | 0.479 [0.393, 0.554] | 0.583 | 4.2 | 62.6h | 0.052 |
 | `xgboost_centralized_no_format` | 48 | 0.532 [0.500, 0.571] | 0.596 | 8.6 | 64.7h | 0.026 |
 
@@ -1555,7 +1557,7 @@ first. Test split, `all` subset, mean [min, max] over seeds 0–4:
 | Variant | L | Recorded in stage 3.3 | Re-run 2026-11-14 | Seed sd |
 |---|---:|---|---|---:|
 | `xgboost_centralized` | 24 | 0.654 [0.643, 0.661], 0.796 of ceiling, 3.8 FA/day | **0.654 [0.643, 0.661], 0.796, 3.79** | 0.009 |
-| `xgboost_centralized` | 48 | 0.679 [0.661, 0.696], 0.760 of ceiling, 10.5 FA/day | **0.679 [0.661, 0.696], 0.760, 10.53** | 0.016 |
+| `xgboost_centralized` | 48 | 0.679 (5-seed mean; range 0.661-0.696), 0.760 of ceiling, 10.5 FA/day | **0.679 (5-seed mean; range 0.661-0.696), 0.760, 10.53** | 0.016 |
 | `xgboost_centralized_no_format` | 24 | 0.479 [0.393, 0.554], 0.583, 4.2 FA/day | **0.479 [0.393, 0.554], 0.583, 4.17** | 0.052 |
 | `xgboost_centralized_no_format` | 48 | 0.532 [0.500, 0.571], 0.596, 8.6 FA/day | **0.532 [0.500, 0.571], 0.596, 8.55** | 0.026 |
 
@@ -3356,6 +3358,10 @@ rather than the run.
 | 2026-11-15 | **D5 — primary points stay `f1` and `total_10`; all comparisons paired per (target, seed, institution) or (target, seed, union) over identical cells; every pooled mean keeps its binding count and median/min/max spread** | Already designated 2026-11-14 before any federated arm existed, on the matched-volume reading, which is structural and did not move when the sample's binding result reversed | user decision D5 |
 | 2026-11-15 | **D6 — `uncapped_*` renamed `per_inst_*` throughout** | Recorded in full in its own row below | user decision D6 |
 | 2026-11-15 | **Condition labels are `isolated`, `fedavg`, `evidence`, `fedavg_evidence`, `centralized`**, replacing the placeholders `fedavg_only` / `fedavg_embedding` in `constants.CONDITIONS` and the frontend theme | The README had recorded this as a question 4.2 would settle. "Embedding" is wrong for a tree model — 4.3 shares window **node features**, and there is no embedding anywhere in it — and "only" named nothing | §[stage 4.2](#stage-42-the-fedavg-analogue-for-a-tree-ensemble--implemented-2026-11-15); `constants.CONDITIONS`; `frontend/src/theme.ts` |
+| 2026-11-15 | **The stage 4.3 shared-evidence cache holds float64, never float32** — do not "optimise" it back | float32 halves the memory and was the first implementation. It made the node-feature substitution **lossy by ~1e-7** on `log_in_amount` and `log_out_amount` for **every** account, including the accounts where the substitution must be an exact no-op because their owner already saw every incident edge. The effect would have been a silent float-noise difference between 4.3a and 4.1 **in every node column of every row**, present even where no evidence was shared — so a 4.3a − 4.1 contrast would have measured rounding alongside the evidence, with no symptom anywhere except the numbers. Caught only by `test_an_owned_accounts_features_are_unchanged`, which asserts exact equality rather than a tolerance; a tolerance-based test would have passed | `federation/evidence.py` `BoundaryEvidence.global_nodes`; `tests/test_federation_phase4.py` |
+| 2026-11-15 | **O1 DECIDED: the centralized comparator is `matched_seed0` — model seed 0, 0.696 / 0.780** | Phase 4 studies **fragmentation, not model seed**. All 96 federated boosters are model seed 0, so a comparator at any other seed, or at a mean over seeds, would carry a model-seed difference inside the contrast. `phase4_seeds_as_model_seeds` rejected explicitly: it would make centralized the only arm whose model varies per cell, so its spread would be **model noise** against every other arm's **visibility noise**, and those are not the same quantity. Phase 3's 0.679 / 0.760 remains the baseline headline as a five-model-seed mean, reported beside the comparator and never as it | user decision O1, 2026-11-15; §[the two centralized numbers](#the-two-centralized-numbers-and-why-both-are-right) |
+| 2026-11-15 | **Bracket notation dropped for the Phase 3 centralized figure**: "0.679 [0.661, 0.696]" now reads "0.679 (five-model-seed mean; per-seed range 0.661-0.696)" everywhere | Brackets read as a confidence interval. It is a **seed range**, and every other interval in this README is a bootstrap CI, so the notation actively misled | user decision, 2026-11-15 |
+| 2026-11-15 | **A floor on interpretable Phase 4 differences: ~0.04 relative recall (~2 campaigns of 56)** | Phase 4's three seeds vary visibility only, since all boosters are model seed 0, so model-seed noise is held fixed and invisible. Phase 3 measures it at centralized: 0.661-0.696 recall, 0.74-0.78 relative across five seeds. That is a seventh to a fifth of the union → centralized gap Phase 4 is trying to close, so a smaller difference between arms cannot be distinguished from noise in a quantity the design does not vary | user decision, 2026-11-15; `docs/reference/evaluate_baseline.csv`; Known limitations |
 | 2026-11-15 | **`isolated.run_cell` and `evaluate_institution` take `condition`, `scorer_for` and `trainer`; 4.2 and 4.3 supply a scorer and nothing else** | Two copies of the evaluation loop would be two chances for the arms to diverge silently, and a paired comparison over cells measured by different code is not a paired comparison | `federation/isolated.py`; `docs/reference/phase4_unprompted_decisions.md` C3 |
 | 2026-11-15 | **Recorded, from session B: the union's ceiling equals the centralized ceiling exactly, and the union still recovers 0.16-0.26 less of it. The deficit is SCORING, not visibility** — and [Reading 2's prediction](#measured-on-the-1-sample--development-only-not-for-quotation) that a near-ceiling floor would leave 4.2 little to do is **withdrawn** | Union test oracle recall **0.8928571** (50/56) at target 1.00, identical to the centralized L = 48 ceiling; union relative recall 0.500 / 0.600 against centralized 0.760. Identical ceilings mean identical visibility, so what differs is what each arm's scorer finds inside the reachable set. On the sample an institution reached 0.62-0.89 of its own ceiling and the conclusion was that only evidence sharing had room; on full data it reaches 0.306-0.369, so `fedavg` has **measured** room at unchanged visibility. Keeping the withdrawn reading in place, where it was written in advance, rather than deleting it | session B CSVs, uncommitted pending session C; §[session B](#the-full-data-run-session-b-the-ceiling-holds-the-recall-does-not--done-2026-11-15) |
 | 2026-11-15 | **D6 — the per-institution full-budget points are renamed `uncapped_10/50/100` → `per_inst_10/50/100`, applied throughout** (schema, reports, tables, tests, runbook), and session C migrates session B's cached cells so one report never carries two names for one point | Session B measured `binding_fraction = 1.0` for every per-institution budget point: the budgets **do** bind on full data, against 0 of 8 on the sample, so `uncapped` asserted the opposite of the data. Reverting to `budget_*` is still rejected — it invites comparison against a centralized model's budgeted 10/day while the union spends 8 × B, which is what `total_10` exists to avoid. `per_inst_*` carries the structure (whose budget it is) and no finding, which is the lesson: a label must not encode a measurement, because measurements reverse and reports already written cannot be renamed. The sample misled for a statable reason — whether a budget binds is a property of **data density**, and thinning the background is exactly the operation that changes it | user decision D6, 2026-11-15; `federation/isolated.py` `operating_points`; `phase4_isolated_taus.csv` `budget_binding` |
@@ -3570,14 +3576,42 @@ Two consequences worth stating:
   give the identical matrix**, which is simultaneously the statement that no
   non-boundary account's features were shared.
 
-> **This condition cannot raise the ceiling, by construction.** It shares node
-> features, not rows. An institution's view holds exactly the transactions it
-> held before, so the visibility mask does not move and the per-institution
-> oracle ceiling is **unchanged**. 4.3 can only recover more of its ceiling,
-> never lift it — which is what keeps 4.3a − 4.1 and 4.3b − 4.2 paired against
-> one denominator. An earlier Phase 4 note expected evidence sharing to raise a
-> view's ceiling; that was about a form of exchange that moves **transactions**,
-> and this is not that form.
+#### Result: boundary-account evidence CANNOT raise an institution's ceiling
+
+This is a result of the stage, not a note about the implementation, and it is
+available before any number is measured because it follows from the frozen
+definitions alone.
+
+**The claim.** Under D3, sharing boundary-account node features leaves every
+institution's oracle ceiling exactly where it was. 4.3 can recover more of its
+ceiling; it can never lift it.
+
+**The proof, in three steps, each one a frozen definition.** *(i)* Visibility
+is an **endpoint rule** — an institution sees a transaction if the sender's or
+the receiver's account belongs to it — and D3 shares *features*, never
+transactions, so an institution's view holds exactly the rows it held before.
+*(ii)* A per-institution ceiling is the **oracle through that institution's
+visibility mask** (`isolated.oracle_view_scorer`), so it is a function of the
+mask alone. *(iii)* The mask did not move. Therefore the ceiling did not move.
+Pinned by `test_evidence_moves_knowledge_not_rows_so_the_ceiling_cannot_move`.
+
+**What it retires.** An earlier Phase 4 reading predicted that sharing
+*evidence* would raise a view's ceiling, and that sharing *model knowledge*
+would not — which is why the two were expected to separate on different
+mechanisms. Under D3 that prediction does not apply: **both** 4.2 and 4.3 act
+entirely on scoring, against identical denominators. The expectation was about
+a form of exchange that moves **transactions** across the boundary, raising
+what a view contains. D3 deliberately does not do that — no raw transactions
+cross — so the ceiling-raising mechanism is simply absent from this design.
+
+**Why that is useful rather than a loss.** Every Phase 4 contrast is now a
+comparison of how much of *the same* ceiling each arm recovers: 4.2 − 4.1,
+4.3a − 4.1, 4.3b − 4.2 and union − centralized all have the same denominator
+on both sides. Nothing in the comparison can be explained away as "it could
+see more", which is the confound that would otherwise make a federated arm's
+gain uninterpretable. The cost is that this design cannot answer whether
+transaction-level exchange would raise ceilings, and that is stated as a
+limitation rather than left implicit.
 
 **Two evaluations, so the two effects separate (D3).** `evidence` (4.3a) scores
 each view with that institution's **own** augmented booster — against 4.1 this
@@ -3627,10 +3661,53 @@ identical at all five model seeds** in
 That is exactly the union ceiling stage 4.1 predicts and session B measured, so
 the union-ceiling claim now rests on two independent records.
 
+#### The two centralized numbers, and why both are right
+
+**Both are correct, they measure different things, and neither is an error.**
+A reader who meets two centralized figures without this note will assume one
+of them is a mistake, so it is stated here and repeated next to each of them.
+
+| | Recall | Relative to ceiling | What it is | Where it is used |
+|---|---:|---:|---|---|
+| **Phase 3 headline** | **0.679** | **0.760** | the **mean over five model seeds** (0, 1, 2, 3, 4), per-seed range 0.661-0.696 | the Phase 3 baseline result, and the reproduction reference D4 asks for |
+| **Phase 4 comparator** | **0.696** | **0.780** | **model seed 0 alone**, constant across all 12 visibility cells | every Phase 4 comparison against centralized |
+
+**Why they differ: five seeds versus one, and nothing else.** Same booster
+configuration, same L = 48, same 22-point grid, same ceiling of 0.8928571.
+The centralized model's recall moves with the model seed — 39, 37, 39, 37 and
+38 campaigns detected of 56 — so a five-seed mean and a single seed are
+different summaries of the same experiment.
+
+**Why Phase 4 uses model seed 0 and not the five-seed mean (O1, decided
+2026-11-15).** Phase 4 studies **fragmentation, not model seed**. Every one of
+the 96 federated boosters is trained at model seed 0, so a centralized
+comparator at any other seed, or at a mean over seeds, would carry a
+**model-seed difference inside the contrast** — and the contrast is supposed to
+isolate the condition. `matched_seed0` is the only reading in which the arms
+differ in the condition and in nothing else.
+
+`phase4_seeds_as_model_seeds` (0.6845 / 0.7667) is **rejected explicitly**: it
+would make centralized the only arm whose model varies from cell to cell, so
+its cell-to-cell spread would be **model noise** while every other arm's is
+**visibility noise**. Those are not the same quantity and must not be averaged
+or compared as though they were.
+
 #### O1: which model seeds the centralized arm uses
 
-**STOPPED for a decision. This changes a headline number and D1-D6 does not
-cover it.**
+**DECIDED 2026-11-15: `matched_seed0`.** The centralized comparator for every
+Phase 4 arm is the **model-seed-0** model: **0.696 recall, 0.780 of the
+ceiling**. *Reason of record:* Phase 4 studies fragmentation, not model seed;
+every federated booster is model seed 0, so the centralized comparator must be
+model seed 0 or the contrast carries a model-seed difference inside it.
+`phase4_seeds_as_model_seeds` is rejected explicitly — it would make
+centralized the only arm whose model varies per cell, so its spread would be
+model noise against every other arm's visibility noise, and those are not the
+same quantity. Consequence: session B's "0.16-0.26 of relative recall
+available to 4.2" becomes **0.18-0.28**. The record of what each centralized
+number is lives in [the two centralized
+numbers](#the-two-centralized-numbers-and-why-both-are-right).
+
+The analysis that produced the decision follows.
 
 Phase 3's seeds are **model** seeds. Phase 4's are **visibility** seeds, and
 all 96 Phase 4 boosters are trained at model seed **0** — `train_isolated` is
@@ -3646,8 +3723,10 @@ Phase 3, centralized, L = 48, test, subset `all`, per model seed:
 | campaign recall | 0.696 | 0.661 | 0.696 | 0.661 | 0.679 | **0.6845** | **0.6786** |
 | relative to ceiling | 0.78 | 0.74 | 0.78 | 0.74 | 0.76 | **0.7667** | **0.7600** |
 
-So the README's long-standing "0.679 [0.661, 0.696]" is a **five-seed mean
-with the seed range beside it**, not a confidence interval.
+So the README's long-standing "0.679 [0.661, 0.696]" was a **five-seed mean
+with the seed range beside it**, not a confidence interval. Bracket notation
+said otherwise, so it is gone from the README: the figure now reads "0.679
+(five-model-seed mean; per-seed range 0.661-0.696)" wherever it appears.
 
 | Policy | Centralized comparator | What it buys, what it costs |
 |---|---|---|
@@ -3656,12 +3735,10 @@ with the seed range beside it**, not a confidence interval.
 | `phase3_five_seeds` | 0.679 / 0.760 | Reproduces the headline exactly. Outside the Phase 4 scope of three seeds |
 
 Implemented as `centralized.MODEL_SEED_POLICIES` with **no default**, so the
-choice cannot be made silently; `model_seed_policy()` raises until one is
-named. **Recommendation: `matched_seed0`.** Under it the centralized
-comparator is 0.780 relative, which widens session B's "0.16-0.26 of relative
-recall available to 4.2" to **0.18-0.28**, and 0.679 / 0.760 stays what it
-already is — the Phase 3 headline, reported beside the Phase 4 number as the
-reproduction reference rather than as the comparator.
+choice could not be made silently; `model_seed_policy()` raises until one is
+named. **`matched_seed0` was chosen.** 0.679 / 0.760 stays what it already is
+— the Phase 3 headline and the reproduction reference — and is never the
+comparator.
 
 ### Reference visibility digests
 
@@ -5204,16 +5281,41 @@ is recorded here rather than in the suite.
   undemonstrated rather than claimed. The single lookback rests on a
   validation margin that did not survive to test. See
   §[Phase 4 frozen scope](#phase-4-frozen-scope).
+- **Phase 4's three seeds capture VISIBILITY noise only, and there is a floor
+  below which no difference between arms should be read as real.** Every one of
+  the 96 boosters is trained at model seed 0 ([O1](#o1-which-model-seeds-the-centralized-arm-uses)),
+  so the three Phase 4 seeds vary the visibility assignment and nothing else.
+  Model-seed noise is not measured anywhere in Phase 4 — but it *is* measured
+  in Phase 3, at centralized: across its five model seeds the same configuration
+  gives **0.661-0.696** recall and **0.74-0.78** relative, a spread of **0.035
+  recall and 0.040 relative — exactly 2 campaigns of 56.**
+
+  Against the gaps Phase 4 is measuring, that spread is:
+
+  | Gap | Size (relative recall) | Model-seed spread as a fraction of it |
+  |---|---:|---|
+  | union → centralized (the room 4.2 and 4.3 have to close) | 0.18-0.28 | **a seventh to a fifth** |
+  | lone institution → centralized | 0.41-0.47 | about a tenth |
+
+  **So the operative rule for the write-up: a difference between Phase 4 arms
+  smaller than ~0.04 relative recall (~0.035 raw, ~2 campaigns of 56) must not
+  be reported as a real effect.** It is inside the noise of a quantity Phase 4
+  holds fixed and therefore cannot see. This binds the 4.2 − 4.1, 4.3a − 4.1
+  and 4.3b − 4.2 contrasts in particular, which are the differences most likely
+  to land small.
 - **Stages 4.2, 4.3 and 4.4 are implemented and tested but have produced no
   numbers at all.** No dry run on the sample yet, no full-data run, no
   comparison report. Everything written about them in this README is about
   what the code does and what the definitions imply, never about a result.
-- **The centralized comparator is undecided ([O1](#o1-which-model-seeds-the-centralized-arm-uses)),
-  and the choice moves it between 0.760 and 0.780 relative recall.** Until it
-  is settled, every Phase 4 figure that compares an arm against centralized —
-  including session B's "0.16-0.26 of relative recall available to 4.2" — is
-  quoted against the Phase 3 five-seed headline, which is **not** the matched
-  comparator. `centralized.model_seed_policy()` raises rather than defaulting.
+- **Two centralized numbers coexist on purpose: 0.679 / 0.760 and 0.696 /
+  0.780.** The first is Phase 3's five-model-seed mean and stays the baseline
+  headline; the second is the model-seed-0 comparator every Phase 4 arm is
+  measured against ([O1](#o1-which-model-seeds-the-centralized-arm-uses)). They
+  differ by the number of model seeds averaged and by nothing else. Neither is
+  an error, and the distinction is stated next to both — see [the two
+  centralized numbers](#the-two-centralized-numbers-and-why-both-are-right).
+  Session B's "0.16-0.26 of relative recall available to 4.2" was quoted
+  against 0.760 and becomes **0.18-0.28** against the matched comparator.
 - **Stage 4.1's full-data detection numbers cover two of four targets, and
   their reports are not committed yet.** Session B evaluated targets 1.00 and
   0.75; session C evaluates 0.50 and 0.25 and writes the one complete report,
@@ -5905,7 +6007,8 @@ Tagged points in the repository, newest first. Check one out with
   rather than the comparison it was run for. All four XGBoost configurations
   reproduce the recorded stage 3.3 numbers **to three decimal places**,
   including the per-seed min and max and the five-fold seed-noise difference
-  between the variants: L = 48 full at **0.679 [0.661, 0.696], 0.760 of the
+  between the variants: L = 48 full at **0.679 (five-seed mean; per-seed
+  range 0.661-0.696), 0.760 of the
   ceiling**.
 
   *The result.* At the F1 operating point the GNN's L = 24 recall (0.661) sits

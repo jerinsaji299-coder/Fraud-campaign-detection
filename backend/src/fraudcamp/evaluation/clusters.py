@@ -111,6 +111,43 @@ def extract_clusters(
     return sorted(clusters, key=lambda c: (-len(c), min(c)))
 
 
+def cluster_match_detail(
+    cluster: Iterable[str],
+    campaign_accounts: Iterable[str],
+    min_fraction: float = constants.MATCH_MIN_ACCOUNT_FRACTION,
+    min_accounts: int = constants.MATCH_MIN_ACCOUNTS,
+) -> dict:
+    """The frozen matching rule and the two quantities it is made of.
+
+    * **purity** = the fraction of the CLUSTER's accounts that belong to the
+      campaign. The rule's first condition.
+    * **coverage** = how many of the CAMPAIGN's accounts the cluster contains,
+      as a count (the rule's second condition, an absolute threshold) and as a
+      fraction of the campaign, which is the form a reader expects.
+
+    One definition, so anything that displays purity or coverage - the live
+    demo panel above all - shows the same numbers the frozen rule decided on,
+    rather than a second, similar-looking pair.
+    """
+    cluster = set(cluster)
+    campaign = set(campaign_accounts)
+    overlap = len(cluster & campaign)
+    purity = (overlap / len(cluster)) if cluster else 0.0
+    return {
+        "n_cluster_accounts": len(cluster),
+        "n_campaign_accounts": len(campaign),
+        "overlap": overlap,
+        "purity": purity,
+        "coverage_accounts": overlap,
+        "coverage_fraction": (overlap / len(campaign)) if campaign else 0.0,
+        "min_fraction": float(min_fraction),
+        "min_accounts": int(min_accounts),
+        "matches": bool(
+            cluster and purity >= min_fraction and overlap >= min_accounts
+        ),
+    }
+
+
 def cluster_hits_campaign(
     cluster: Iterable[str],
     campaign_accounts: Iterable[str],
@@ -119,12 +156,14 @@ def cluster_hits_campaign(
 ) -> bool:
     """The frozen matching rule: at least `min_fraction` of the cluster's
     accounts belong to the campaign, AND it covers at least `min_accounts`
-    of the campaign's accounts."""
-    cluster = set(cluster)
-    overlap = len(cluster & set(campaign_accounts))
-    if not cluster:
-        return False
-    return (overlap / len(cluster)) >= min_fraction and overlap >= min_accounts
+    of the campaign's accounts.
+
+    Delegates to `cluster_match_detail` so the boolean and the displayed
+    purity/coverage can never disagree.
+    """
+    return cluster_match_detail(
+        cluster, campaign_accounts, min_fraction, min_accounts
+    )["matches"]
 
 
 def build_account_index(accounts_by_campaign: dict[int, Sequence[str]]) -> dict[str, list[int]]:

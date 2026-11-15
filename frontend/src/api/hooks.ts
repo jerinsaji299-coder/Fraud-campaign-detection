@@ -3,6 +3,9 @@ import { useQuery } from '@tanstack/react-query'
 import { apiGet } from './client'
 import type {
   CampaignDetail,
+  DemoAggregate,
+  DemoManifest,
+  DemoRun,
   CampaignList,
   CampaignQuery,
   CampaignVisibility,
@@ -84,6 +87,45 @@ export function useResultsSummary() {
   return useQuery({
     queryKey: ['results-summary'],
     queryFn: () => apiGet<{ items: unknown[]; total: number }>('/api/results/summary'),
+    retry: false,
+  })
+}
+
+// --- the live demo panel ---------------------------------------------------
+
+export function useDemoManifest() {
+  return useQuery({
+    queryKey: ['demo', 'manifest'],
+    queryFn: () => apiGet<DemoManifest>('/api/demo/manifest'),
+    retry: false,
+  })
+}
+
+/**
+ * One live run. Keyed by every input, so flipping the toggle issues a new
+ * request and the backend recomputes - the panel never shows a stale answer
+ * for a setting the viewer did not ask for.
+ */
+export function useDemoRun(params: {
+  detection_time: string
+  institution: number
+  mode: string
+  operating_point: string
+  enabled: boolean
+}) {
+  const { enabled, ...query } = params
+  return useQuery({
+    queryKey: ['demo', 'run', query],
+    queryFn: () => apiGet<DemoRun>('/api/demo/run', { ...query }),
+    enabled,
+    retry: false,
+  })
+}
+
+export function useDemoAggregate() {
+  return useQuery({
+    queryKey: ['demo', 'aggregate'],
+    queryFn: () => apiGet<DemoAggregate>('/api/demo/aggregate'),
     retry: false,
   })
 }
