@@ -4239,6 +4239,58 @@ project-root/
   false alarms per day and every budget tau untransferable. Exit 3 if any
   chosen tau is at a grid edge, after the reports are written. A few minutes
   per `(target, seed)` on the sample.
+- **Run the whole Phase 4 chain on the sample (the dry run):**
+  ```
+  cd backend
+  python scripts/run_phase4_chain.py --config configs/local.yaml
+  python scripts/run_phase4_chain.py --config configs/local.yaml --targets 1.0 --seeds 0
+  python scripts/run_phase4_chain.py --config configs/local.yaml --skip-evidence
+  ```
+  4.1 → 4.2 → 4.3a/b → 4.4 → `compare-conditions`, from scratch, per
+  `(target, seed)`. Reuses one set of boosters wherever two conditions are
+  defined to share them: 4.2 scores with 4.1's boosters, and 4.3a and 4.3b
+  come from one set of augmented boosters and one shared-evidence object.
+  Writes `artifacts/phase4_dev/` (gitignored). **Development check, not a
+  result.** `--skip-evidence` runs the 4.1/4.2/4.4 subset, which is the same
+  thing the Kaggle plan does if time runs out. Exit 3 on a grid-edge tau,
+  **exit 4** if a pairing rule is violated — a stop condition, not a bad
+  number. ~12 min per `(target, seed)` on the sample.
+- **Build and check the live panel's bundle:**
+  ```
+  cd backend
+  python scripts/make_demo_bundle.py --config configs/local.yaml       --target 1.0 --seed 0 --taus artifacts/phase4_dev/phase4_isolated_taus.csv
+  uvicorn app.main:app --reload     # then open the frontend at /live
+  ```
+  Picks the demo campaign by the [stated
+  rule](#the-demo-campaign-is-chosen-by-a-stated-rule), exports the offered
+  windows and the 8 boosters of that one cell, and scans every offered
+  `(window, institution)` to record which settings show the mechanism. Writes
+  `artifacts/demo_panel/` (gitignored). Without `--taus` the bundle has no
+  recorded operating point and the panel needs an explicit `?tau=`.
+- **Re-derive every Phase 4 figure in this README from its source:**
+  ```
+  cd backend
+  python scripts/verify_phase4_crosscheck.py
+  python scripts/verify_phase4_crosscheck.py --json
+  ```
+  Prints PASS/FAIL per figure with the value it recomputed, and lists as
+  SKIPPED the figures whose evidence is not committed yet — the ones this
+  README asserts on trust. Exit 0 if every committed figure matches. This is
+  the one command [`phase4_crosscheck.md`](docs/reference/phase4_crosscheck.md)
+  points at.
+- **Run stages 4.2 / 4.3 / 4.4 and the comparison on the full data (on Kaggle):**
+  ```
+  python scripts/kaggle/kaggle_runner.py evaluate-fedavg      --config configs/kaggle.yaml
+  python scripts/kaggle/kaggle_runner.py train-evidence       --config configs/kaggle.yaml
+  python scripts/kaggle/kaggle_runner.py evaluate-evidence    --config configs/kaggle.yaml
+  python scripts/kaggle/kaggle_runner.py evaluate-centralized --config configs/kaggle.yaml
+  python scripts/kaggle/kaggle_runner.py compare-conditions   --config configs/kaggle.yaml
+  ```
+  Session by session, with the cells verbatim, in
+  [`run_on_kaggle.md` §5m](backend/scripts/kaggle/run_on_kaggle.md). All of
+  them are resumable, and each evaluation session prints a **CALIBRATION**
+  line after its first cell so the rest of the plan is sized from a
+  measurement. `evaluate-centralized` refuses to train without `--retrain`.
 - **Run the isolated condition on the full data (on Kaggle):**
   ```
   python scripts/kaggle/kaggle_runner.py train-isolated    --config configs/kaggle.yaml
