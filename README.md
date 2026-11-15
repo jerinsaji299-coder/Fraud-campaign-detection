@@ -176,7 +176,8 @@ feature set only, three seeds, one lookback**. See
 | 4.2 | **The `fedavg` condition**: the FedAvg analogue for a tree ensemble is **score averaging** — each institution scores its own view with all K boosters, equal weights, nothing retrained | **built and tested** 2026-11-15 — `federation/fedavg.py`; the design question that moved here from 4.1 is answered in [stage 4.2](#stage-42-the-fedavg-analogue-for-a-tree-ensemble--implemented-2026-11-15). No numbers yet |
 | 4.3 | **The `evidence` and `fedavg_evidence` conditions**: boundary accounts receive the window node features computed across the views that hold them; boosters retrained on augmented views; evaluated with own-model scoring (4.3a) and score averaging (4.3b) | **built and tested** 2026-11-15 — `federation/evidence.py`. Under this definition the ceiling cannot move, which is what keeps every comparison paired; see [stage 4.3](#stage-43-boundary-account-evidence--implemented-2026-11-15). No numbers yet |
 | 4.4 | **The `centralized` arm re-reported in the Phase 4 cell grid**, as the `K = 1` case of a per-institution condition | **built and tested** 2026-11-15 — `federation/centralized.py`. **One open decision blocks its number**: which model seed(s) it uses. See [O1](#o1-which-model-seeds-the-centralized-arm-uses) |
-| 4.5 | Kaggle runner subcommands for 4.2/4.3/4.4 and the Phase 4 comparison report, resumable per (condition, target, seed) | not started — next, once [O1](#o1-which-model-seeds-the-centralized-arm-uses) is settled |
+| 4.5 | **The Phase 4 comparison report and the Kaggle runner subcommands**: `evaluate-fedavg`, `train-evidence`, `evaluate-evidence`, `evaluate-centralized`, `compare-conditions`, resumable per (condition, target, seed) | **built and tested** 2026-11-15 — `federation/compare.py` enforces rule 1 rather than assuming it: cells that do not match raise, a cell undefined on one side removes the pair, and the ceilings must agree across all four per-institution conditions. Dry run on the sample passed end to end. Sessions D-J are in [`run_on_kaggle.md` §5m](backend/scripts/kaggle/run_on_kaggle.md) |
+| 4.6 | **The live detection panel** at `/live`: one window, one toggle, recomputed on the spot, with the aggregate figures beneath it | **built and tested** 2026-11-15 — see [the live detection panel](#the-live-detection-panel--implemented-2026-11-15) |
 
 **Later phases (not started)**
 
@@ -2664,6 +2665,9 @@ is beyond what can be resolved, so the operating point was not found.
 | `constants.PHASE4_SEEDS`, `constants.PHASE4_LOOKBACK_H` | the frozen scope **in code** — `[0, 1, 2]` and `48` — so a runner cannot drift from this README. `evaluate-isolated` refuses more than one lookback outright |
 | `tests/test_federation_isolated.py` | **53 tests**, including the grid-edge policy at both one-of-eight and eight-of-eight, the reload path's carry-over of a cell's exclusions, the budget-binding audit, the primary-point designation and the pooled spread's denominator and tie-breaking; backend suite **415 passed, 25 skipped** |
 | `scripts/run_isolated.py` | the condition on the 1% sample, for development |
+| `scripts/run_phase4_chain.py` | the whole Phase 4 chain on the 1% sample: 4.1 → 4.2 → 4.3a/b → 4.4 → compare-conditions, from scratch. The dry run that has to pass before anything is run on Kaggle |
+| `scripts/make_demo_bundle.py` | exports the live panel's bundle: the offered windows, the ground truth, the account → institution map and the 8 boosters of one `(target, seed)`. Picks the demo campaign by the stated rule and records the audit trail |
+| `scripts/verify_phase4_crosscheck.py` | re-derives **every committed Phase 4 figure in this README** from its source file and prints PASS/FAIL. The one command [`phase4_crosscheck.md`](docs/reference/phase4_crosscheck.md) points at |
 | `scripts/run_institution_composition.py` | why institution 0 is not like the other seven: bank composition per institution, and campaign accounts owned against campaign accounts visible. The reproducible evidence for [not exchangeable](#the-institutions-are-not-exchangeable-institution-0-holds-the-hub-bank) |
 | `train-isolated` | one booster per institution per `(target, seed)`, saved as it finishes, **resumable per institution** |
 | `evaluate-isolated` | tau, ceilings, the per-institution and union reports, **resumable per `(target, seed)`**; it **never trains**, so a lost evaluation session cannot silently retrain on different boosters; exit 3 on an edge tau after every report is written |
@@ -3024,7 +3028,7 @@ used for every row here:
 and below full visibility the degree of fragmentation does not measurably
 change how unevenly positives are spread.** On the full data target 1.0 stands
 apart at 2.42, and 0.75 / 0.50 / 0.25 come out at 1.93 / 1.89 / 1.91 — flat,
-with the three fragmented targets inside 2% of each other while target 1.0
+with the three fragmented targets inside 2.2% of each other while target 1.0
 sits 25-28% above all three. The sample's apparent monotone decline across all four
 targets (3.13 → 2.03 → 1.76 → 1.60) is **not** what the full data shows: only
 the first step of it survives.
@@ -3740,6 +3744,86 @@ named. **`matched_seed0` was chosen.** 0.679 / 0.760 stays what it already is
 — the Phase 3 headline and the reproduction reference — and is never the
 comparator.
 
+### The live detection panel — implemented 2026-11-15
+
+A presentation panel at `/live` in the frontend: one detection window, scored
+**on the spot**. Input → output, with one toggle.
+
+**What it does.** The viewer picks a detection window (directly, or via the
+demo campaign, which offers the windows its own transactions fall in) and an
+institution, then flips:
+
+* **`own`** — that institution's own stage 4.1 booster, alone;
+* **`averaged`** — the same view scored by all K boosters with their scores
+  averaged, which is the stage 4.2 rule from D2.
+
+On every flip the backend recomputes the flagged edges, extracts the clusters,
+classifies each one, and reports whether a cluster matches the demo campaign,
+its **purity** and **coverage**, the **lead time** against the campaign's
+deadline, and the **alert count**.
+
+**It is the research path, not a second implementation.** Clusters come from
+`evaluation.clusters.extract_clusters`, the classification from
+`classify_cluster`, and the match decision together with purity and coverage
+from one new function, `clusters.cluster_match_detail`, which
+`cluster_hits_campaign` now delegates to — so a cluster the panel shows as 60%
+pure cannot be one the frozen rule counted as a hit at some other threshold.
+The frontend formats; it computes no research metric.
+
+**The API's no-raw-data rule still holds.** `/demo/*` is the one router that
+computes rather than serves, and it reads only the bundle
+`scripts/make_demo_bundle.py` writes — the offered windows' transactions, the
+ground truth the matching rule needs, the account → institution map, and the
+eight boosters. It never opens the dataset. With no bundle installed it 404s
+with the command to build one and the page shows an **empty state**; the
+aggregate section reports its own absence rather than erroring, because that
+section must ship whether or not the numbers exist.
+
+**What is cached and what is live.** The **featurised windows** are cached per
+`(detection time, institution)`, four at a time, so a toggle flip costs the
+scalers, the predict calls and the connected components. Nothing is replayed:
+flipping really re-scores the view with a different set of boosters. Every
+response carries its own `latency_ms` breakdown — featurise (and whether it
+was cached), predict, clusters, total — and the panel prints it, flagging
+anything over the 5 s target in the page itself rather than in a note
+somewhere else.
+
+**What to download for it.** Only the **8 boosters of one `(target, seed)`**,
+not all 96: the directories `models/isolated/t100_s0_i0` … `_i7` from session
+A's output. At the full data's ~1.8 MB per booster that is **about 14 MB**,
+against ~170 MB for the whole set. The windows parquet is built locally from
+the dataset and is small — the bundle's manifest records both sizes as
+`models_mb` and the script prints them.
+
+#### The demo campaign is chosen by a stated rule
+
+Recorded in the bundle's manifest, shown on the page, and applied in this
+order:
+
+1. candidates are the **test-split** campaigns with `eval_ok` and at least
+   `MATCH_MIN_ACCOUNTS` accounts — fewer cannot be matched by the frozen rule
+   even in principle;
+2. rank by the **number of distinct institutions holding the campaign's
+   accounts**, descending, then `campaign_id` ascending;
+3. take the first one the **centralized oracle detects** within the split's
+   horizon at L = 48 — a campaign no detector could reach would demonstrate
+   nothing;
+4. record the chosen rank, and every candidate skipped, with why.
+
+> **It was chosen to illustrate the mechanism. It is not a representative
+> result and must not be described as one.** Step 2 deliberately picks the
+> campaign most spread across institutions, because the point the panel makes
+> is that no single institution sees a whole campaign. That is selection *for*
+> the mechanism. How often the mechanism holds is the aggregate table, which
+> the panel shows directly beneath it and without which the panel does not
+> ship.
+
+The aggregate table is read from the Phase 4 comparison artifact — each arm's
+recall relative to its **own** ceiling with the number of campaigns behind it
+— and never recomputed in the panel. Rows whose difference is smaller than the
+model-seed floor are marked *inside noise*, so a viewer cannot read a
+0.02 difference as an effect.
+
 ### Reference visibility digests
 
 The visibility search is seeded, so the same commit and environment must
@@ -3834,6 +3918,7 @@ project-root/
       --- phase 4 stage 4.1, session A (2026-11-15) ---
       train_isolated.{md,csv,json}    the 96 isolated boosters: rows, positives, class weights, tiers, timing
       phase4_unprompted_decisions.md  every Phase 4 choice D1-D6 did not cover, with the alternative rejected
+      phase4_crosscheck.md            every Phase 4 figure in the README, its source row, and the one command that reproduces it
   backend/
     requirements.txt               Python dependencies: pandas, numpy, pyarrow, pyyaml, pytest, fastapi, uvicorn, pydantic
     pyproject.toml                 setuptools packaging for `fraudcamp` (src/ layout) + pytest `fulldata` marker
@@ -4675,6 +4760,27 @@ both 404 with a clear message until Phase 5 writes
 `artifacts/results/`. Shape once populated is in
 [Results schema](#results-schema).
 
+**`/api/demo/manifest`**, **`/api/demo/run`** and **`/api/demo/aggregate`** —
+the [live detection panel](#the-live-detection-panel--implemented-2026-11-15).
+**The one part of this API that computes rather than serves**, and it is kept
+in its own router and labelled for that reason. It still never opens the raw
+dataset: it reads the bundle `scripts/make_demo_bundle.py` wrote.
+
+* `manifest` — what the panel can offer, plus the campaign-selection rule
+  verbatim, its audit trail and its disclaimer.
+* `run?detection_time=&institution=&mode=own|averaged&operating_point=` —
+  scores that institution's view, extracts and classifies the clusters, and
+  returns the flagged edges, purity, coverage, lead time, the alert count and
+  a `latency_ms` breakdown. Recomputed on every call. `mode=averaged` applies
+  all K boosters and averages, which is the stage 4.2 rule.
+* `aggregate` — the comparison artifact's test rows, or an explicit
+  `available: false` with a reason. Deliberately **not** a 404: the absence of
+  an aggregate is a state to report, because the panel's aggregate section
+  ships whether or not the numbers exist.
+
+`manifest` and `run` 404 with the command to build the bundle when it is
+absent, so the page shows an empty state rather than placeholder numbers.
+
 ## Frontend
 
 **Stack:** Vite + React + TypeScript, React Router, TanStack Query,
@@ -5303,8 +5409,16 @@ is recorded here rather than in the suite.
   holds fixed and therefore cannot see. This binds the 4.2 − 4.1, 4.3a − 4.1
   and 4.3b − 4.2 contrasts in particular, which are the differences most likely
   to land small.
+- **The live panel's numbers are only as real as its bundle.** Built from the
+  1% sample it is a development check and says so on the page; built from a
+  full-data bundle it is a real detection on one window. Either way the
+  campaign was **selected for the mechanism** by a stated rule that
+  deliberately picks the campaign most spread across institutions, so nothing
+  the panel shows is evidence of typicality. That is what the aggregate table
+  beneath it is for, and the panel is not shipped without it.
 - **Stages 4.2, 4.3 and 4.4 are implemented and tested but have produced no
-  numbers at all.** No dry run on the sample yet, no full-data run, no
+  full-data numbers at all.** The sample dry run passed end to end; sessions
+  D-J have not run. No dry run on the sample yet, no full-data run, no
   comparison report. Everything written about them in this README is about
   what the code does and what the definitions imply, never about a result.
 - **Two centralized numbers coexist on purpose: 0.679 / 0.760 and 0.696 /
@@ -5494,6 +5608,71 @@ Tagged points in the repository, newest first. Check one out with
 
 ## Changelog
 
+- **2026-11-15 (O1 decided; the comparison, the Kaggle sessions, the live
+  panel and the cross-check)** — Phase 4 is now implemented end to end, with
+  one dry run behind it and no full-data numbers yet.
+
+  *O1 = `matched_seed0`, and three things with it.* The centralized comparator
+  is model seed 0, **0.696 / 0.780**: Phase 4 studies fragmentation, not model
+  seed, and every federated booster is model seed 0, so any other reading
+  would carry a model-seed difference inside the contrast.
+  `phase4_seeds_as_model_seeds` is rejected explicitly — it would make
+  centralized the only arm whose model varies per cell, so its spread would be
+  model noise against every other arm's visibility noise. Phase 3's
+  **0.679 / 0.760** stays the baseline headline as a five-model-seed mean, and
+  the two numbers now have [their own section](#the-two-centralized-numbers-and-why-both-are-right)
+  explaining what each is, next to both. The notation `0.679 [0.661, 0.696]`
+  is gone from all five sites — it read as a confidence interval and is a seed
+  range. And Known limitations now states the floor **before** any Phase 4
+  number is interpreted: the model-seed spread is 0.035 recall / 0.040
+  relative, exactly **2 campaigns of 56**, a seventh to a fifth of the
+  union → centralized gap, so a difference between arms smaller than ~0.04
+  relative must not be reported as an effect. Every comparison row carries
+  `below_seed_noise_floor` so the write-up cannot forget.
+
+  *The comparison enforces rule 1 instead of assuming it.*
+  `federation/compare.py` raises when two arms do not cover the same cells; a
+  cell undefined on one side removes the **pair**, not just its own side; and
+  the per-institution ceilings must agree across all four conditions, which is
+  the measurable form of the 4.3 result and raises if it ever fails. No
+  standard error is taken across the non-exchangeable institutions — each
+  difference carries its median, range and sign counts.
+
+  *Dry run on the 1% sample, the whole chain, exit 0.* Two checks came out
+  exactly right: all four per-institution conditions share **every** oracle
+  ceiling (max disagreement 0.0), and the union ceiling equals the centralized
+  ceiling (difference 0.0). Measured per-cell ratios against isolated:
+  **fedavg 1.41x** — not 8x, because the raw featurisation of a view is shared
+  across the eight boosters scoring it — evidence 1.15x, fedavg_evidence 0.44x
+  with the shared-node cache warm, and evidence training 4.2x. Dropping 4.3 is
+  **verified** to leave a complete 4.1/4.2/4.4 result with the four missing
+  contrasts named rather than silently absent.
+
+  *Five Kaggle subcommands and six sessions.* `evaluate-fedavg`,
+  `train-evidence`, `evaluate-evidence`, `evaluate-centralized` and
+  `compare-conditions` share one resumable per-cell driver that re-derives a
+  reloaded cell's exclusions, and **each session prints a CALIBRATION line
+  after its first cell** so the rest of the plan is sized from a measurement
+  rather than from an extrapolation. `evaluate-isolated` is untouched, because
+  stage 4.1's sessions B and C depend on it. Sessions D-J are in
+  [`run_on_kaggle.md` §5m](backend/scripts/kaggle/run_on_kaggle.md), with 4.3
+  last so it can be dropped.
+
+  *The live panel.* `/live`: one window, one toggle, recomputed on the spot,
+  with the aggregate table beneath it. Purity and coverage come from one new
+  definition, `clusters.cluster_match_detail`, which `cluster_hits_campaign`
+  now delegates to, so a displayed number cannot disagree with the frozen
+  match. Needs only the 8 boosters of one cell — about 14 MB, against 170 MB
+  for all 96.
+
+  *The cross-check.* [`phase4_crosscheck.md`](docs/reference/phase4_crosscheck.md)
+  is one table over every Phase 4 figure here, and
+  `scripts/verify_phase4_crosscheck.py` re-derives each one from its source
+  file: **70 passed, 0 failed, 9 skipped**. The nine are session B's, reported
+  before its CSVs were committed, and they are listed as the figures this
+  README asserts on trust. Two tolerances that had been loose enough to hide
+  drift were tightened, which corrected "inside 2%" to **2.2%**.
+
 - **2026-11-15 (stages 4.2, 4.3 and 4.4 implemented; D1-D6 recorded; one
   decision stopped)** — the three remaining Phase 4 arms exist in code and are
   tested. None has produced a number.
@@ -5633,7 +5812,7 @@ Tagged points in the repository, newest first. Check one out with
   The thinnest cell of all 96 is at target **1.0** (seed 1, institution 2), not
   at 0.25, as stage 4.0 predicted. The spread across institutions is **2.42×**
   at target 1.0 and then **1.93 / 1.89 / 1.91** at 0.75 / 0.50 / 0.25 — the
-  three fragmented targets inside 2% of each other, with target 1.0 sitting
+  three fragmented targets inside 2.2% of each other, with target 1.0 sitting
   25-28% above all three. So
   full visibility concentrates campaigns and starves some views, and below full
   visibility the degree of fragmentation does not measurably change how

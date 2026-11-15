@@ -1529,3 +1529,696 @@ reason other than exit 0 or exit 3-with-cells-excluded.
   are still from the 1% sample and are marked development-only, and session
   B's two targets are reported in the README without committed CSVs behind
   them until this session's reports land.
+
+## 5m. Phase 4, stages 4.2 / 4.4 / 4.3 — sessions D to J
+
+Six sessions, CPU, commit mode. **Stage 4.3 is last on purpose**: sessions D,
+E and F produce a complete `isolated` / `fedavg` / `centralized` result with
+its comparison report, so if time runs out after F the phase still has an
+answer and the only thing missing is the evidence condition, whose four
+contrasts `compare-conditions` then lists as skipped rather than leaving
+silently absent. That is verified, not assumed — see "Dropping 4.3" below.
+
+### Why these session boundaries
+
+Every estimate below is a **sample ratio applied to a full-data baseline**,
+and the ratio is the only part that was measured on real code:
+
+| Per cell (8 institutions) | Sample, measured | Ratio to isolated |
+|---|---:|---:|
+| `evaluate-isolated` | 162s | 1.00 |
+| `evaluate-fedavg` | 228s | **1.41** |
+| `evaluate-evidence` (4.3a) | 186s | 1.15 |
+| `evaluate-evidence` (4.3b, cache warm) | 72s | 0.44 |
+| `train-evidence`, per institution | 7.4s | **4.2** vs isolated training |
+
+`fedavg` costing 1.41x rather than 8x is the shared featurisation doing its
+job: the raw features of a view do not depend on which booster scores next,
+so they are built once and the eight scalers are applied to them. Two tests
+pin that path to bit equality against featurising once per booster.
+
+The full-data baseline is `evaluate-isolated`, whose per-cell time is the one
+number nobody has yet measured — session B ran six cells inside its 2.5-5.5 h
+bracket, so **25-55 min per cell**. Everything below inherits that
+uncertainty, which is why **every session prints a CALIBRATION line after its
+first cell**, projecting the session from a measurement instead of from this
+table. Act on that line, not on these estimates.
+
+| Session | Command | Inputs | Estimate | Produces |
+|---|---|---|---:|---|
+| **D** | `evaluate-fedavg --targets 1.0,0.75` | dataset + A | 3.5-8 h | 6 of 12 fedavg cells |
+| **E** | `evaluate-fedavg` (all; reloads D's six) | dataset + A + D | 3.5-8 h | all 12 fedavg cells |
+| **F** | `evaluate-centralized` then `compare-conditions` | dataset + A + B/C + E + Phase 3 models | 1-2 h | **a complete 4.1/4.2/4.4 result** |
+| **G** | `train-evidence` (96 augmented boosters) | dataset | 7-11 h | the 4.3 boosters |
+| **I** | `evaluate-evidence --targets 1.0,0.75` | dataset + G | 4-9 h | 6 of 12 cells, both 4.3a and 4.3b |
+| **J** | `evaluate-evidence` (all) then `compare-conditions` | dataset + G + I + everything from F | 4-9 h | the full Phase 4 comparison |
+
+Session **H** exists only if G's calibration line projects past ~10 h: G is
+resumable per booster, so stop it and run the remainder as H with the same
+cell. Sessions D, E, I and J are resumable per `(condition, target, seed)`, so
+an over-run costs the cell in flight and nothing else.
+
+**4.4 needs the Phase 3 centralized booster.** `evaluate-centralized` loads
+`models/xgboost_centralized_L48_s0` and **refuses to train** unless given
+`--retrain`, so that a lost model cannot silently swap the booster the report
+is about. Attach the Phase 3 training output to session F. If it is genuinely
+gone, pass `--retrain` and say so when sending the files back: the report
+records it, and the reproduction check against
+`docs/reference/evaluate_baseline.csv` is printed either way.
+
+### Session D — stage 4.2 on the first two targets, CPU, commit mode
+
+**Inputs:** the IBM dataset, **session A's output** (the 96 boosters).
+**Settings:** Accelerator **None**, Internet **ON**, Save Version → **Save &
+Run All (Commit)**.
+
+```python
+# D1 - dataset path
+!ls /kaggle/input/datasets/ealtman2019/ibm-transactions-for-anti-money-laundering-aml/ | head
+```
+
+```python
+# D2 - clone and install (~1-2 min). Must report 0d33f89 or later: that
+#      commit carries evaluate-fedavg and compare-conditions.
+!rm -rf /kaggle/temp/repo
+!git clone --depth 1 https://github.com/jerinsaji299-coder/Fraud-campaign-detection.git /kaggle/temp/repo
+%cd /kaggle/temp/repo/backend
+!pip install -q -r requirements.txt
+!git -C /kaggle/temp/repo rev-parse --short HEAD
+```
+
+```python
+# D3 - INPUT CHECK, first: stage 4.2 trains nothing, so a missing booster
+#      stops the run hours in rather than being quietly recreated. Identical
+#      in purpose to B3, and it asserts the same 96.
+import pathlib, shutil, subprocess, sys
+
+sys.path.insert(0, "/kaggle/temp/repo/backend/src")
+
+found = sorted(subprocess.run(
+    ["find", "/kaggle/input", "-maxdepth", "6", "-type", "d",
+     "-path", "*/models/isolated"],
+    capture_output=True, text=True, check=True).stdout.split())
+print("isolated model trees found:", found)
+assert found, "no models/isolated under /kaggle/input - attach session A's output"
+
+dest = pathlib.Path("/kaggle/working/models/isolated")
+dest.mkdir(parents=True, exist_ok=True)
+for tree in found:
+    for cell in sorted(pathlib.Path(tree).iterdir()):
+        target = dest / cell.name
+        if not target.exists():
+            shutil.copytree(cell, target)
+
+cells = sorted(d for d in dest.iterdir() if d.is_dir())
+REQUIRED = ("xgb_model.json", "feature_spec.json", "model_meta.json")
+trained, broken = [], []
+for cell in cells:
+    if (cell / "untrained.json").exists():
+        continue
+    bad = [n for n in REQUIRED
+           if not (cell / n).exists() or (cell / n).stat().st_size == 0]
+    (broken if bad else trained).append((cell.name, bad))
+for name, bad in broken:
+    print("  BROKEN", name, bad)
+print(f"{len(cells)} institution-cells, {len(trained)} loadable")
+assert len(cells) == 96, f"expected 96, found {len(cells)}"
+assert not broken, f"{len(broken)} booster(s) incomplete - re-run session A"
+
+from fraudcamp.models import xgb_baseline
+sample = [n for n, _ in trained][:: max(1, len(trained) // 8)]
+for name in sample:
+    model = xgb_baseline.TrainedBaseline.load(dest / name)
+    assert model.lookback_h == 48, (name, model.lookback_h)
+    assert len(model.feature_names) == 66, (name, len(model.feature_names))
+print(f"  spot-loaded {len(sample)} boosters, all at L = 48 with 66 features")
+```
+
+```python
+# D4 - PRE-FLIGHT, second: the frozen scope, the tau grid, and the two things
+#      stage 4.2 is defined by - that the operating points are the per_inst_*
+#      names (D6, not uncapped_*) and that the primary pair is unchanged.
+import sys
+sys.path.insert(0, "/kaggle/temp/repo/backend/src")
+from fraudcamp import constants, evaluation
+from fraudcamp.federation import fedavg, isolated
+
+assert constants.PHASE4_SEEDS == [0, 1, 2], constants.PHASE4_SEEDS
+assert constants.PHASE4_LOOKBACK_H == 48, constants.PHASE4_LOOKBACK_H
+assert constants.K_INSTITUTIONS == 8
+assert constants.VISIBILITY_TARGETS == [1.0, 0.75, 0.5, 0.25]
+grid = evaluation.MODEL_TAU_GRID
+assert len(grid) == 22 and grid[-1] == 0.9999999 and 1.0 not in grid
+
+points = [p["operating_point"] for p in isolated.operating_points()]
+assert points == ["f1", "per_inst_10", "per_inst_50", "per_inst_100",
+                  "total_10", "total_50", "total_100"], points
+assert isolated.PRIMARY_POINTS == ("f1", "total_10")
+assert fedavg.CONDITION == "fedavg"
+print("scope, grid and operating points OK:", points)
+```
+
+```python
+# D5 - evaluate fedavg at targets 1.00 and 0.75 (six cells). 3.5-8 h.
+#      Read the CALIBRATION line it prints after the first cell and size the
+#      rest of the plan from that, not from the estimate.
+#      Exit 3 is NOT a crash: a chosen tau sat at a grid edge. Read it.
+import subprocess
+code = subprocess.run(
+    ["python", "scripts/kaggle/kaggle_runner.py", "evaluate-fedavg",
+     "--config", "configs/kaggle.yaml", "--targets", "1.0,0.75"],
+    cwd="/kaggle/temp/repo/backend",
+).returncode
+print("evaluate-fedavg exit code:", code)
+```
+
+```python
+# D6 - what came out
+!ls -la /kaggle/working/phase4_fedavg_* /kaggle/working/evaluate_fedavg_cells | head -40
+```
+
+### Session E — stage 4.2, the remaining targets, CPU, commit mode
+
+**Inputs:** the IBM dataset, **session A's output**, **session D's output**.
+Cells **E1, E2** are D1 and D2 verbatim; **E4** is D4 verbatim.
+
+```python
+# E3 - INPUT CHECK: A's boosters (as D3) AND D's finished cells, so this
+#      session reloads them in seconds instead of re-evaluating six cells it
+#      already has. Missing cells do not crash the run - they make it twice as
+#      long and miss the 12 h limit, which is why this asserts rather than
+#      prints.
+import pathlib, shutil, subprocess, sys
+
+sys.path.insert(0, "/kaggle/temp/repo/backend/src")
+
+# --- A: the boosters, exactly as D3 ---
+found = sorted(subprocess.run(
+    ["find", "/kaggle/input", "-maxdepth", "6", "-type", "d",
+     "-path", "*/models/isolated"],
+    capture_output=True, text=True, check=True).stdout.split())
+assert found, "no models/isolated under /kaggle/input - attach session A's output"
+dest = pathlib.Path("/kaggle/working/models/isolated")
+dest.mkdir(parents=True, exist_ok=True)
+for tree in found:
+    for cell in sorted(pathlib.Path(tree).iterdir()):
+        if not (dest / cell.name).exists():
+            shutil.copytree(cell, dest / cell.name)
+assert len(sorted(d for d in dest.iterdir() if d.is_dir())) == 96
+
+# --- D: the six finished fedavg cells ---
+found = sorted(subprocess.run(
+    ["find", "/kaggle/input", "-maxdepth", "6", "-type", "d",
+     "-name", "evaluate_fedavg_cells"],
+    capture_output=True, text=True, check=True).stdout.split())
+print("finished-cell directories found:", found)
+cells_dir = pathlib.Path("/kaggle/working/evaluate_fedavg_cells")
+cells_dir.mkdir(parents=True, exist_ok=True)
+for tree in found:
+    for item in sorted(pathlib.Path(tree).glob("*.csv")):
+        if not (cells_dir / item.name).exists():
+            shutil.copy2(item, cells_dir / item.name)
+
+SUFFIXES = ("institutions", "taus", "ceilings", "summary", "pooled",
+            "union", "outcomes")
+expected = [f"fedavg_t{round(t * 100):03d}_s{s}" for t in (1.0, 0.75)
+            for s in (0, 1, 2)]
+done = sorted({p.name.split("_summary")[0] for p in cells_dir.glob("*_summary.csv")})
+print(f"{len(done)} cells staged: {done}")
+missing = [n for n in expected if n not in done]
+incomplete = [(n, s) for n in done for s in SUFFIXES
+              if not (cells_dir / f"{n}_{s}.csv").exists()]
+for n, s in incomplete:
+    print(f"  INCOMPLETE {n}: no _{s}.csv")
+assert not missing, (
+    f"session D's cells {missing} are not staged. Attach session D's output, "
+    "or this session re-evaluates them and will not finish inside 12 h."
+)
+assert not incomplete, f"{len(incomplete)} cell file(s) missing - re-send D"
+print("  all six of D's cells complete; E will reload them in seconds")
+```
+
+```python
+# E5 - all four targets: D's six load in seconds, the six at 0.50 and 0.25
+#      are evaluated. 3.5-8 h. This writes the complete fedavg report.
+#      Expect exit 3 if any of D's cells had an edge tau: this session
+#      reports their exclusions as its own, because they are part of the
+#      report it writes.
+import subprocess
+code = subprocess.run(
+    ["python", "scripts/kaggle/kaggle_runner.py", "evaluate-fedavg",
+     "--config", "configs/kaggle.yaml"],
+    cwd="/kaggle/temp/repo/backend",
+).returncode
+print("evaluate-fedavg exit code:", code)
+```
+
+```python
+# E6 - the headline, read back from the files rather than the log. The mean
+#      never prints alone: institution 0 holds the dataset's largest bank by
+#      construction, so the median and the range print beside it.
+import pandas as pd
+pooled = pd.read_csv("/kaggle/working/phase4_fedavg_pooled.csv")
+union = pd.read_csv("/kaggle/working/phase4_fedavg_union.csv")
+print("cells:", pooled[["visibility_target", "seed"]].drop_duplicates().shape[0], "of 12")
+print(pooled[(pooled.eval_split == "test") & (pooled.metric == "campaign_recall")]
+      [["visibility_target", "seed", "operating_point",
+        "mean_over_all_institutions", "n_institutions_in_mean",
+        "median_over_institutions", "min_over_institutions", "min_institution",
+        "max_over_institutions", "max_institution",
+        "n_binding_budgets", "n_cells_with_a_budget"]].to_string(index=False))
+print(union[(union.eval_split == "test") & (union.test_subset == "all")]
+      [["visibility_target", "seed", "operating_point", "campaign_recall",
+        "oracle_recall", "recall_relative_to_ceiling", "false_alarms_per_day",
+        "summed_false_alarms_per_day", "n_institutions_operating"]].to_string(index=False))
+```
+
+### Session F — stage 4.4 and the first complete comparison, CPU, commit mode
+
+**Inputs:** the IBM dataset, **session A's output**, **sessions B/C's output**
+(the `isolated` reports), **session E's output** (the `fedavg` reports), and
+**the Phase 3 model output** holding `models/xgboost_centralized_L48_s0`.
+Short session, ~1-2 h.
+
+```python
+# F1, F2 - as D1 and D2.
+```
+
+```python
+# F3 - INPUT CHECK: the Phase 3 centralized booster, and the condition
+#      reports F compares. `evaluate-centralized` REFUSES to train without
+#      --retrain, so a missing booster must be caught here and not worked
+#      around: the comparator has to be the model the Phase 3 record is about.
+import pathlib, shutil, subprocess, sys
+
+sys.path.insert(0, "/kaggle/temp/repo/backend/src")
+from fraudcamp.federation import centralized as centralized_mod
+
+policy = centralized_mod.PHASE4_POLICY
+seeds = centralized_mod.model_seed_policy(policy)
+print(f"model-seed policy {policy!r} -> model seed(s) {list(seeds)}")
+assert policy == "matched_seed0", (
+    "O1 decided matched_seed0: Phase 4 studies fragmentation, not model seed, "
+    "and every federated booster is model seed 0"
+)
+
+wanted = [f"xgboost_centralized_L48_s{s}" for s in seeds]
+found = sorted(subprocess.run(
+    ["find", "/kaggle/input", "-maxdepth", "6", "-type", "d",
+     "-name", "xgboost_centralized_L48_s*"],
+    capture_output=True, text=True, check=True).stdout.split())
+print("centralized booster dirs found:", found)
+models = pathlib.Path("/kaggle/working/models")
+models.mkdir(parents=True, exist_ok=True)
+for path in found:
+    name = pathlib.Path(path).name
+    if name in wanted and not (models / name).exists():
+        shutil.copytree(path, models / name)
+missing = [n for n in wanted if not (models / n / "xgb_model.json").exists()]
+assert not missing, (
+    f"no Phase 3 centralized booster for {missing}. Attach the Phase 3 "
+    "training output. Only pass --retrain if it is genuinely gone, and say so "
+    "when sending the files back."
+)
+from fraudcamp.models import xgb_baseline
+for name in wanted:
+    model = xgb_baseline.TrainedBaseline.load(models / name)
+    assert model.lookback_h == 48, (name, model.lookback_h)
+    assert len(model.feature_names) == 66, (name, len(model.feature_names))
+    print(f"  {name}: L = {model.lookback_h}, {len(model.feature_names)} features")
+
+# the condition reports to compare
+staged = 0
+for pattern in ("phase4_isolated_*.csv", "phase4_fedavg_*.csv"):
+    for path in subprocess.run(
+        ["find", "/kaggle/input", "-maxdepth", "6", "-name", pattern],
+        capture_output=True, text=True, check=True).stdout.split():
+        target = pathlib.Path("/kaggle/working") / pathlib.Path(path).name
+        if not target.exists():
+            shutil.copy2(path, target)
+            staged += 1
+print(f"  staged {staged} condition report file(s)")
+for required in ("phase4_isolated_summary.csv", "phase4_fedavg_summary.csv"):
+    assert (pathlib.Path("/kaggle/working") / required).exists(), (
+        f"{required} is not staged: attach the session that produced it"
+    )
+# D6: sessions that ran before the rename wrote uncapped_*; one report must
+# never carry two names for one operating point.
+renamed = 0
+for path in sorted(pathlib.Path("/kaggle/working").glob("phase4_*.csv")):
+    text = path.read_text(encoding="utf-8")
+    if "uncapped_" in text:
+        path.write_text(text.replace("uncapped_", "per_inst_"), encoding="utf-8")
+        renamed += 1
+print(f"  D6: rewrote uncapped_* -> per_inst_* in {renamed} file(s)")
+```
+
+```python
+# F4 - as D4 verbatim (scope, grid, operating points).
+```
+
+```python
+# F5 - stage 4.4. ~1 h. One detection run at model seed 0, replicated across
+#      the twelve cells with each cell's seed as the bootstrap seed, because
+#      a centralized model cannot depend on a visibility assignment.
+import subprocess
+code = subprocess.run(
+    ["python", "scripts/kaggle/kaggle_runner.py", "evaluate-centralized",
+     "--config", "configs/kaggle.yaml"],
+    cwd="/kaggle/temp/repo/backend",
+).returncode
+print("evaluate-centralized exit code:", code)
+```
+
+```python
+# F6 - the comparison. Minutes. Exit 4 means a PAIRING RULE was violated,
+#      which is a stop condition and not a bad number: send the message back.
+import subprocess
+code = subprocess.run(
+    ["python", "scripts/kaggle/kaggle_runner.py", "compare-conditions",
+     "--config", "configs/kaggle.yaml"],
+    cwd="/kaggle/temp/repo/backend",
+).returncode
+print("compare-conditions exit code:", code)
+```
+
+```python
+# F7 - the two checks that matter more than any difference, read from the
+#      files. If either fails, nothing else in the report is usable.
+import json, pandas as pd
+checks = json.load(open("/kaggle/working/phase4_compare.json"))["checks"]
+print(json.dumps(checks, indent=2))
+rep = json.load(open("/kaggle/working/phase4_centralized.json"))["reproduction"]
+print("\nreproduction against Phase 3 (per model seed):")
+for row in rep["per_seed"]:
+    print(" ", row)
+print("\nPhase 3 headline (five-seed mean):", rep["phase3_headline"])
+head = pd.read_csv("/kaggle/working/phase4_compare_headline.csv")
+print("\nprimary points, test, subset all, relative to own ceiling:")
+print(head[["contrast", "unit", "visibility_target", "seed", "operating_point",
+            "n_pairs", "mean_difference", "median_difference",
+            "min_difference", "max_difference", "n_positive", "n_negative",
+            "below_seed_noise_floor"]].to_string(index=False))
+```
+
+### Session G — stage 4.3, the 96 augmented boosters, CPU, commit mode
+
+**Inputs:** the IBM dataset only. **7-11 h.** Resumable per
+`(target, seed, institution)`, so if G's calibration projects past ~10 h,
+stop it and run the remainder as **session H** with the same cells — the
+finished boosters are skipped.
+
+```python
+# G1, G2 - as D1 and D2.
+```
+
+```python
+# G3 - INPUT CHECK: the dataset, and that the evidence definition is the one
+#      the report will claim. Nothing else is needed - G trains from raw.
+import sys
+sys.path.insert(0, "/kaggle/temp/repo/backend/src")
+from fraudcamp import constants, features
+from fraudcamp.federation import evidence as evidence_mod
+
+assert evidence_mod.CONDITION_EVIDENCE == "evidence"
+assert evidence_mod.CONDITION_FEDAVG_EVIDENCE == "fedavg_evidence"
+# the six node features are what D3 shares, and no more
+assert list(features.CONTINUOUS_NODE_FEATURES) == [
+    "in_degree", "out_degree", "log_in_amount", "log_out_amount",
+    "n_counterparties", "n_currencies",
+], features.CONTINUOUS_NODE_FEATURES
+print("evidence conditions and the shared node features OK:",
+      list(features.CONTINUOUS_NODE_FEATURES))
+```
+
+```python
+# G4 - as D4 verbatim (scope, grid, operating points).
+```
+
+```python
+# G5 - train the 96 augmented boosters. 7-11 h. Resumable per booster.
+#      --max-cached-windows caps the shared-evidence memory: 0 is unbounded
+#      and fastest, and the full data's windows are large, so set a cap if
+#      the session is killed for memory. Each booster is written as it
+#      finishes, so stopping costs the one in flight.
+import subprocess
+code = subprocess.run(
+    ["python", "scripts/kaggle/kaggle_runner.py", "train-evidence",
+     "--config", "configs/kaggle.yaml", "--max-cached-windows", "12"],
+    cwd="/kaggle/temp/repo/backend",
+).returncode
+print("train-evidence exit code:", code)
+```
+
+```python
+# G6 - what came out, and whether any institution starved on augmented views
+import pandas as pd
+frame = pd.read_csv("/kaggle/working/train_evidence.csv")
+print(len(frame), "rows;", int((~frame.get("skipped", False).astype(bool)).sum()), "trained here")
+if "tier" in frame:
+    print(frame.tier.value_counts().to_string())
+    print("min positives:", int(frame.n_positive.min()),
+          " mean rows:", int(frame.n_rows.mean()))
+!ls -la /kaggle/working/models/evidence | head -5
+!du -sh /kaggle/working/models/evidence
+```
+
+### Session I — stage 4.3a and 4.3b on the first two targets, CPU, commit mode
+
+**Inputs:** the IBM dataset, **session G's output** (the augmented boosters).
+**4-9 h.** Both conditions are evaluated per cell from one set of boosters and
+one shared-evidence object, so 4.3b − 4.3a differs in the scoring rule alone.
+
+```python
+# I1, I2 - as D1 and D2. I4 - as D4 verbatim.
+```
+
+```python
+# I3 - INPUT CHECK: the 96 AUGMENTED boosters. These are not session A's -
+#      a cell evaluated with the wrong boosters would produce a number that
+#      looks fine and means nothing, so the count and the shape are asserted.
+import pathlib, shutil, subprocess, sys
+
+sys.path.insert(0, "/kaggle/temp/repo/backend/src")
+
+found = sorted(subprocess.run(
+    ["find", "/kaggle/input", "-maxdepth", "6", "-type", "d",
+     "-path", "*/models/evidence"],
+    capture_output=True, text=True, check=True).stdout.split())
+print("evidence model trees found:", found)
+assert found, "no models/evidence under /kaggle/input - attach session G's output"
+
+dest = pathlib.Path("/kaggle/working/models/evidence")
+dest.mkdir(parents=True, exist_ok=True)
+for tree in found:
+    for cell in sorted(pathlib.Path(tree).iterdir()):
+        if not (dest / cell.name).exists():
+            shutil.copytree(cell, dest / cell.name)
+
+cells = sorted(d for d in dest.iterdir() if d.is_dir())
+REQUIRED = ("xgb_model.json", "feature_spec.json", "model_meta.json")
+trained, broken = [], []
+for cell in cells:
+    if (cell / "untrained.json").exists():
+        continue
+    bad = [n for n in REQUIRED
+           if not (cell / n).exists() or (cell / n).stat().st_size == 0]
+    (broken if bad else trained).append(cell.name)
+print(f"{len(cells)} augmented institution-cells, {len(trained)} loadable")
+for name in broken:
+    print("  BROKEN", name)
+assert len(cells) == 96, f"expected 96, found {len(cells)}"
+assert not broken, f"{len(broken)} booster(s) incomplete - resume session G"
+
+from fraudcamp.models import xgb_baseline
+sample = trained[:: max(1, len(trained) // 8)]
+for name in sample:
+    model = xgb_baseline.TrainedBaseline.load(dest / name)
+    assert model.lookback_h == 48, (name, model.lookback_h)
+    assert len(model.feature_names) == 66, (name, len(model.feature_names))
+print(f"  spot-loaded {len(sample)} augmented boosters at L = 48, 66 features")
+```
+
+```python
+# I5 - evaluate 4.3a AND 4.3b at targets 1.00 and 0.75 (twelve cell-runs).
+#      4-9 h. Both conditions share the boosters and the shared evidence, so
+#      4.3b - 4.3a is the scoring rule and nothing else.
+import subprocess
+code = subprocess.run(
+    ["python", "scripts/kaggle/kaggle_runner.py", "evaluate-evidence",
+     "--config", "configs/kaggle.yaml", "--targets", "1.0,0.75",
+     "--max-cached-windows", "12"],
+    cwd="/kaggle/temp/repo/backend",
+).returncode
+print("evaluate-evidence exit code:", code)
+```
+
+```python
+# I6 - what came out
+!ls -la /kaggle/working/phase4_evidence_* /kaggle/working/phase4_fedavg_evidence_* /kaggle/working/evaluate_evidence_cells | head -40
+```
+
+### Session J — stage 4.3, the remaining targets, and the full comparison
+
+**Inputs:** the IBM dataset, **session G's output**, **session I's output**,
+and **everything from session F** (the `isolated`, `fedavg` and `centralized`
+reports). **4-9 h.** Cells **J1, J2** are D1 and D2; **J4** is D4.
+
+```python
+# J3 - INPUT CHECK: G's augmented boosters (as I3), I's finished cells, and
+#      F's condition reports - because J re-runs compare-conditions over all
+#      five arms and every one of them has to be present.
+import pathlib, shutil, subprocess, sys
+
+sys.path.insert(0, "/kaggle/temp/repo/backend/src")
+
+# --- G: the augmented boosters, as I3 ---
+found = sorted(subprocess.run(
+    ["find", "/kaggle/input", "-maxdepth", "6", "-type", "d",
+     "-path", "*/models/evidence"],
+    capture_output=True, text=True, check=True).stdout.split())
+assert found, "no models/evidence under /kaggle/input - attach session G"
+dest = pathlib.Path("/kaggle/working/models/evidence")
+dest.mkdir(parents=True, exist_ok=True)
+for tree in found:
+    for cell in sorted(pathlib.Path(tree).iterdir()):
+        if not (dest / cell.name).exists():
+            shutil.copytree(cell, dest / cell.name)
+assert len(sorted(d for d in dest.iterdir() if d.is_dir())) == 96
+
+# --- I: the twelve finished cell-runs ---
+found = sorted(subprocess.run(
+    ["find", "/kaggle/input", "-maxdepth", "6", "-type", "d",
+     "-name", "evaluate_evidence_cells"],
+    capture_output=True, text=True, check=True).stdout.split())
+cells_dir = pathlib.Path("/kaggle/working/evaluate_evidence_cells")
+cells_dir.mkdir(parents=True, exist_ok=True)
+for tree in found:
+    for item in sorted(pathlib.Path(tree).glob("*.csv")):
+        if not (cells_dir / item.name).exists():
+            shutil.copy2(item, cells_dir / item.name)
+expected = [f"{c}_t{round(t * 100):03d}_s{s}"
+            for c in ("evidence", "fedavg_evidence")
+            for t in (1.0, 0.75) for s in (0, 1, 2)]
+done = sorted({p.name.split("_summary")[0] for p in cells_dir.glob("*_summary.csv")})
+print(f"{len(done)} cell-runs staged")
+missing = [n for n in expected if n not in done]
+assert not missing, (
+    f"session I's cell-runs {missing} are not staged. Attach session I's "
+    "output, or J re-evaluates them and will not finish inside 12 h."
+)
+
+# --- F: the other three arms' reports ---
+staged = 0
+for pattern in ("phase4_isolated_*.csv", "phase4_fedavg_*.csv",
+                "phase4_centralized_*.csv"):
+    for path in subprocess.run(
+        ["find", "/kaggle/input", "-maxdepth", "6", "-name", pattern],
+        capture_output=True, text=True, check=True).stdout.split():
+        target = pathlib.Path("/kaggle/working") / pathlib.Path(path).name
+        if not target.exists():
+            shutil.copy2(path, target)
+            staged += 1
+print(f"  staged {staged} report file(s) from F")
+for required in ("phase4_isolated_summary.csv", "phase4_fedavg_summary.csv",
+                 "phase4_centralized_summary.csv"):
+    assert (pathlib.Path("/kaggle/working") / required).exists(), (
+        f"{required} is not staged: attach session F's output"
+    )
+renamed = 0
+for path in sorted(pathlib.Path("/kaggle/working").glob("phase4_*.csv")):
+    text = path.read_text(encoding="utf-8")
+    if "uncapped_" in text:
+        path.write_text(text.replace("uncapped_", "per_inst_"), encoding="utf-8")
+        renamed += 1
+print(f"  D6: rewrote uncapped_* -> per_inst_* in {renamed} file(s)")
+```
+
+```python
+# J5 - all four targets for both evidence conditions: I's twelve cell-runs
+#      load in seconds, the twelve at 0.50 and 0.25 are evaluated. 4-9 h.
+import subprocess
+code = subprocess.run(
+    ["python", "scripts/kaggle/kaggle_runner.py", "evaluate-evidence",
+     "--config", "configs/kaggle.yaml", "--max-cached-windows", "12"],
+    cwd="/kaggle/temp/repo/backend",
+).returncode
+print("evaluate-evidence exit code:", code)
+```
+
+```python
+# J6 - the full Phase 4 comparison, all five arms. Minutes.
+#      Exit 4 means a pairing rule was violated: a stop condition.
+import subprocess
+code = subprocess.run(
+    ["python", "scripts/kaggle/kaggle_runner.py", "compare-conditions",
+     "--config", "configs/kaggle.yaml"],
+    cwd="/kaggle/temp/repo/backend",
+).returncode
+print("compare-conditions exit code:", code)
+```
+
+```python
+# J7 - as F7, now over five arms. The checks first: if the ceilings disagree
+#      across conditions, a condition moved visibility and no difference in
+#      the report means anything.
+import json, pandas as pd
+payload = json.load(open("/kaggle/working/phase4_compare.json"))
+print(json.dumps(payload["checks"], indent=2))
+print("\nconditions present:", payload["conditions_present"])
+print("skipped contrasts:", [s.get("name") for s in payload["skipped"]])
+head = pd.read_csv("/kaggle/working/phase4_compare_headline.csv")
+print("\nprimary points, test, subset all, relative to own ceiling:")
+print(head[["contrast", "unit", "visibility_target", "seed", "operating_point",
+            "n_pairs", "mean_difference", "median_difference",
+            "min_difference", "max_difference", "n_positive", "n_negative",
+            "below_seed_noise_floor"]].to_string(index=False))
+```
+
+### Dropping 4.3
+
+Verified rather than asserted: with the `evidence` and `fedavg_evidence`
+reports absent, `compare-conditions` produces
+`centralized - isolated`, `centralized - fedavg` and `fedavg - isolated`, and
+**names** the four contrasts it could not form with the reason "one arm not
+present". So stopping after session F leaves a complete, self-describing
+4.1/4.2/4.4 result. Nothing has to be re-run to get there.
+
+### What to send back from sessions D to J
+
+From each session: every `phase4_*.csv`, the matching `.md` and `.json`, and
+**the `*_cells/` directory**. The cells directory is what makes the next
+session cheap, and it is the only output that survives a session that stopped
+on a low-edge tau — that check returns before any combined report is written,
+so if the log says `STOPPING, and NOT recording` there are no `phase4_*`
+files to send and the cells are the whole output.
+
+### What to expect, and what would be surprising
+
+* **The ceilings must be identical across `isolated`, `fedavg`, `evidence`
+  and `fedavg_evidence`**, to the last digit. 4.2 and 4.3 change what a model
+  knows, never which rows it has. `compare-conditions` raises if they ever
+  disagree, and that failure matters more than any difference in the report.
+  Confirmed on the sample at max disagreement **0.0**.
+* **The union ceiling must equal the centralized ceiling**, as session B
+  measured and `docs/reference/evaluate_baseline.csv` records: 0.8928571, 50
+  of 56. Also confirmed on the sample at difference **0.0**.
+* **A difference smaller than ~0.04 relative recall is not an effect.**
+  Phase 4's seeds vary visibility only; all boosters are model seed 0. Phase 3
+  measures model-seed noise at centralized as 0.661-0.696 recall and 0.74-0.78
+  relative — about 2 campaigns of 56, a seventh to a fifth of the
+  union → centralized gap. Rows flagged `below_seed_noise_floor` must not be
+  written up as results.
+* **`fedavg` should cost about 1.4x `isolated`, not 8x.** If a cell takes
+  eight times as long, the shared featurisation has fallen back to per-booster
+  featurisation, which happens when the specs' one-hot vocabularies disagree.
+  The answer is still correct — the fallback is exact — but the session will
+  not finish, so send the calibration line back.
+* **An institution untrained on augmented views would be new.** Session A
+  trained 96 of 96 on plain views with 1,003 positives at the thinnest, and
+  augmentation changes features, not rows, so the positive counts should be
+  identical to session A's. If they are not, the view changed and something is
+  wrong.
+* **A low-edge F1 tau remains the one stop condition that is likely.** Two of
+  session B's cells chose 0.1, one step above the floor. Report it; do not
+  re-run with `--allow-low-edge-tau`.
