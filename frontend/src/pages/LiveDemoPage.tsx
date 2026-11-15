@@ -371,6 +371,46 @@ export function LiveDemoPage() {
             </div>
           </fieldset>
         </div>
+        {m.suggested_settings?.length > 0 && (
+          <div className="mt-3 rounded-md border border-grid p-2">
+            <p className="text-xs font-semibold">
+              Settings where the toggle changes the answer
+            </p>
+            <ul className="mt-1 space-y-0.5 text-xs text-ink2">
+              {m.suggested_settings.map((hint) => (
+                <li key={`${hint.detection_time}-${hint.institution}`}>
+                  <button
+                    type="button"
+                    className="underline"
+                    onClick={() => {
+                      const index = m.detection_times.indexOf(hint.detection_time)
+                      if (index >= 0) setWindowIndex(index)
+                      setInstitution(hint.institution)
+                      setMode('own')
+                    }}
+                  >
+                    {hint.detection_time}, I{hint.institution}
+                  </button>
+                  {' — own misses it, averaging finds it'}
+                  {hint.hours_before_deadline !== null &&
+                    ` ${hint.hours_before_deadline} h before the deadline`}
+                </li>
+              ))}
+            </ul>
+            {Object.keys(m.setting_outcomes ?? {}).length > 0 && (
+              <p className="mt-1 text-xs text-muted">
+                Over all {Object.values(m.setting_outcomes).reduce((a, b) => a + b, 0)}{' '}
+                window-and-institution settings offered here: both modes find
+                it in {m.setting_outcomes.both ?? 0}, averaging only in{' '}
+                {m.setting_outcomes.averaged_only ?? 0}, own model only in{' '}
+                {m.setting_outcomes.own_only ?? 0}, neither in{' '}
+                {m.setting_outcomes.neither ?? 0}. Averaging is not a
+                guaranteed improvement, and this counts every case rather than
+                the favourable ones.
+              </p>
+            )}
+          </div>
+        )}
         {windowMeta && (
           <p className="mt-2 text-xs text-muted">
             This window: {windowMeta.n_edges.toLocaleString()} transactions,{' '}

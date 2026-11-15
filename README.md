@@ -3788,6 +3788,58 @@ was cached), predict, clusters, total — and the panel prints it, flagging
 anything over the 5 s target in the page itself rather than in a note
 somewhere else.
 
+#### Measured latency, and what to precompute if it stops being enough
+
+Measured on the 1% sample bundle, campaign 214, through the real endpoint:
+
+| What | Featurise | Predict | Clusters | Total |
+|---|---:|---:|---:|---:|
+| **first touch** of a `(window, institution)` | 134 ms | 10 ms | 2 ms | **~150 ms** |
+| **toggle flip**, cache warm, `own` (1 model) | 0 ms | 10.5 ms | 1.7 ms | **~70 ms** |
+| **toggle flip**, cache warm, `averaged` (8 models) | 0 ms | 48 ms | 1.6 ms | **~125 ms** |
+
+So a flip costs **70-130 ms**, roughly forty times under the 5 s target, and
+`averaged` costs about 4.5x `own` in predict alone — eight boosters instead of
+one, over featurisation that is already done.
+
+**On a full-data bundle this will be slower and the first touch is the risk.**
+A full 48h window holds ~1M transactions against the sample's ~20k, so
+featurisation and prediction scale roughly with it: the first touch of a window
+could plausibly reach **5-10 s**, while the warm flip — the thing a viewer
+actually waits for — should stay near **0.5-2.5 s**. The flip is safe; the
+first click on a new window is not.
+
+**If it stops being enough, precompute in this order.** (1) **Pre-warm the
+cache at startup** for every offered `(window, institution)` — there are at
+most `8 x 8 = 64` and they are known from the manifest, so the panel would
+never pay a first touch during a presentation. This is the obvious fix and
+needs no new definition. (2) Raise `MAX_CACHED_VIEWS` from 4 so a presenter
+flipping between several windows does not evict. (3) Only if those are not
+enough: cache the per-model **scores** rather than the features, which makes a
+flip pure connected components (~2 ms) — at the cost that the predicts are no
+longer live, so it would have to be said plainly on the page.
+
+#### What the panel shows on the sample bundle, counted honestly
+
+The bundle script scans every offered `(window, institution)` and records the
+outcomes, so the panel is not read off its favourable cases. On the sample, for
+campaign 214 at `total_10`, over **64** settings:
+
+| Outcome | Settings |
+|---|---:|
+| neither mode finds the campaign | 58 |
+| both modes find it | 4 |
+| **averaging finds it, the own model misses it** | **2** |
+| the own model finds it, averaging misses it | **0** |
+
+The two in bold are what the panel is for — at `2022-09-08 06:00` and
+`12:00`, institution 4 misses campaign 214 with its own model and finds it,
+66 and 60 hours before the deadline, once the other seven institutions'
+models are averaged in. Both are listed on the page as one-click settings.
+Averaging never *lost* a detection here, but it gained one in 2 of 64
+settings, on one campaign, on the sample: that is a demonstration of a
+mechanism and not a measurement of its size.
+
 **What to download for it.** Only the **8 boosters of one `(target, seed)`**,
 not all 96: the directories `models/isolated/t100_s0_i0` … `_i7` from session
 A's output. At the full data's ~1.8 MB per booster that is **about 14 MB**,

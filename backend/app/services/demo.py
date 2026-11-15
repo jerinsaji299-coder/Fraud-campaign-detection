@@ -178,8 +178,10 @@ class DemoBundle:
 
         t = pd.Timestamp(t)
         started = time.perf_counter()
+        # Asked BEFORE the call, because `_view_features` inserts the key: a
+        # flag read afterwards is always True and reports nothing.
+        was_cached = (pd.Timestamp(t), int(institution)) in self._views
         visible, mask, parts = self._view_features(t, institution)
-        featurise_cached = parts is not None and (t, institution) in self._views
         t_after_features = time.perf_counter()
 
         if parts is None:
@@ -297,7 +299,7 @@ class DemoBundle:
             **lead,
             "latency_ms": {
                 "featurise": round((t_after_features - started) * 1000, 1),
-                "featurise_was_cached": bool(featurise_cached),
+                "featurise_was_cached": bool(was_cached),
                 "predict": round((t_after_predict - t_after_features) * 1000, 1),
                 "clusters": round((t_after_clusters - t_after_predict) * 1000, 1),
                 "total": round((time.perf_counter() - started) * 1000, 1),

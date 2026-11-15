@@ -253,6 +253,16 @@ export interface DemoManifest {
   primary_points: string[]
   taus: Record<string, Record<string, number | null>>
   match_rule: { min_account_fraction?: number; min_accounts?: number }
+  suggested_settings: {
+    detection_time: string
+    institution: number
+    own_clusters: number
+    averaged_clusters: number
+    coverage: number | null
+    hours_before_deadline: number | null
+  }[]
+  setting_outcomes: Record<string, number>
+  suggested_settings_note: string | null
   models_mb: number | null
   modes: string[]
   development_only: string | null

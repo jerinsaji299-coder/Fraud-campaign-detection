@@ -166,6 +166,12 @@ def main() -> int:
                     help="directory holding t<TTT>_s<S>_i<I> booster folders; "
                          "if absent the boosters are trained here")
     ap.add_argument("--out", default="artifacts/demo_panel")
+    ap.add_argument(
+        "--taus", default="artifacts/phase4_dev/phase4_isolated_taus.csv",
+        help="the evaluation report to read the per-institution taus from. "
+             "Without it the panel has no recorded operating point and the "
+             "caller must pass ?tau= explicitly",
+    )
     args = ap.parse_args()
 
     out = Path(args.out)
@@ -286,7 +292,7 @@ def main() -> int:
             total_bytes += path.stat().st_size
 
     # --- taus for the primary points, from this cell -------------------
-    taus_path = Path("artifacts/phase4_dev/phase4_isolated_taus.csv")
+    taus_path = Path(args.taus)
     taus = {}
     if taus_path.exists():
         frame = pd.read_csv(taus_path)
@@ -333,6 +339,64 @@ def main() -> int:
     (out / "demo_manifest.json").write_text(
         json.dumps(manifest, indent=2, default=str), encoding="utf-8"
     )
+
+    # --- which settings actually show the mechanism ---------------------
+    #     Scanned here rather than left for a presenter to hunt for live. The
+    #     interesting setting is one where `own` MISSES the campaign and
+    #     `averaged` FINDS it: that is the stage 4.2 mechanism in one flip.
+    #     Recorded as suggestions, alongside the plain count of all four
+    #     outcomes, so the panel cannot be read as "averaging always helps".
+    _say("scanning the offered settings for the ones that show the mechanism ...")
+    try:
+        from app.services import demo as demo_service
+
+        probe = demo_service.load_bundle(out)
+        suggestions = []
+        outcomes = {"own_only": 0, "both": 0, "neither": 0, "averaged_only": 0}
+        if probe.available and taus:
+            for when in probe.detection_times():
+                for inst in sorted(probe.boosters):
+                    tau = probe.tau_for(inst, "total_10")
+                    if tau is None:
+                        continue
+                    got = {
+                        mode: probe.run(when, inst, mode, float(tau))
+                        for mode in demo_service.MODES
+                    }
+                    own = bool(got["own"].get("demo_campaign_detected"))
+                    avg = bool(got["averaged"].get("demo_campaign_detected"))
+                    key = ("both" if own and avg else
+                           "averaged_only" if avg else
+                           "own_only" if own else "neither")
+                    outcomes[key] += 1
+                    if key == "averaged_only":
+                        lead = got["averaged"].get("lead_time") or {}
+                        suggestions.append({
+                            "detection_time": str(when), "institution": inst,
+                            "own_clusters": got["own"]["n_clusters"],
+                            "averaged_clusters": got["averaged"]["n_clusters"],
+                            "coverage": got["averaged"].get(
+                                "best_coverage_vs_demo_campaign"),
+                            "hours_before_deadline": lead.get(
+                                "hours_before_deadline"),
+                        })
+        manifest["suggested_settings"] = suggestions
+        manifest["setting_outcomes"] = outcomes
+        manifest["suggested_settings_note"] = (
+            "Settings where the institution's own model MISSES the demo "
+            "campaign and score averaging FINDS it: the mechanism in one "
+            "toggle flip. `setting_outcomes` counts all four cases over every "
+            "offered (window, institution), so the panel cannot be read as "
+            "'averaging always helps'."
+        )
+        (out / "demo_manifest.json").write_text(
+            json.dumps(manifest, indent=2, default=str), encoding="utf-8"
+        )
+        _say(f"  {len(suggestions)} setting(s) turn a miss into a find; "
+             f"all outcomes: {outcomes}")
+    except Exception as exc:  # the bundle is usable without this
+        _say(f"  could not scan settings ({exc}); the bundle is complete "
+             "without them")
 
     _say(f"\nwrote demo bundle to {out}")
     _say(f"  windows parquet: {(out / 'demo_windows.parquet').stat().st_size / 1e6:.2f} MB")
