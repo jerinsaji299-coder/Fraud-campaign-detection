@@ -112,7 +112,13 @@ AMBIGUOUS_MIN_FRACTION = 0.5
 TEST_SUBSETS = ["all", "fully_observed", "no_shared_accounts", "oracle_reachable"]
 #: The subsets that are pure predicates on a campaign's outcome.
 STATIC_TEST_SUBSETS = ["all", "fully_observed", "no_shared_accounts"]
-CONDITIONS = ["isolated", "fedavg_only", "fedavg_embedding", "centralized"]
+# The five Phase 4 arms, named 2026-11-15 when stages 4.2 and 4.3 were
+# implemented. The earlier placeholders `fedavg_only` / `fedavg_embedding`
+# are gone: there is no embedding anywhere in 4.3 - it shares window NODE
+# FEATURES of boundary accounts - and "only" named nothing. `fedavg` here is
+# the tree analogue of FedAvg, which is score averaging; see
+# `federation/fedavg.py` for why parameters cannot be averaged.
+CONDITIONS = ["isolated", "fedavg", "evidence", "fedavg_evidence", "centralized"]
 
 # ---------------------------------------------------------------------------
 # Phase 4 frozen scope (README "Phase 4 frozen scope", frozen 2026-11-14)

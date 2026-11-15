@@ -18,8 +18,9 @@ export type Mode = 'light' | 'dark'
 
 export type ConditionKey =
   | 'isolated'
-  | 'fedavg_only'
-  | 'fedavg_embedding'
+  | 'fedavg'
+  | 'evidence'
+  | 'fedavg_evidence'
   | 'centralized'
 
 export type BinKey = '100' | '75' | '50' | 'low'
@@ -70,21 +71,29 @@ export const CONDITIONS: Record<
     dash: '',
     description: 'Each institution trains and detects alone.',
   },
-  fedavg_only: {
-    label: 'FedAvg only',
+  fedavg: {
+    label: 'Score averaging',
     short: 'FED',
     slot: 1,
     dash: '6 3',
     description:
-      'Institutions share model weights. Measures the knowledge advantage.',
+      'Every institution scores its own view with all 8 models and averages the scores. Models move, data does not. Measures the knowledge advantage.',
   },
-  fedavg_embedding: {
-    label: 'FedAvg + embedding exchange',
-    short: 'FED+E',
+  evidence: {
+    label: '+ boundary evidence',
+    short: 'EVI',
     slot: 2,
     dash: '2 3',
     description:
-      'Institutions also share embeddings of boundary accounts at detection time. Measures the evidence advantage.',
+      'Each institution also receives the window node features of its boundary accounts, computed across the views that hold them. Own model. Measures the evidence advantage.',
+  },
+  fedavg_evidence: {
+    label: 'Score averaging + evidence',
+    short: 'FED+E',
+    slot: 4,
+    dash: '4 2 1 2',
+    description:
+      'Boundary evidence under score averaging: both advantages together.',
   },
   centralized: {
     label: 'Centralized',
@@ -97,8 +106,9 @@ export const CONDITIONS: Record<
 
 export const CONDITION_ORDER: ConditionKey[] = [
   'isolated',
-  'fedavg_only',
-  'fedavg_embedding',
+  'fedavg',
+  'evidence',
+  'fedavg_evidence',
   'centralized',
 ]
 

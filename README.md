@@ -48,6 +48,10 @@ git clone https://github.com/jerinsaji299-coder/Fraud-campaign-detection.git
     - [The four conditions](#the-four-conditions)
     - [Stage 4.0: institution-split data](#stage-40-institution-split-data--done)
     - [Stage 4.1: the isolated condition](#stage-41-the-isolated-condition--approved-and-implemented-2026-11-14)
+    - [Stage 4.2: the FedAvg analogue — score averaging](#stage-42-the-fedavg-analogue-for-a-tree-ensemble--implemented-2026-11-15)
+    - [Stage 4.3: boundary-account evidence](#stage-43-boundary-account-evidence--implemented-2026-11-15)
+    - [Stage 4.4: centralized in the Phase 4 grid](#stage-44-the-centralized-arm-inside-the-phase-4-cell-grid--implemented-2026-11-15)
+        - [O1: which model seeds centralized uses — OPEN](#o1-which-model-seeds-the-centralized-arm-uses)
         - [Grid-edge policy](#12-grid-edge-policy-and-the-extension-of-model_tau_grid)
         - [What was built](#what-was-built)
         - [Measured on the 1% sample — development only](#measured-on-the-1-sample--development-only-not-for-quotation)
@@ -167,9 +171,10 @@ feature set only, three seeds, one lookback**. See
 |---|---|---|
 | 4.0 | Institution-split data: per-institution views of every window, and the account features each institution can compute from its own view alone | **done** — `federation/views.py`, 31 tests, per-institution training loads measured on the sample, visibility cross-check exact on all 370 campaigns |
 | 4.1 | **The `isolated` condition**: each institution trained and scoring on its own view alone, with its **own** oracle ceiling per target, and the two pooled numbers (per-institution mean, and the union over institutions) | **built and tested** — `federation/isolated.py`, 53 tests, backend 415 passed / 25 skipped; `train-isolated` and `evaluate-isolated` runner subcommands, resumable. Full-data **sessions A (training) and B (6 of 12 cells) done 2026-11-15**: 96 boosters exit 0; B exit 3 with one cell excluded at the grid top. **B's result: the union's ceiling equals the centralized ceiling exactly, and the union still recovers 0.16-0.26 less of it — the deficit is scoring, not visibility** ([session B](#the-full-data-run-session-b-the-ceiling-holds-the-recall-does-not--done-2026-11-15)). Session C, the remaining two targets and the complete report, is next. §[stage 4.1](#stage-41-the-isolated-condition--approved-and-implemented-2026-11-14) |
-| 4.2 | `fedavg`: what "FedAvg" means for a tree model, then implementation and tests, reusing the Phase 3 evaluation code unchanged | not started — the design question moved here from 4.1 |
-| 4.3 | `fedavg_exchange`: what crosses the institution boundary, then the gate — centralized vs `fedavg_exchange` at the 100 bin, full data. A failed gate stops the sweep | not started |
-| 4.4 | Kaggle runner subcommands, resumable per (condition, bin, seed) | not started |
+| 4.2 | **The `fedavg` condition**: the FedAvg analogue for a tree ensemble is **score averaging** — each institution scores its own view with all K boosters, equal weights, nothing retrained | **built and tested** 2026-11-15 — `federation/fedavg.py`; the design question that moved here from 4.1 is answered in [stage 4.2](#stage-42-the-fedavg-analogue-for-a-tree-ensemble--implemented-2026-11-15). No numbers yet |
+| 4.3 | **The `evidence` and `fedavg_evidence` conditions**: boundary accounts receive the window node features computed across the views that hold them; boosters retrained on augmented views; evaluated with own-model scoring (4.3a) and score averaging (4.3b) | **built and tested** 2026-11-15 — `federation/evidence.py`. Under this definition the ceiling cannot move, which is what keeps every comparison paired; see [stage 4.3](#stage-43-boundary-account-evidence--implemented-2026-11-15). No numbers yet |
+| 4.4 | **The `centralized` arm re-reported in the Phase 4 cell grid**, as the `K = 1` case of a per-institution condition | **built and tested** 2026-11-15 — `federation/centralized.py`. **One open decision blocks its number**: which model seed(s) it uses. See [O1](#o1-which-model-seeds-the-centralized-arm-uses) |
+| 4.5 | Kaggle runner subcommands for 4.2/4.3/4.4 and the Phase 4 comparison report, resumable per (condition, target, seed) | not started — next, once [O1](#o1-which-model-seeds-the-centralized-arm-uses) is settled |
 
 **Later phases (not started)**
 
@@ -3343,6 +3348,15 @@ rather than the run.
 
 | Date | Decision | Reason | Evidence |
 |---|---|---|---|
+| 2026-11-15 | **OPEN, stopped for a decision (O1): which model seed(s) the centralized arm of 4.4 uses** | Phase 3's seeds are **model** seeds; Phase 4's are **visibility** seeds, and all 96 Phase 4 boosters are trained at model seed 0. The three readings give 0.696 / 0.780, 0.6845 / 0.7667 and 0.679 / 0.760, and D4 asks for both the 3-seed Phase 4 scope and reproduction of a headline that is a **5-seed mean**. Implemented with no default so it cannot be chosen silently. Recommendation: `matched_seed0`, the only reading where the arms differ only in the condition | §[O1](#o1-which-model-seeds-the-centralized-arm-uses); `federation/centralized.py` `MODEL_SEED_POLICIES`; `docs/reference/evaluate_baseline.csv` |
+| 2026-11-15 | **D1 — the model under federation is the frozen Phase 3 XGBoost baseline, 66 features, unchanged from 4.1** | Changing the model and the condition at once would make every difference uninterpretable. Nothing in 4.2/4.3/4.4 touches the hyperparameters or the feature set | user decision D1; `models/xgb_baseline.py` |
+| 2026-11-15 | **D2 — stage 4.2's FedAvg analogue is SCORE AVERAGING**: all K boosters applied to each institution's own view, equal weights, nothing retrained. No weighted variant | A booster has no parameter vector space to average in: tree content is discrete structure, trees are fitted sequentially on residuals so index `j` pairs unrelated corrections, and two views split differently at the root. Where parameters cannot be averaged, federated learning combines at the output. Equal weights because unweighted is **untuned** — any weighting is fitted and would breach the equal-effort constraint | user decision D2; §[stage 4.2](#stage-42-the-fedavg-analogue-for-a-tree-ensemble--implemented-2026-11-15); `federation/fedavg.py` |
+| 2026-11-15 | **D3 — stage 4.3 shares the window NODE FEATURES of boundary accounts only**, computed on the union of the views holding each account; specs refitted and boosters retrained per institution on the augmented view; evaluated as 4.3a (own model) and 4.3b (score-averaged) | Separating the two effects needs both evaluations: 4.3a − 4.1 isolates the evidence, 4.3b − 4.2 isolates it under federation. **Consequence of the definition:** rows do not move, so the visibility mask and the per-institution ceiling are unchanged and 4.3 cannot raise a ceiling — which is what keeps the comparisons paired against one denominator | user decision D3; §[stage 4.3](#stage-43-boundary-account-evidence--implemented-2026-11-15); `federation/evidence.py` |
+| 2026-11-15 | **D4 — stage 4.4 re-reports the Phase 3 centralized model in the Phase 4 cell grid as the `K = 1` case**, no retrain, one run per model seed replicated across cells | Rule 1 pairs over identical cells and the Phase 3 result is indexed by model seed, not by visibility cell. Evaluating it through a degenerate one-institution assignment reuses tau selection, the grid-edge policy, the ceiling and the summariser, so the arms are measured by the same code; D4's `total_B = per_inst_B = B` then falls out of `budget_share(B, 1)`. A centralized model cannot depend on a visibility assignment, so replication is exact rather than a shortcut | user decision D4; §[stage 4.4](#stage-44-the-centralized-arm-inside-the-phase-4-cell-grid--implemented-2026-11-15) |
+| 2026-11-15 | **D5 — primary points stay `f1` and `total_10`; all comparisons paired per (target, seed, institution) or (target, seed, union) over identical cells; every pooled mean keeps its binding count and median/min/max spread** | Already designated 2026-11-14 before any federated arm existed, on the matched-volume reading, which is structural and did not move when the sample's binding result reversed | user decision D5 |
+| 2026-11-15 | **D6 — `uncapped_*` renamed `per_inst_*` throughout** | Recorded in full in its own row below | user decision D6 |
+| 2026-11-15 | **Condition labels are `isolated`, `fedavg`, `evidence`, `fedavg_evidence`, `centralized`**, replacing the placeholders `fedavg_only` / `fedavg_embedding` in `constants.CONDITIONS` and the frontend theme | The README had recorded this as a question 4.2 would settle. "Embedding" is wrong for a tree model — 4.3 shares window **node features**, and there is no embedding anywhere in it — and "only" named nothing | §[stage 4.2](#stage-42-the-fedavg-analogue-for-a-tree-ensemble--implemented-2026-11-15); `constants.CONDITIONS`; `frontend/src/theme.ts` |
+| 2026-11-15 | **`isolated.run_cell` and `evaluate_institution` take `condition`, `scorer_for` and `trainer`; 4.2 and 4.3 supply a scorer and nothing else** | Two copies of the evaluation loop would be two chances for the arms to diverge silently, and a paired comparison over cells measured by different code is not a paired comparison | `federation/isolated.py`; `docs/reference/phase4_unprompted_decisions.md` C3 |
 | 2026-11-15 | **Recorded, from session B: the union's ceiling equals the centralized ceiling exactly, and the union still recovers 0.16-0.26 less of it. The deficit is SCORING, not visibility** — and [Reading 2's prediction](#measured-on-the-1-sample--development-only-not-for-quotation) that a near-ceiling floor would leave 4.2 little to do is **withdrawn** | Union test oracle recall **0.8928571** (50/56) at target 1.00, identical to the centralized L = 48 ceiling; union relative recall 0.500 / 0.600 against centralized 0.760. Identical ceilings mean identical visibility, so what differs is what each arm's scorer finds inside the reachable set. On the sample an institution reached 0.62-0.89 of its own ceiling and the conclusion was that only evidence sharing had room; on full data it reaches 0.306-0.369, so `fedavg` has **measured** room at unchanged visibility. Keeping the withdrawn reading in place, where it was written in advance, rather than deleting it | session B CSVs, uncommitted pending session C; §[session B](#the-full-data-run-session-b-the-ceiling-holds-the-recall-does-not--done-2026-11-15) |
 | 2026-11-15 | **D6 — the per-institution full-budget points are renamed `uncapped_10/50/100` → `per_inst_10/50/100`, applied throughout** (schema, reports, tables, tests, runbook), and session C migrates session B's cached cells so one report never carries two names for one point | Session B measured `binding_fraction = 1.0` for every per-institution budget point: the budgets **do** bind on full data, against 0 of 8 on the sample, so `uncapped` asserted the opposite of the data. Reverting to `budget_*` is still rejected — it invites comparison against a centralized model's budgeted 10/day while the union spends 8 × B, which is what `total_10` exists to avoid. `per_inst_*` carries the structure (whose budget it is) and no finding, which is the lesson: a label must not encode a measurement, because measurements reverse and reports already written cannot be renamed. The sample misled for a statable reason — whether a budget binds is a property of **data density**, and thinning the background is exactly the operation that changes it | user decision D6, 2026-11-15; `federation/isolated.py` `operating_points`; `phase4_isolated_taus.csv` `budget_binding` |
 | 2026-11-15 | **Defect fixed before session C: a RELOADED cell's exclusions are re-derived from its rows, so the session that writes the authoritative report names every excluded cell in it and its exit code describes the report it wrote** | Sessions B and C split the 12 cells and C writes the one report. The reload path re-read the rows but left `high_edge`, `edge_taus` and the per-cell provenance behind with the session that evaluated them, so C would have exited **0** while reporting B's cell that was excluded at the grid top, and would not have **named** it — the one thing "excluded and named" requires, in the only report that matters. Found while confirming the grid-edge policy had been applied as agreed. Same class as the session-B `sys.path` defect: created by splitting one run across sessions, invisible on the sample | `scripts/kaggle/kaggle_runner.py` `_reloaded_cell_edges`; `tests/test_federation_isolated.py` (2 new tests) |
@@ -3461,6 +3475,194 @@ The first 23 were reproduced on the full dataset on 2026-10-08
 separately on 2026-10-09, after the determinism fix, once two independent
 sessions agreed — before the fix it varied between runs.
 
+### Stage 4.2: the FedAvg analogue for a tree ensemble — implemented 2026-11-15
+
+**The design question 4.1 deferred, answered: FedAvg for a gradient-boosted
+tree ensemble is SCORE AVERAGING.** Each institution keeps its data; the eight
+boosters trained in 4.1 for the same `(target, seed)` are shared; each
+institution scores **its own view** with all eight and averages per edge with
+equal weights. Nothing is retrained. The FedAvg invariant holds exactly:
+*models move, data does not.*
+
+**Why parameters cannot be averaged.** FedAvg averages model parameters, which
+needs a fixed vector space in which a coordinate-wise mean means something. A
+booster does not have one:
+
+* a tree's content is **discrete structure** — which feature a node splits on,
+  at which threshold. There is no coordinate system in which "the mean of two
+  split features" exists;
+* the trees are fitted **sequentially on residuals**, so tree `j` only means
+  anything given trees `1..j-1`. Tree 5 of institution A and tree 5 of
+  institution B correct different errors of different predecessors, so pairing
+  them by index pairs unrelated things;
+* two institutions trained on different views split differently at the root,
+  so even the leaf values are indexed by paths that do not exist in the other
+  tree.
+
+Averaging leaf values across structurally different trees is not a smoothed
+model; it is arithmetic on incommensurable numbers.
+
+**Why score averaging is the standard substitution.** Where parameters cannot
+be averaged, federated learning combines at the **output**: each client's
+model is applied and the predictions pooled. For tree ensembles this is the
+usual analogue, and it keeps the three properties that make FedAvg a
+meaningful baseline here — no raw data leaves an institution, every
+institution contributes equally, and the combination has nothing fitted in it.
+The other option in the literature, jointly **growing** trees across parties
+(federated XGBoost), exchanges gradients or histograms at every split: a
+different condition with a different privacy cost, not an analogue of FedAvg.
+
+**Equal weights, and no weighted variant (D2).** The mean is unweighted
+because unweighted is **untuned**. Any weighting — by rows, by positives, by
+validation score — is a fitted quantity, and fitting it would hand this arm an
+advantage the isolated floor never had, breaking the equal-effort constraint
+the phase rests on.
+
+**What is identical to 4.1, deliberately.** The visibility mask, the
+per-institution oracle ceiling, tau selection on validation, the seven
+operating points, the grid-edge policy, both pooled means and the union all
+come from `federation/isolated.py` unchanged — `fedavg.py` supplies a scorer
+and nothing else. In particular **the ceilings are identical**, because
+averaging scores cannot change what an institution can see. That is what makes
+4.2 − 4.1 a clean measurement of *scoring*, paired per
+`(target, seed, institution)` against the same denominator.
+
+*Two implementation notes, both tested rather than asserted.* The raw
+featurisation is **shared** across the K boosters scoring one view, because
+the raw features depend on a spec only through its three one-hot vocabularies
+— that is what makes 4.2 affordable instead of 8× the cost, and
+`test_the_fast_and_naive_averaged_scorers_agree_exactly` pins it to bit
+equality against the obvious implementation. An institution with **no
+booster** is left out of the mean rather than entered at score 0, which would
+claim it predicted "not laundering" and drag every averaged score down by
+`1/K` per missing model.
+
+### Stage 4.3: boundary-account evidence — implemented 2026-11-15
+
+**What crosses the boundary (D3).** A **boundary account** is one with at
+least one counterparty in another institution. For its boundary accounts only,
+an institution receives the **window node features** computed on the union of
+the views that contain that account — in-degree, out-degree, the two log
+amount aggregates, counterparty count, currency count, i.e. exactly the six
+node features the spec already has. **No labels. No raw transactions. No
+features for non-boundary accounts.** The feature spec is refitted per
+institution on its augmented view, and the 96 boosters are retrained on
+augmented views.
+
+**The union of the views holding an account is, for that account, the whole
+window.** Not obvious, and it is what makes the implementation one pass
+instead of one per subset of institutions. Visibility is an endpoint rule, so
+an account's **owner** sees every transaction the account is an endpoint of;
+the union of the views holding it therefore already contains all of its
+incident edges. Every node feature in the spec is an aggregate over incident
+edges alone. So the node features of `a` over the union **equal** the node
+features of `a` over the full window, exactly. Proved, not argued, by
+`test_union_of_views_node_features_equal_whole_window_node_features`.
+
+Two consequences worth stating:
+
+* **For an account an institution owns, the augmentation is a no-op** — it
+  already saw every edge. What actually moves is the profile of a boundary
+  *counterparty*: what institution `i` could not see about an account held
+  somewhere else. That is also the privacy-relevant half, and it is pinned by
+  `test_an_owned_accounts_features_are_unchanged`.
+* **Substituting boundary accounts and substituting every account in a view
+  give the identical matrix**, which is simultaneously the statement that no
+  non-boundary account's features were shared.
+
+> **This condition cannot raise the ceiling, by construction.** It shares node
+> features, not rows. An institution's view holds exactly the transactions it
+> held before, so the visibility mask does not move and the per-institution
+> oracle ceiling is **unchanged**. 4.3 can only recover more of its ceiling,
+> never lift it — which is what keeps 4.3a − 4.1 and 4.3b − 4.2 paired against
+> one denominator. An earlier Phase 4 note expected evidence sharing to raise a
+> view's ceiling; that was about a form of exchange that moves **transactions**,
+> and this is not that form.
+
+**Two evaluations, so the two effects separate (D3).** `evidence` (4.3a) scores
+each view with that institution's **own** augmented booster — against 4.1 this
+isolates the evidence. `fedavg_evidence` (4.3b) scores each view with **all K**
+augmented boosters averaged under the 4.2 rule — against 4.2 this isolates the
+evidence under federation. Both use the same boosters and the same shared
+evidence object, so they differ in the scoring rule and in nothing else.
+
+*One implementation note that changed a number.* The shared-feature cache
+holds **float64**, not float32. float32 made the substitution lossy by ~1e-7
+on the two log-amount columns for *every* account — including accounts where
+it must be an exact no-op — so 4.3a would have differed from 4.1 by float noise
+in every node column rather than only where the evidence is genuinely new.
+
+### Stage 4.4: the centralized arm inside the Phase 4 cell grid — implemented 2026-11-15
+
+**Why the stage exists.** Rule 1 pairs conditions per
+`(target, seed, institution)` or per `(target, seed, union)` over *identical*
+cells. The Phase 3 centralized result is not in that shape — it is indexed by
+**model seed**, not by visibility cell — so it cannot be pasted into a Phase 4
+comparison table. This stage re-reports it in the Phase 4 shape: L = 48, the
+frozen 22-point grid, the same seven operating points, the same subsets, the
+same summariser.
+
+**It is the `K = 1` case, not a special path.** A centralized model is
+evaluated by `isolated.evaluate_institution` through a degenerate assignment
+in which every account belongs to institution 0. Then `visible_mask` is
+all-true, `oracle_view_scorer` is the unmasked oracle, and
+`operating_points(k = 1)` makes `total_B` and `per_inst_B` carry the same
+budget `B / 1 = B`. **D4's "for centralized, `total_B` = `per_inst_B` = B"
+therefore falls out of the existing definition** rather than being a special
+case written for this stage. Nothing about tau selection, the grid-edge
+policy, the ceiling or the summariser is re-implemented.
+
+**No retrain.** The Phase 3 boosters are loaded as they are, which is what D4
+asks for. The detection run happens once per model seed and is **replicated**
+across the `(target, seed)` cells with the cell's own seed as the bootstrap
+seed: a centralized model cannot depend on a visibility assignment, because
+the assignment moves accounts between institutions without touching a single
+row. Every row carries `replicated_from_model_seed` and `n_independent_runs`,
+so twelve cells cannot be read as twelve measurements.
+
+**Confirmed from a committed Phase 3 file, not only from session B's report:**
+the centralized oracle ceiling at L = 48 is **0.8928571 — 50 of 56 campaigns —
+identical at all five model seeds** in
+[`docs/reference/evaluate_baseline.csv`](docs/reference/evaluate_baseline.csv).
+That is exactly the union ceiling stage 4.1 predicts and session B measured, so
+the union-ceiling claim now rests on two independent records.
+
+#### O1: which model seeds the centralized arm uses
+
+**STOPPED for a decision. This changes a headline number and D1-D6 does not
+cover it.**
+
+Phase 3's seeds are **model** seeds. Phase 4's are **visibility** seeds, and
+all 96 Phase 4 boosters are trained at model seed **0** — `train_isolated` is
+called with `params=None`, so `XGBParams(seed=0)`. So "the centralized arm at
+three seeds" has three readings, and D4 asks for two things that cannot both
+hold: the Phase 4 scope of **3 seeds**, and reproduction of Phase 3's
+**0.679 / 0.760**, which is a mean over **5** seeds.
+
+Phase 3, centralized, L = 48, test, subset `all`, per model seed:
+
+| Model seed | 0 | 1 | 2 | 3 | 4 | mean of 0-2 | mean of 0-4 |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| campaign recall | 0.696 | 0.661 | 0.696 | 0.661 | 0.679 | **0.6845** | **0.6786** |
+| relative to ceiling | 0.78 | 0.74 | 0.78 | 0.74 | 0.76 | **0.7667** | **0.7600** |
+
+So the README's long-standing "0.679 [0.661, 0.696]" is a **five-seed mean
+with the seed range beside it**, not a confidence interval.
+
+| Policy | Centralized comparator | What it buys, what it costs |
+|---|---|---|
+| **`matched_seed0`** | **0.696 / 0.780** | The only reading in which the arms differ *only* in the condition, since every federated booster is model seed 0. Constant across all 12 cells. Reproduces no Phase 3 headline |
+| `phase4_seeds_as_model_seeds` | 0.6845 / 0.7667 | Fits "3 seeds" literally, but makes centralized the **only** arm whose model changes from cell to cell, so its cell-to-cell spread is model noise where every other arm's is visibility noise |
+| `phase3_five_seeds` | 0.679 / 0.760 | Reproduces the headline exactly. Outside the Phase 4 scope of three seeds |
+
+Implemented as `centralized.MODEL_SEED_POLICIES` with **no default**, so the
+choice cannot be made silently; `model_seed_policy()` raises until one is
+named. **Recommendation: `matched_seed0`.** Under it the centralized
+comparator is 0.780 relative, which widens session B's "0.16-0.26 of relative
+recall available to 4.2" to **0.18-0.28**, and 0.679 / 0.760 stays what it
+already is — the Phase 3 headline, reported beside the Phase 4 number as the
+reproduction reference rather than as the comparator.
+
 ### Reference visibility digests
 
 The visibility search is seeded, so the same commit and environment must
@@ -3554,6 +3756,7 @@ project-root/
       compare_models_clusters.csv     false-alarm cluster shape: the extraction mechanism
       --- phase 4 stage 4.1, session A (2026-11-15) ---
       train_isolated.{md,csv,json}    the 96 isolated boosters: rows, positives, class weights, tiers, timing
+      phase4_unprompted_decisions.md  every Phase 4 choice D1-D6 did not cover, with the alternative rejected
   backend/
     requirements.txt               Python dependencies: pandas, numpy, pyarrow, pyyaml, pytest, fastapi, uvicorn, pydantic
     pyproject.toml                 setuptools packaging for `fraudcamp` (src/ layout) + pytest `fulldata` marker
@@ -5001,6 +5204,16 @@ is recorded here rather than in the suite.
   undemonstrated rather than claimed. The single lookback rests on a
   validation margin that did not survive to test. See
   §[Phase 4 frozen scope](#phase-4-frozen-scope).
+- **Stages 4.2, 4.3 and 4.4 are implemented and tested but have produced no
+  numbers at all.** No dry run on the sample yet, no full-data run, no
+  comparison report. Everything written about them in this README is about
+  what the code does and what the definitions imply, never about a result.
+- **The centralized comparator is undecided ([O1](#o1-which-model-seeds-the-centralized-arm-uses)),
+  and the choice moves it between 0.760 and 0.780 relative recall.** Until it
+  is settled, every Phase 4 figure that compares an arm against centralized —
+  including session B's "0.16-0.26 of relative recall available to 4.2" — is
+  quoted against the Phase 3 five-seed headline, which is **not** the matched
+  comparator. `centralized.model_seed_policy()` raises rather than defaulting.
 - **Stage 4.1's full-data detection numbers cover two of four targets, and
   their reports are not committed yet.** Session B evaluated targets 1.00 and
   0.75; session C evaluates 0.50 and 0.25 and writes the one complete report,
@@ -5178,6 +5391,69 @@ Tagged points in the repository, newest first. Check one out with
 | `v0.1-data-pipeline` | 2026-10-08 | Phase 2 complete, plus the stage 3.0 Kaggle runner. The research pipeline (campaign ground truth, splits, topology groups, institutions, visibility), the artifact export, the read-only FastAPI server, and the full React frontend — 69 backend tests and 48 frontend tests passing. **No models and no experiment results**: the four conditions are defined and the result schema is fixed, but nothing has been trained or run, and the full-data regression numbers are still unverified (that is what stage 3.0's Kaggle run is for). |
 
 ## Changelog
+
+- **2026-11-15 (stages 4.2, 4.3 and 4.4 implemented; D1-D6 recorded; one
+  decision stopped)** — the three remaining Phase 4 arms exist in code and are
+  tested. None has produced a number.
+
+  *D6 first, as instructed.* `uncapped_*` → `per_inst_*` throughout, because
+  session B measured every per-institution budget binding on full data against
+  0 of 8 on the sample. Not back to `budget_*`, which invites comparison
+  against a centralized model's genuinely budgeted B a day while the union
+  spends up to `K × B`. The sample misled for a statable reason: whether a
+  budget binds is a property of **data density**, and thinning the background
+  to 1% is exactly the operation that changes it.
+
+  *4.2 — the FedAvg analogue is score averaging.* Trees have no parameter
+  vector space to average in: discrete split structure, sequential fitting on
+  residuals, and different roots on different views. So the combination happens
+  at the output, with equal weights because unweighted is untuned. The raw
+  featurisation is shared across the K boosters scoring one view — otherwise
+  4.2 costs 8× — and two tests pin that path to **bit equality** against
+  featurising once per booster.
+
+  *4.3 — boundary evidence, and a definitional consequence worth more than the
+  code.* The union of the views holding an account is, for that account, the
+  whole window: visibility is an endpoint rule, so the owner already sees every
+  incident edge, and every node feature is an aggregate over incident edges.
+  That makes the implementation one pass, and it makes the augmentation a
+  **no-op for accounts an institution owns** — what moves is the profile of a
+  boundary counterparty. And because rows do not move, **the ceiling cannot
+  move**: 4.3 can only recover more of its ceiling, never lift it. An earlier
+  note expected exchange to raise a ceiling; that was a form that moves
+  transactions, and this is not it.
+
+  *4.4 — centralized as the `K = 1` case.* Evaluated through a degenerate
+  one-institution assignment, so tau selection, the grid-edge policy, the
+  ceiling and the summariser are the same code as every other arm, and D4's
+  `total_B = per_inst_B = B` falls out of `budget_share(B, 1)` instead of being
+  special-cased. Confirmed from a committed Phase 3 file, not only from session
+  B: the centralized ceiling at L = 48 is **0.8928571, 50 of 56, identical at
+  all five model seeds** — exactly the union ceiling 4.1 predicts.
+
+  *One stop condition fired.* **O1:** Phase 3's seeds are model seeds, Phase
+  4's are visibility seeds, and all 96 Phase 4 boosters are model seed 0. The
+  README's long-standing "0.679 [0.661, 0.696]" turns out to be a **five-seed
+  mean with the seed range beside it**, not a confidence interval — so D4's two
+  requirements (the 3-seed Phase 4 scope, and reproducing 0.679 / 0.760) cannot
+  both hold. Implemented as three named policies with **no default**;
+  recommendation `matched_seed0`, which makes the comparator 0.780 and widens
+  the room for 4.2 to 0.18-0.28.
+
+  *One bug caught by a test that would otherwise have been invisible.* The
+  shared-evidence cache held float32, which made the substitution lossy by
+  ~1e-7 on the log-amount columns for **every** account — including those where
+  it must be an exact no-op — so 4.3a would have differed from 4.1 by float
+  noise in every node column. It holds float64 now.
+
+  *Also:* condition labels settled (`fedavg`, `evidence`, `fedavg_evidence`
+  replacing `fedavg_only` / `fedavg_embedding`, in `constants.CONDITIONS` and
+  the frontend theme); `isolated.run_cell` parameterised over the condition and
+  the scorer so no evaluation logic is duplicated;
+  [`docs/reference/phase4_unprompted_decisions.md`](docs/reference/phase4_unprompted_decisions.md)
+  records every choice D1-D6 did not cover. **19 new tests**
+  (`tests/test_federation_phase4.py`), backend **434 passed / 25 skipped**,
+  frontend 48 passed, `tsc -b` clean.
 
 - **2026-11-15 (stage 4.1 — session B: six cells evaluated, and the stage's own
   prediction overturned)** — the ceiling argument survives full data; the

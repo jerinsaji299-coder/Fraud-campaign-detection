@@ -408,13 +408,17 @@ describe('ResultsPage', () => {
     }
   })
 
-  it('names the four conditions with distinct line styles', async () => {
+  it('names the five conditions with distinct line styles', async () => {
     renderAt(<ResultsPage />)
     const legend = await screen.findByLabelText('Experimental conditions')
+    // Renamed 2026-11-15 with stages 4.2/4.3: there is no embedding anywhere
+    // in the evidence condition - it shares window node features - and the
+    // tree analogue of FedAvg is score averaging.
     expect(within(legend).getByText('Isolated')).toBeInTheDocument()
-    expect(within(legend).getByText('FedAvg only')).toBeInTheDocument()
+    expect(within(legend).getByText('Score averaging')).toBeInTheDocument()
+    expect(within(legend).getByText('+ boundary evidence')).toBeInTheDocument()
     expect(
-      within(legend).getByText('FedAvg + embedding exchange'),
+      within(legend).getByText('Score averaging + evidence'),
     ).toBeInTheDocument()
     expect(within(legend).getByText('Centralized')).toBeInTheDocument()
   })

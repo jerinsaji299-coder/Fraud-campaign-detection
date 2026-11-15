@@ -87,12 +87,20 @@ def _vocabulary(values: pd.Series) -> list[str]:
 def fit_feature_spec(
     train_windows: list,
     lookback_h: int = constants.DEFAULT_LOOKBACK_H,
+    node_override=None,
 ) -> FeatureSpec:
     """Fit vocabularies and the scaler on training windows ONLY.
 
     Passing anything other than training windows here is the single most
     dangerous mistake available in this module, so it is checked rather than
     trusted.
+
+    ``node_override`` is applied to each window's raw node matrix before the
+    scaler statistics are taken, so a spec fitted for an augmented view is
+    fitted on the augmented values. Fitting on the un-augmented ones and
+    scoring on the augmented ones would shift every node column by the
+    difference between a partial and a complete neighbourhood, which is the
+    whole quantity stage 4.3 is trying to measure.
     """
     if not train_windows:
         raise ValueError("no training windows: cannot fit a feature spec")
@@ -129,6 +137,8 @@ def fit_feature_spec(
             continue
         edges, edge_names = _raw_edge_features(window.transactions, spec)
         accounts, nodes, node_names = _raw_node_features(window.transactions)
+        if node_override is not None:
+            nodes = node_override(window, accounts, nodes, node_names)
         edge_blocks.append(edges)
         node_blocks.append(nodes)
         spec.edge_feature_names = edge_names
@@ -357,17 +367,27 @@ class WindowFeatures:
         return matrix, names
 
 
-def build_window_features(window, spec: FeatureSpec) -> WindowFeatures:
-    """Features for one window, using a spec fitted on training windows."""
+def _raw_parts(window, spec: FeatureSpec, node_override=None) -> dict:
+    """Everything about a window that does not depend on a spec's SCALER.
+
+    Separated out so one window can be featurised once and then scaled by
+    several specs (`build_window_features_multi`). The vocabularies are the
+    only part of `spec` used here, which is exactly why that reuse is sound
+    and why it is guarded by a vocabulary check.
+    """
     txns = window.transactions
     if len(txns) == 0:
         raise ValueError(f"window at {window.t} is empty: nothing to featurise")
 
     edge_matrix, edge_names = _raw_edge_features(txns, spec)
     accounts, node_matrix, node_names = _raw_node_features(txns)
-
-    edge_matrix = _apply_scaler(edge_matrix, spec.edge_mean, spec.edge_std)
-    node_matrix = _apply_scaler(node_matrix, spec.node_mean, spec.node_std)
+    if node_override is not None:
+        node_matrix = node_override(window, accounts, node_matrix, node_names)
+        if node_matrix.shape[0] != len(accounts):
+            raise ValueError(
+                f"node_override returned {node_matrix.shape[0]} rows for "
+                f"{len(accounts)} accounts at {window.t}"
+            )
 
     position = {account: i for i, account in enumerate(accounts)}
     edge_index = np.vstack(
@@ -376,25 +396,88 @@ def build_window_features(window, spec: FeatureSpec) -> WindowFeatures:
             np.fromiter((position[a] for a in txns["dst"]), dtype=np.int64, count=len(txns)),
         ]
     )
-
-    return WindowFeatures(
-        t=window.t,
-        lookback_h=window.lookback_h,
-        split=window.split,
-        accounts=accounts,
-        node_features=node_matrix,
-        edge_features=edge_matrix,
-        edge_index=edge_index,
-        labels=txns["Is Laundering"].to_numpy(dtype=np.int64),
-        campaign_ids=(
+    return {
+        "accounts": accounts,
+        "edge_raw": edge_matrix,
+        "edge_names": edge_names,
+        "node_raw": node_matrix,
+        "node_names": node_names,
+        "edge_index": edge_index,
+        "labels": txns["Is Laundering"].to_numpy(dtype=np.int64),
+        "campaign_ids": (
             txns["campaign_id"].to_numpy(dtype=np.int64)
             if "campaign_id" in txns
             else np.full(len(txns), -1, dtype=np.int64)
         ),
-        timestamps=txns["ts"].to_numpy(),
-        edge_feature_names=edge_names,
-        node_feature_names=node_names,
+        "timestamps": txns["ts"].to_numpy(),
+    }
+
+
+def _scaled(window, spec: FeatureSpec, parts: dict) -> WindowFeatures:
+    """Apply one spec's scaler to already-computed raw parts."""
+    return WindowFeatures(
+        t=window.t,
+        lookback_h=window.lookback_h,
+        split=window.split,
+        accounts=parts["accounts"],
+        node_features=_apply_scaler(parts["node_raw"], spec.node_mean, spec.node_std),
+        edge_features=_apply_scaler(parts["edge_raw"], spec.edge_mean, spec.edge_std),
+        edge_index=parts["edge_index"],
+        labels=parts["labels"],
+        campaign_ids=parts["campaign_ids"],
+        timestamps=parts["timestamps"],
+        edge_feature_names=parts["edge_names"],
+        node_feature_names=parts["node_names"],
     )
+
+
+def vocabularies_agree(specs) -> bool:
+    """Do these specs produce identical RAW features?
+
+    The raw features depend on a spec only through the three one-hot
+    vocabularies, so this is the exact condition under which a single raw
+    featurisation can be shared between them.
+    """
+    specs = list(specs)
+    if not specs:
+        return False
+    first = specs[0]
+    return all(
+        spec.payment_currencies == first.payment_currencies
+        and spec.receiving_currencies == first.receiving_currencies
+        and spec.payment_formats == first.payment_formats
+        for spec in specs[1:]
+    )
+
+
+def build_window_features(window, spec: FeatureSpec, node_override=None) -> WindowFeatures:
+    """Features for one window, using a spec fitted on training windows."""
+    return _scaled(window, spec, _raw_parts(window, spec, node_override))
+
+
+def build_window_features_multi(
+    window, specs, node_override=None
+) -> list[WindowFeatures]:
+    """One window under several specs, with the raw work done once.
+
+    Stage 4.2 scores a single institution's view with all K boosters. The
+    expensive half of featurisation - the groupbys behind the node features
+    and the one-hot blocks behind the edge features - does not depend on which
+    booster is about to score, only the standardisation does. So the raw parts
+    are built once and each spec's scaler is applied to them.
+
+    This is an optimisation and never a different answer: when the specs'
+    vocabularies disagree the raw features genuinely differ, and the function
+    falls back to featurising once per spec. A test pins that both paths give
+    bit-identical matrices.
+    """
+    specs = list(specs)
+    if not specs:
+        raise ValueError("no specs: nothing to featurise for")
+    if not vocabularies_agree(specs):
+        return [build_window_features(window, spec, node_override) for spec in specs]
+    parts = _raw_parts(window, specs[0], node_override)
+    return [_scaled(window, spec, parts) for spec in specs]
 
 
 def _apply_scaler(matrix: np.ndarray, mean: list[float], std: list[float]) -> np.ndarray:

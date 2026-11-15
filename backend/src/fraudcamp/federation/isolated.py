@@ -775,6 +775,7 @@ def evaluate_institution(
     points: list[dict] | None = None,
     progress=None,
     scorer=None,
+    condition: str = CONDITION,
 ) -> InstitutionEvaluation:
     """Tau, ceiling and every operating point for one institution.
 
@@ -831,7 +832,7 @@ def evaluate_institution(
     tau_f1, curve = evaluation.select_tau(
         full_df, camp, pattern_df, accounts_by_campaign, scorer=scorer,
         tau_grid=evaluation.MODEL_TAU_GRID, lookback_h=lookback_h, seed=seed,
-        scorer_name="%s_i%d" % (CONDITION, model.institution), cache_scores=False,
+        scorer_name="%s_i%d" % (condition, model.institution), cache_scores=False,
     )
     out.tau_f1 = tau_f1
     out.tau_curve = curve
@@ -897,7 +898,7 @@ def evaluate_institution(
             result = evaluation.evaluate_split(
                 full_df, camp, pattern_df, accounts_by_campaign, split=split,
                 scorer=scorer, tau=float(tau), lookback_h=lookback_h, seed=seed,
-                scorer_name="%s_i%d" % (CONDITION, model.institution),
+                scorer_name="%s_i%d" % (condition, model.institution),
             )
             out.results[(name, split)] = result
             out.outcomes[(name, split)] = result.outcomes
@@ -995,14 +996,39 @@ def run_cell(
     params: xgb_baseline.XGBParams | None = None,
     progress=None,
     models: dict[int, IsolatedModel] | None = None,
+    condition: str = CONDITION,
+    scorer_for=None,
+    trainer=None,
 ) -> dict:
-    """The whole isolated condition for one ``(target, seed, lookback)``.
+    """One ``(target, seed, lookback)`` cell of a per-institution condition.
 
     Returns row lists ready for CSV, so the local development script and the
     Kaggle runner assemble the same report from the same code and cannot
     drift apart. ``models`` skips training and uses boosters trained (and
     saved) earlier, which is how the Kaggle run splits a cell across two
     sessions.
+
+    **Why this is parameterised rather than copied.** Stages 4.2 and 4.3
+    differ from 4.1 in exactly one place: the scorer applied to an
+    institution's view. Tau selection, the seven operating points, the
+    grid-edge policy, the per-institution ceiling, both pooled means and the
+    union are the same machinery, and they have to *be* the same machinery -
+    rule 1 pairs conditions per ``(target, seed, institution)``, which is only
+    meaningful if the two sides were measured identically. Two copies of this
+    function would be two chances to diverge silently.
+
+    * ``condition`` is the label written into every row.
+    * ``scorer_for(institution, models, assignment)`` returns that
+      institution's **inner** scorer. The default is the isolated one: the
+      institution's own booster behind its own visibility mask. 4.2 returns an
+      average over all K boosters; 4.3 returns a scorer that featurises with
+      shared boundary-account evidence.
+    * ``trainer(full_df, assignment, lookback_h, params, progress)`` returns
+      the models when none are supplied. The default trains isolated boosters.
+
+    The scorer factory returns the inner scorer and this function owns the
+    ``CachingScorer`` around it, because the union's cluster pass walks the
+    same windows again and a fresh scorer there would re-featurise everything.
     """
     from .. import visibility
 
@@ -1017,7 +1043,7 @@ def run_cell(
     )
 
     common = {
-        "condition": CONDITION,
+        "condition": condition,
         "model": "xgboost",
         "variant": "xgboost_centralized",
         "visibility_target": target,
@@ -1027,7 +1053,7 @@ def run_cell(
 
     if models is None:
         say("  training %d institutions ..." % assignment.k)
-        models = train_all_isolated(
+        models = (trainer or train_all_isolated)(
             result.full_df, assignment, lookback_h, params, progress=say
         )
     else:
@@ -1045,9 +1071,12 @@ def run_cell(
     say("  evaluating ...")
     # one warm score cache per institution, owned here because the union's
     # cluster pass walks the same windows again
+    inner_scorer = scorer_for or (
+        lambda institution, models, assignment: models[institution].scorer(assignment)
+    )
     cached_scorers = {
         institution: evaluation.CachingScorer(
-            models[institution].scorer(assignment), lookback_h
+            inner_scorer(institution, models, assignment), lookback_h
         )
         for institution in sorted(models) if models[institution].trained
     }
@@ -1058,6 +1087,7 @@ def run_cell(
             result.accounts_by_campaign, models[institution], assignment,
             lookback_h=lookback_h, seed=seed, splits=splits, points=points,
             progress=say, scorer=cached_scorers.get(institution),
+            condition=condition,
         )
 
     institution_rows = []
@@ -1143,7 +1173,7 @@ def run_cell(
                     res = _as_result(
                         split, ev.outcomes[(name, split)], EMPTY_ACCOUNTING,
                         lookback_h, seed,
-                        "%s_i%d_untrained" % (CONDITION, institution),
+                        "%s_i%d_untrained" % (condition, institution),
                     )
 
                 for subset in constants.TEST_SUBSETS:
@@ -1227,7 +1257,7 @@ def run_cell(
 
             union_res = _as_result(
                 split, union_campaign_outcomes, accounting, lookback_h, seed,
-                "%s_union" % CONDITION,
+                "%s_union" % condition,
             )
             union_oracle_outcomes, _ = union_outcomes({
                 i: ev.oracle_results[split].outcomes for i, ev in evaluations.items()

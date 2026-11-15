@@ -189,12 +189,18 @@ def build_training_data(
     full_df: pd.DataFrame,
     lookback_h: int = constants.DEFAULT_LOOKBACK_H,
     spec: features.FeatureSpec | None = None,
+    node_override=None,
 ) -> TrainingData:
     """Pool every rule-3-valid training window into one matrix.
 
     The feature spec is fitted on these same windows unless one is passed
     in, and `fit_feature_spec` refuses anything that is not a training
     window, so a spec can never be fitted on validation or test data.
+
+    ``node_override`` is stage 4.3's hook: it replaces the raw node features
+    before scaling, and it is passed to `fit_feature_spec` as well, so the
+    spec is fitted on the same augmented values the model will be trained and
+    scored on.
     """
     times = windows.training_detection_times(lookback_h)
     if not times:
@@ -205,12 +211,14 @@ def build_training_data(
     if not train_windows:
         raise ValueError("every training window is empty: nothing to train on")
 
-    spec = spec or features.fit_feature_spec(train_windows, lookback_h)
+    spec = spec or features.fit_feature_spec(
+        train_windows, lookback_h, node_override=node_override
+    )
 
     matrices, labels, weights, per_window = [], [], [], []
     feature_names: list[str] = []
     for window in train_windows:
-        built = features.build_window_features(window, spec)
+        built = features.build_window_features(window, spec, node_override)
         matrix, names = built.xgboost_matrix()
         feature_names = names
         weight = built.class_weight()
@@ -256,7 +264,43 @@ class TrainedBaseline:
     def dropped_prefixes(self) -> tuple[str, ...]:
         return MODEL_VARIANTS[self.variant]
 
-    def scorer(self):
+    def predict_built(self, built: features.WindowFeatures) -> np.ndarray:
+        """Scores for an already-featurised window.
+
+        Split out from `scorer` because stages 4.2 and 4.3 need the
+        featurisation and the prediction at different moments: 4.2 features a
+        view once and predicts with K boosters, 4.3 features with a node
+        override. One implementation of "turn WindowFeatures into scores"
+        keeps the column dropping and the name check in a single place.
+        """
+        import xgboost as xgb
+
+        matrix, names = built.xgboost_matrix()
+        if self.dropped_prefixes:
+            mask = keep_mask(names, self.dropped_prefixes)
+            matrix = matrix[:, mask]
+            names = [n for n, keep in zip(names, mask) if keep]
+        if names != self.feature_names:
+            raise ValueError(
+                "feature names at scoring time differ from training; the "
+                "spec and the model do not belong to each other"
+            )
+        scores = self.booster.predict(
+            xgb.DMatrix(matrix, feature_names=self.feature_names)
+        )
+        return np.asarray(scores, dtype=np.float64)
+
+    def predict_window(
+        self, window_transactions: pd.DataFrame, t, node_override=None
+    ) -> np.ndarray:
+        """Featurise this window with this model's spec, then score it."""
+        if len(window_transactions) == 0:
+            return np.zeros(0, dtype=np.float64)
+        window = as_window(window_transactions, t, self.lookback_h)
+        built = features.build_window_features(window, self.spec, node_override)
+        return self.predict_built(built)
+
+    def scorer(self, node_override=None):
         """A `scorer(window_transactions, t)` for `evaluation.evaluate_split`.
 
         Returns one probability per transaction, in the window's own row
@@ -264,32 +308,9 @@ class TrainedBaseline:
         `src`/`dst`. The scorer is handed only the window, so it cannot see
         past `t` even by accident.
         """
-        import xgboost as xgb
 
         def score(window_transactions: pd.DataFrame, t) -> np.ndarray:
-            if len(window_transactions) == 0:
-                return np.zeros(0, dtype=np.float64)
-            window = windows.Window(
-                t=pd.Timestamp(t),
-                lookback_h=self.lookback_h,
-                split=windows.split_of_detection_time(t),
-                transactions=window_transactions,
-            )
-            built = features.build_window_features(window, self.spec)
-            matrix, names = built.xgboost_matrix()
-            if self.dropped_prefixes:
-                mask = keep_mask(names, self.dropped_prefixes)
-                matrix = matrix[:, mask]
-                names = [n for n, keep in zip(names, mask) if keep]
-            if names != self.feature_names:
-                raise ValueError(
-                    "feature names at scoring time differ from training; the "
-                    "spec and the model do not belong to each other"
-                )
-            scores = self.booster.predict(
-                xgb.DMatrix(matrix, feature_names=self.feature_names)
-            )
-            return np.asarray(scores, dtype=np.float64)
+            return self.predict_window(window_transactions, t, node_override)
 
         return score
 
@@ -331,6 +352,56 @@ class TrainedBaseline:
             variant=meta.get("variant", "xgboost_centralized"),
             training=meta.get("training", {}),
         )
+
+
+def as_window(window_transactions: pd.DataFrame, t, lookback_h: int):
+    """Wrap a scorer's `(transactions, t)` pair back into a `Window`.
+
+    One place, so a caller that needs to featurise inside a scorer cannot
+    disagree with another about the split or the lookback.
+    """
+    return windows.Window(
+        t=pd.Timestamp(t),
+        lookback_h=lookback_h,
+        split=windows.split_of_detection_time(t),
+        transactions=window_transactions,
+    )
+
+
+def predict_window_multi(
+    models: list["TrainedBaseline"],
+    window_transactions: pd.DataFrame,
+    t,
+    node_override=None,
+) -> np.ndarray:
+    """Scores from several boosters for one window: `(n_models, n_edges)`.
+
+    The raw featurisation is shared across the models when their specs allow
+    it, which is what makes stage 4.2 affordable - the node groupbys and
+    one-hot blocks are the expensive half and they do not depend on which
+    booster scores next. `build_window_features_multi` falls back to
+    per-spec featurisation when the vocabularies differ, so this is never a
+    different answer from scoring one model at a time.
+
+    Every model must share the lookback, because the window handed in was cut
+    for one lookback and a model trained at another would silently be scoring
+    the wrong amount of history.
+    """
+    if not models:
+        raise ValueError("no models: nothing to average")
+    lookbacks = {m.lookback_h for m in models}
+    if len(lookbacks) != 1:
+        raise ValueError(f"models disagree about the lookback: {sorted(lookbacks)}")
+    n = len(window_transactions)
+    if n == 0:
+        return np.zeros((len(models), 0), dtype=np.float64)
+    window = as_window(window_transactions, t, models[0].lookback_h)
+    built = features.build_window_features_multi(
+        window, [m.spec for m in models], node_override
+    )
+    return np.vstack([
+        model.predict_built(b).reshape(1, -1) for model, b in zip(models, built)
+    ])
 
 
 def train_baseline(
