@@ -1163,6 +1163,152 @@ def test_a_low_edge_is_flagged_for_the_f1_point_and_not_for_a_budget(
         assert point not in ev.tau_edges, "a loose budget is not a finding"
 
 
+def test_one_excluded_institution_leaves_both_means_over_the_other_seven(
+    monkeypatch, _module_world
+):
+    """POLICY, in the configuration the full-data run actually produced.
+
+    Session B excluded exactly one cell: seed 0, institution 0, the F1 point,
+    rejected at the top of the grid. The all-eight test above cannot catch an
+    off-by-one here, because there every mean goes to zero. This one pins:
+
+    * the excluded institution is out of **both** pooled means, not just the
+      relative one - a tau at the top of the grid means there is no operating
+      point, so there is no recall to report either;
+    * it is **named** in `undefined_institutions`, which is what "excluded and
+      named" means in the reporting policy;
+    * it is **not** absorbed as recall 0, which would report a measurement
+      that was never made;
+    * and the institution's OTHER points are untouched - only the point whose
+      tau hit the edge is undefined.
+
+    The denominator assertion rides on `campaign_recall`, because in a mini
+    world every institution's own oracle ceiling is 0, which empties the
+    relative mean for a second and unrelated reason. The relative row is still
+    checked for the thing this test is about: institution 0 is named undefined
+    there too, and is not in that mean either.
+    """
+    result, _ = _module_world
+    high = max(evaluation.MODEL_TAU_GRID)
+    mid = 0.99
+    assert mid in evaluation.MODEL_TAU_GRID and mid not in (
+        min(evaluation.MODEL_TAU_GRID), high
+    ), "the stand-in tau must be interior, or this tests the wrong thing"
+
+    def select_tau(*args, **kwargs):
+        # only institution 0, exactly as in session B
+        tau = high if kwargs.get("scorer_name", "").endswith("_i0") else mid
+        return tau, [{"tau": tau, "campaign_f1": 1.0, "false_alarms_per_day": 0.0}]
+
+    monkeypatch.setattr(isolated.evaluation, "select_tau", select_tau)
+    monkeypatch.setattr(
+        isolated.evaluation, "select_tau_for_budget", lambda curve, budget: mid
+    )
+    cell = isolated.run_cell(
+        result, target=1.0, seed=0, lookback_h=48, splits=("test",),
+    )
+
+    n_total = len(cell["institution_rows"])
+    assert n_total >= 3, "too few institutions for this to mean anything"
+    assert cell["flags"]["tau_at_high_edge"] == [(0, "f1")], (
+        "exactly one (institution, point) pair should have hit the top"
+    )
+
+    seen = set()
+    for row in cell["pooled_rows"]:
+        named = str(row["undefined_institutions"]).split(",")
+        if row["operating_point"] == "f1":
+            seen.add(row["metric"])
+            # excluded from this mean, whatever else is, and named in it
+            assert "0" in named, row
+            assert row["n_institutions_in_mean"] <= n_total - 1, row
+            if row["metric"] == "campaign_recall":
+                assert row["n_institutions_in_mean"] == n_total - 1, row
+                assert named == ["0"], "only institution 0 should be undefined"
+                assert row["min_institution"] != 0 and row["max_institution"] != 0, (
+                    "an excluded institution must not appear in the spread "
+                    "either - the spread is taken over the same set as the mean"
+                )
+        elif row["operating_point"] == "total_10":
+            # the same institution, at a point whose tau was interior
+            if row["metric"] == "campaign_recall":
+                assert row["n_institutions_in_mean"] == n_total, row
+                assert named == [""], row
+    assert seen == {"campaign_recall", "recall_relative_to_own_ceiling"}, (
+        "both pooled metrics must be emitted for the excluded point"
+    )
+
+    # institution 0 at f1: undefined and named, never scored
+    f1_rows = [
+        r for r in cell["summary_rows"]
+        if r["institution"] == 0 and r["operating_point"] == "f1"
+    ]
+    assert f1_rows, "the excluded cell must still be listed"
+    for row in f1_rows:
+        assert row["defined"] is False
+        assert row["rejected_tau"] == high
+        assert row["undefined_reason"] == isolated.TAU_BEYOND_GRID
+        assert row.get("campaign_recall") is None, (
+            "an undefined point must not carry a recall, not even 0"
+        )
+
+
+def test_a_reloaded_cell_carries_its_exclusions_into_the_report():
+    """Sessions B and C split the twelve cells, and C writes the one report.
+
+    C reloads B's cells from CSV, so B's excluded cells have to be re-derived
+    from those rows: otherwise the session that writes the authoritative
+    report over all twelve would not name the cells it excluded, and would
+    exit 0 while reporting a tau at a grid edge.
+
+    The round trip through CSV is what makes this delicate - `tau_edge` comes
+    back as NaN rather than None, and a boolean column that picked up a blank
+    comes back as the STRING "False", which is truthy.
+    """
+    import sys
+    from pathlib import Path
+
+    sys.path.insert(
+        0, str(Path(__file__).resolve().parent.parent / "scripts" / "kaggle")
+    )
+    from kaggle_runner import _reloaded_cell_edges
+
+    high = max(evaluation.MODEL_TAU_GRID)
+    reloaded = {
+        "tau_rows": [
+            {"visibility_target": 1.0, "seed": 0, "institution": 0,
+             "operating_point": "f1", "tau_edge": "high"},
+            {"visibility_target": 1.0, "seed": 0, "institution": 0,
+             "operating_point": "total_10", "tau_edge": float("nan")},
+            {"visibility_target": 1.0, "seed": 0, "institution": 1,
+             "operating_point": "f1", "tau_edge": float("nan")},
+        ],
+        "institution_rows": [
+            {"visibility_target": 1.0, "seed": 0, "institution": 0,
+             "tau_f1": high, "tau_at_grid_edge": True},
+            # the string a CSV round trip can produce, which must NOT count
+            {"visibility_target": 1.0, "seed": 0, "institution": 1,
+             "tau_f1": 0.99, "tau_at_grid_edge": "False"},
+            {"visibility_target": 1.0, "seed": 0, "institution": 2,
+             "tau_f1": 0.99, "tau_at_grid_edge": float("nan")},
+        ],
+    }
+
+    high_edge, edge_taus = _reloaded_cell_edges(reloaded)
+
+    assert high_edge == [{
+        "visibility_target": 1.0, "seed": 0, "institution": 0,
+        "operating_point": "f1",
+    }], high_edge
+    assert len(edge_taus) == 1, edge_taus
+    assert edge_taus[0]["institution"] == 0
+    assert edge_taus[0]["edge"] == "high"
+    assert edge_taus[0]["tau"] == high
+
+    # and a cell with nothing at an edge contributes nothing
+    assert _reloaded_cell_edges({"tau_rows": [], "institution_rows": []}) == ([], [])
+
+
 def test_run_cell_separates_the_two_edges_in_its_flags(monkeypatch, _module_world):
     """What a runner acts on: high-edge pairs are excluded, low-edge F1 taus
     are a stop signal, and the no-affordable-tau list stays separate."""

@@ -585,14 +585,21 @@ def binding_summary(flags: dict[int, bool | None]) -> dict:
     """How many of a pooled budget number's cells had a **binding** budget.
 
     A budget binds when it is what set the threshold. It does **not** bind
-    when the most sensitive tau on the grid already fits inside it, which is
-    common for an isolated institution: it sees a fraction of the traffic, so
-    a nominal 100 alarms a day may be far more than it could raise even at
-    its loosest setting. The centralized model at the same nominal budget is
-    usually in the opposite position. Pooling the two into one "recall at B a
-    day" would compare a budgeted operating point against an unbudgeted one,
-    so every pooled budget number carries this count and the README states it
-    whenever the binding fraction differs materially between conditions.
+    when the most sensitive tau on the grid already fits inside it - the
+    budget is then looser than anything the detector could do, and "recall at
+    B a day" is not really an operating point at B.
+
+    **Whether that happens is a property of the data density, not of being an
+    isolated institution.** On the 1% sample no per-institution budget bound
+    at any target, because an institution saw too little traffic to raise even
+    10 alarms a day; on the full data, ~100x denser, session B measured every
+    per-institution budget binding in every cell. So this count is not a
+    standing caveat about isolated institutions - it is a per-cell measurement,
+    and it reversed between the sample and the full data. Pooling a binding
+    cell with a non-binding one into a single "recall at B a day" would average
+    a budgeted operating point with an unbudgeted one, so every pooled budget
+    number carries this count and the README reports it rather than assuming
+    which way it fell.
 
     ``None`` entries are cells with no budget at all - the F1 point - and are
     excluded from both the numerator and the denominator, so an F1 row
@@ -633,27 +640,59 @@ def budget_share(budget: float, k: int = constants.K_INSTITUTIONS) -> float:
 #: 2026-11-14 before any federated arm existed, so that the comparison point
 #: cannot be said to have been picked after seeing which arm it favoured.
 #:
-#: They are the only two points where the threshold is determined by
-#: something. ``f1`` is set by the frozen selection rule on validation.
-#: ``total_10`` is set by a budget that actually binds. The ``uncapped_*``
-#: points are set by neither - see the naming note in `operating_points`.
+#: ``f1`` is set by the frozen selection rule on validation. ``total_10``
+#: is the only budget point at which the **union's summed** alarm volume is
+#: held to the same B a centralized model is held to, so it is the only one
+#: where a condition comparison is not also a spending comparison.
+#:
+#: That is the whole justification and it is **structural**, so it did not
+#: move when the sample's binding result did. An earlier draft of this note
+#: justified the pair differently - "the only two points where the threshold
+#: is determined by something", `total_10` being "set by a budget that
+#: actually binds" while the per-institution points were set by neither. On
+#: the full data the per-institution budgets bind too (see the naming note in
+#: `operating_points`), so that phrasing would now pick out four points
+#: rather than two. The designation stands on the matched-volume reading,
+#: which never depended on which budgets happened to bind.
 PRIMARY_POINTS = ("f1", "total_10")
 
 
 def operating_points(k: int = constants.K_INSTITUTIONS) -> list[dict]:
     """The seven points a cell is evaluated at.
 
-    **Naming.** The points that give each institution the *full* budget B are
-    called ``uncapped_*`` and not ``budget_*``, because for an isolated
-    institution they are **not budgeted operating points**: an institution
-    seeing a fraction of the traffic cannot raise B alarms a day even at the
-    most sensitive threshold on the grid, so the budget never binds and the
-    threshold is set by the grid's floor rather than by the budget. Measured
-    on the sample: the budget binds in **0 of 8** institutions at every
-    target at ``uncapped_10/50/100``, against 5-7 of 8 at ``total_10``. The
-    name records that; the per-cell ``budget_binding`` flag remains the
-    authoritative answer, and on the full data a cell that does bind will say
-    so there.
+    **Naming, and why ``uncapped_*`` is now the wrong word.** These points
+    give each institution the *full* budget B. They were renamed from
+    ``budget_*`` to ``uncapped_*`` on 2026-11-14 for two reasons, and **one of
+    them has since reversed**:
+
+    * *Reversed.* On the 1% sample the budget bound in **0 of 8** institutions
+      at every target: an institution seeing a fraction of the traffic could
+      not raise B alarms a day even at the grid's most sensitive threshold, so
+      the threshold was set by the grid floor and the point was not a budgeted
+      operating point at all. On the **full data** it binds - session B
+      measured ``budget_binding`` True for every per-institution budget point
+      in every cell, ``binding_fraction`` 1.0. The background is ~100x denser,
+      so the grid floor now raises far more than 100 alarms a day and the
+      budget is what sets the threshold. The word "uncapped" asserts the
+      opposite of the data.
+    * *Standing.* ``budget_10`` invites a reader to compare it against a
+      centralized model's genuinely budgeted 10/day. That comparison lets the
+      union spend 8 x B, and it is the error the binding count exists to
+      prevent. So reverting the name would be a worse error than the current
+      one, not a fix: the point comparable to a centralized ``budget_10`` is
+      ``total_10``, which is why that is the PRIMARY point.
+
+    The conclusion is that the label should carry the **structure** (each
+    institution at its own full B, so the union spends K x B) and never a
+    measured finding, because findings move with the data and labels should
+    not. ``own_10/50/100`` does that. The rename is **deferred until stage 4.1
+    is complete**: the per-cell CSVs under ``isolated_cells/`` carry the
+    literal operating-point string, and a session that assembles its report
+    from a mixture of its own cells and earlier sessions' would then emit two
+    names for one point. See the README decision log for the migration.
+
+    Either way the per-cell ``budget_binding`` flag is the authoritative
+    answer, and it is the thing to read rather than the name.
 
     ``total_*`` give each institution ``B / K`` so the **union's** summed
     volume meets B, which is the only reading in which a budget constrains
@@ -1135,11 +1174,12 @@ def run_cell(
             pooled_recall = pooled_mean(recall_by_institution, tiers)
             pooled_relative = pooled_mean(relative_by_institution, tiers)
             # How many of the cells this mean is taken over actually had a
-            # BINDING budget. An isolated institution sees a fraction of the
-            # traffic and is often under its budget without the budget doing
-            # any work, while the centralized model at the same nominal
-            # budget is not; a pooled "recall at B a day" that hides this
-            # compares a budgeted operating point against an unbudgeted one.
+            # BINDING budget. Which way this falls is a property of the data
+            # density, not of the condition: on the 1% sample no
+            # per-institution budget bound at all, and on the full data every
+            # one of them does. A pooled "recall at B a day" that hides the
+            # mixture averages a budgeted operating point with an unbudgeted
+            # one, so the count travels with every pooled budget number.
             for metric, pooled, values in (
                 ("campaign_recall", pooled_recall, recall_by_institution),
                 (

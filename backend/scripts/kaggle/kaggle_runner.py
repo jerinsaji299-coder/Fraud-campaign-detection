@@ -4944,6 +4944,48 @@ def _edge_tau_rows(institution_rows: list[dict]) -> list[dict]:
     return rows
 
 
+def _reloaded_cell_edges(
+    reloaded: dict[str, list[dict]]
+) -> tuple[list[dict], list[dict]]:
+    """A reloaded cell's excluded cells and edge taus, read back off its rows.
+
+    The same two lists `run_cell` produces for a freshly evaluated cell, so a
+    report assembled from a mixture of the two treats them identically. Read
+    from the cell's own CSVs because those are what the report is being built
+    from: anything derived elsewhere could disagree with the rows.
+
+    `tau_edge` and `tau_at_grid_edge` survive the CSV round trip as NaN and as
+    numpy bools, so both are coerced rather than trusted - a `"False"` string
+    would be truthy and would report an edge on every cell.
+    """
+    def truthy(value) -> bool:
+        if value is None or value is True or value is False:
+            return bool(value)
+        if isinstance(value, str):
+            return value.strip().lower() in {"true", "1", "yes"}
+        try:
+            return bool(value) and value == value  # NaN is not equal to itself
+        except Exception:
+            return False
+
+    high = [
+        {
+            "visibility_target": row["visibility_target"],
+            "seed": row["seed"],
+            "institution": row["institution"],
+            "operating_point": row["operating_point"],
+        }
+        for row in reloaded.get("tau_rows", [])
+        if isinstance(row.get("tau_edge"), str)
+        and row["tau_edge"].strip().lower() == "high"
+    ]
+    institution_rows = [
+        {**row, "tau_at_grid_edge": truthy(row.get("tau_at_grid_edge"))}
+        for row in reloaded.get("institution_rows", [])
+    ]
+    return high, _edge_tau_rows(institution_rows)
+
+
 def command_train_isolated(args: argparse.Namespace) -> int:
     """Train one booster per institution per (target, seed): stage 4.1.
 
@@ -5160,12 +5202,38 @@ def command_evaluate_isolated(args: argparse.Namespace) -> int:
             done = cells_dir / f"{name}_summary.csv"
             if done.exists() and not args.force:
                 print(f"\n=== {name}: already evaluated, loading ===", flush=True)
+                reloaded: dict[str, list[dict]] = {}
                 for key, suffix in keys.items():
                     path = cells_dir / f"{name}_{suffix}.csv"
                     if path.exists():
-                        collected[key].extend(
-                            pd.read_csv(path).to_dict("records")
-                        )
+                        rows = pd.read_csv(path).to_dict("records")
+                        reloaded[key] = rows
+                        collected[key].extend(rows)
+                # A reloaded cell's EXCLUSIONS are part of the report this
+                # session writes, so they have to be re-derived from its rows
+                # rather than left behind with the session that evaluated it.
+                # Without this, the session that writes the authoritative
+                # report over all 12 cells would not name the excluded cells
+                # among them, and would exit 0 while reporting a tau at a grid
+                # edge - the one thing the exit code exists to say.
+                cell_high, cell_edges = _reloaded_cell_edges(reloaded)
+                high_edge.extend(cell_high)
+                edge_taus.extend(cell_edges)
+                cell_reports.append({
+                    "target": target, "seed": seed, "lookback_h": lookback,
+                    "reloaded_from": str(done.name),
+                    "flags": {
+                        "tau_at_high_edge": sorted(
+                            (row["institution"], row["operating_point"])
+                            for row in cell_high
+                        ),
+                    },
+                })
+                if cell_high:
+                    print(
+                        f"  reloaded with {len(cell_high)} excluded "
+                        "(institution, operating point) cell(s)", flush=True
+                    )
                 continue
 
             print(
@@ -5432,6 +5500,12 @@ def command_evaluate_isolated(args: argparse.Namespace) -> int:
             "beyond the grid, as in stage 3.3; a LOW edge means the most "
             "sensitive threshold on the grid is still the best one. Send them "
             "back and decide the grid before these numbers are used."
+        )
+        print(
+            "An edge tau in a RELOADED cell is reported here too, so a session "
+            "that assembles the report from earlier sessions' cells exits 3 for "
+            "their edges as well as its own. That is not a new failure - it is "
+            "this report describing itself."
         )
         return 3
     return 0

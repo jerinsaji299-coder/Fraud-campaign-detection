@@ -1053,8 +1053,19 @@ end, so the work is split where it is already resumable:
 | Session | Command | Inputs | Estimate | Status |
 |---|---|---|---:|---|
 | **A** | `train-isolated` (all 12 cells, 96 boosters) | IBM dataset | 2.5-4 h | **done 2026-11-15: 2.25 h, exit 0** |
-| **B** | `evaluate-isolated --targets 1.0,0.75` (6 cells) | dataset + **A** | **2.5-5.5 h** | next |
-| **C** | `evaluate-isolated` (no `--targets`: evaluates 0.50 and 0.25, **reloads** B's six) | dataset + **A** + **B** | **2.5-5.5 h** | after B |
+| **B** | `evaluate-isolated --targets 1.0,0.75` (6 cells) | dataset + **A** | **2.5-5.5 h** | **done 2026-11-15: exit 3, one cell excluded at the grid top** |
+| **C** | `evaluate-isolated` (no `--targets`: evaluates 0.50 and 0.25, **reloads** B's six) | dataset + **A** + **B** | **2.5-5.5 h** | next |
+
+**Session B's outcome, and what it means for C.** Exit **3** with one
+`(institution, operating point)` cell EXCLUDED — seed 0, institution 0, the F1
+point, rejected at 0.9999999 — which is a reportable finding, not a failure.
+**C will exit 3 again for that same cell**, because C assembles its report
+from B's reloaded cells plus its own and reports their exclusions as its own.
+That is the report describing itself. Two other things B found that change how
+C is read: the per-institution budgets **do** bind on the full data
+(`binding_fraction = 1.0`, against 0 of 8 on the sample), and two cells chose
+an F1 tau of 0.1, one step above the grid floor — so a **low**-edge stop is a
+live possibility at the lower targets C runs.
 
 **Session A, measured.** 8,094s over the instrumented steps (8,130s in the
 log), peak **5,353 MB**, 83.8s mean per booster (79.1-111.1s), 96 of 96 cells
@@ -1158,7 +1169,7 @@ print("train-isolated exit code:", code)
 !python -c "import pandas as pd; d = pd.read_csv('/kaggle/working/train_isolated.csv'); print(d.groupby('tier').size()); print(d[['n_rows','n_positive']].describe().loc[['min','mean','max']])"
 ```
 
-### Session B — evaluating the first two targets, CPU, commit mode
+### Session B — evaluating the first two targets, CPU, commit mode — DONE 2026-11-15
 
 **Inputs:** the IBM dataset **and session A's output**.
 
@@ -1278,39 +1289,125 @@ print("evaluate-isolated exit code:", code)
 ### Session C — the remaining targets and the complete report, CPU, commit mode
 
 **Inputs:** the IBM dataset, **session A's output**, **session B's output**.
+Six cells, C1-C6. B's staging cell and B's input assertion merge into **C3**,
+because they guard the same failure and the merged check is the stronger one:
+B's cells missing is not a crash but a silent **re-evaluation of all twelve**,
+which does not fit in a 12-hour session.
 
 ```python
 # C1, C2 - as B1 and B2 (dataset path; clone and install)
-# C3     - as B3, VERBATIM: copy A's boosters and assert all 96 are present,
-#          complete and loadable. Run it FIRST, so a missing input fails in
-#          the first minute rather than after the six cells C does evaluate.
-# C4     - as B4, VERBATIM: the scope and grid pre-flight, after C3.
 ```
 
 ```python
-# C5 - bring B's finished cells across, so this session reloads them in
-#      seconds instead of re-evaluating them, and writes ONE complete report.
-import pathlib, shutil, subprocess
+# C3 - stage BOTH inputs and assert BOTH, before anything expensive. A's 96
+#      boosters, exactly as B3, and B's six finished cells.
+#
+#      The assertion on B's cells is the one that earns this cell. A missing
+#      booster makes the run fail; missing CELLS make it succeed slowly - it
+#      re-evaluates the six targets B already did, so the session needs ~5-11 h
+#      instead of ~2.5-5.5 and runs out of the 12-hour limit having written no
+#      complete report. Cheap to check, expensive to discover at hour nine.
+import pathlib, shutil, subprocess, sys
 
+sys.path.insert(0, "/kaggle/temp/repo/backend/src")
+
+# --- A: the boosters ---------------------------------------------------
+found = sorted(subprocess.run(
+    ["find", "/kaggle/input", "-maxdepth", "6", "-type", "d",
+     "-path", "*/models/isolated"],
+    capture_output=True, text=True, check=True).stdout.split())
+print("isolated model trees found:", found)
+assert found, "no models/isolated under /kaggle/input - attach session A's output"
+
+dest = pathlib.Path("/kaggle/working/models/isolated")
+dest.mkdir(parents=True, exist_ok=True)
+for tree in found:
+    for cell in sorted(pathlib.Path(tree).iterdir()):
+        target = dest / cell.name
+        if not target.exists():
+            shutil.copytree(cell, target)
+
+cells = sorted(d for d in dest.iterdir() if d.is_dir())
+REQUIRED = ("xgb_model.json", "feature_spec.json", "model_meta.json")
+trained, untrained, broken = [], [], []
+for cell in cells:
+    if (cell / "untrained.json").exists():
+        untrained.append(cell.name)       # a real outcome, not a failure
+        continue
+    missing = [name for name in REQUIRED if not (cell / name).exists()]
+    empty = [
+        name for name in REQUIRED
+        if (cell / name).exists() and (cell / name).stat().st_size == 0
+    ]
+    if missing or empty:
+        broken.append((cell.name, missing, empty))
+    else:
+        trained.append(cell.name)
+
+print(f"{len(cells)} institution-cells: trained {len(trained)}, "
+      f"untrained (recorded) {len(untrained)}, broken {len(broken)}")
+for name, missing, empty in broken:
+    print("  BROKEN", name, "missing:", missing, "empty:", empty)
+assert len(cells) == 96, f"expected 96 institution-cells, found {len(cells)}"
+assert not broken, f"{len(broken)} booster(s) incomplete - re-run session A"
+
+from fraudcamp.models import xgb_baseline
+sample = trained[:: max(1, len(trained) // 8)]
+for name in sample:
+    model = xgb_baseline.TrainedBaseline.load(dest / name)
+    assert model.lookback_h == 48, (name, model.lookback_h)
+    assert len(model.feature_names) == 66, (name, len(model.feature_names))
+print(f"  spot-loaded {len(sample)} boosters, all at L = 48 with 66 features")
+
+# --- B: the six finished cells -----------------------------------------
 found = sorted(subprocess.run(
     ["find", "/kaggle/input", "-maxdepth", "6", "-type", "d",
      "-name", "isolated_cells"],
     capture_output=True, text=True, check=True).stdout.split())
 print("finished-cell directories found:", found)
-dest = pathlib.Path("/kaggle/working/isolated_cells")
-dest.mkdir(parents=True, exist_ok=True)
+cells_dir = pathlib.Path("/kaggle/working/isolated_cells")
+cells_dir.mkdir(parents=True, exist_ok=True)
 for tree in found:
     for item in sorted(pathlib.Path(tree).glob("*.csv")):
-        target = dest / item.name
+        target = cells_dir / item.name
         if not target.exists():
             shutil.copy2(item, target)
-done = sorted({p.name.split("_summary")[0] for p in dest.glob("*_summary.csv")})
-print(len(done), "cells already evaluated:", done)
+
+SUFFIXES = ("institutions", "taus", "ceilings", "summary", "pooled",
+            "union", "outcomes")
+expected = [f"t{round(t * 100):03d}_s{seed}" for t in (1.0, 0.75)
+            for seed in (0, 1, 2)]
+done = sorted({p.name.split("_summary")[0] for p in cells_dir.glob("*_summary.csv")})
+print(f"{len(done)} cells staged: {done}")
+missing_cells = [name for name in expected if name not in done]
+incomplete = [
+    (name, suffix) for name in done for suffix in SUFFIXES
+    if not (cells_dir / f"{name}_{suffix}.csv").exists()
+]
+for name, suffix in incomplete:
+    print(f"  INCOMPLETE {name}: no _{suffix}.csv")
+assert not missing_cells, (
+    f"session B's cells {missing_cells} are not staged. Attach session B's "
+    "output, or C re-evaluates them and will not finish inside 12 h. If B "
+    "genuinely finished fewer, split C with --targets instead of running it "
+    "blind."
+)
+assert not incomplete, f"{len(incomplete)} cell file(s) missing - re-send B's output"
+print("  all six of B's cells complete; C will reload them in seconds")
 ```
 
 ```python
-# C6 - all four targets: the six from B load in seconds, the six at 0.50 and
+# C4 - as B4, VERBATIM: the scope and grid pre-flight, after C3.
+```
+
+```python
+# C5 - all four targets: the six from B load in seconds, the six at 0.50 and
 #      0.25 are evaluated. ~2.5-5.5 h. This writes the complete report.
+#
+#      Expect exit 3, not 0: B's excluded cell is part of the report this
+#      session writes, so this session reports it. Read the message - "cells
+#      EXCLUDED" is that known finding, while "STOPPING, and NOT recording" is
+#      the low-edge rule firing on a NEW cell.
 import subprocess
 code = subprocess.run(
     ["python", "scripts/kaggle/kaggle_runner.py", "evaluate-isolated",
@@ -1321,7 +1418,7 @@ print("evaluate-isolated exit code:", code)
 ```
 
 ```python
-# C7 - the headline, read back from the files rather than from the log.
+# C6 - the headline, read back from the files rather than from the log.
 #      The mean NEVER prints alone: the eight institutions are not
 #      exchangeable (institution 0 holds the dataset's largest bank by
 #      construction and carried 44% more training positives), so the median
@@ -1350,7 +1447,7 @@ print(union[(union.eval_split == "test") & (union.test_subset == "all")]
 |---|---|---|
 | **0** | every cell finished, no tau at a grid edge | send the files back |
 | **3**, with `STOPPING, and NOT recording` | a chosen **F1** tau sat at the **bottom** of the grid. At 0.102% prevalence this should not happen; the cell was **not** recorded and the session stopped there | send the log back. Do **not** re-run with `--allow-low-edge-tau` — that flag exists for the thinned sample, and using it here would record a cell the policy says to investigate |
-| **3**, with cells `EXCLUDED` for a tau at the top | the optimum lies beyond the grid for those `(institution, operating point)` cells. They are **undefined**, excluded from the pooled means and listed with their rejected tau; every other cell is intact | send the files back. This is a reportable finding, not a failure |
+| **3**, with cells `EXCLUDED` for a tau at the top | the optimum lies beyond the grid for those `(institution, operating point)` cells. They are **undefined**, excluded from the pooled means and listed with their rejected tau; every other cell is intact. **A session that RELOADS earlier cells reports their exclusions as its own**, so session C exits 3 for session B's excluded cell as well as any of its own — the exit code describes the report that session wrote, not only the cells it evaluated | send the files back. This is a reportable finding, not a failure |
 | anything else | a real error | send the log back |
 
 ### What to send back
@@ -1359,6 +1456,13 @@ From the final session: `phase4_isolated.md`, `phase4_isolated.json`, and the
 seven `phase4_isolated_*.csv` files, plus `train_isolated.{csv,json,md}` from
 session A. They go to `docs/reference/`, and
 `phase4_isolated_outcomes.csv` is what 4.2 and 4.3 are paired against.
+
+**If the run stopped on a LOW-edge tau there is no combined report**, because
+that check returns before the report is written. The finished cells are still
+on disk and are the valuable output — send **`isolated_cells/`** (all seven
+CSVs per cell) and the log instead, and a resumed session picks up from the
+cell that stopped it. Send `isolated_cells/` whenever a session ends for any
+reason other than exit 0 or exit 3-with-cells-excluded.
 
 ### What to expect, and what would be surprising
 
@@ -1379,13 +1483,31 @@ session A. They go to `docs/reference/`, and
   every time. Expect it at or near the top of the per-institution tables too,
   and read the pooled mean with the range beside it rather than as a typical
   bank.
-* **The union's oracle ceiling equal to the centralized ceiling**, exactly,
-  at every target. This is the stage 4.1 argument from the frozen visibility
-  rule, and this run is the first chance to confirm it on the full data. A
-  disagreement would mean the argument is wrong, and would matter more than
-  anything else in the report.
-* **Non-binding budgets.** An isolated institution sees a fraction of the
-  traffic, so the budget may not bind for many cells; every pooled budget
-  number prints how many of its cells were actually budgeted.
-* **Nothing quotable before this runs.** Every stage 4.1 figure currently in
-  the README is from the 1% sample and is marked development-only.
+* **The union's oracle ceiling equal to the centralized ceiling — CONFIRMED
+  by session B at target 1.00**, exactly: 0.8928571, 50 of 56 campaigns,
+  against the centralized L = 48 ceiling of 0.893. This is the stage 4.1
+  argument from the frozen visibility rule and it now holds on full data.
+  Expect the same at 0.75, 0.50 and 0.25. A disagreement at any target would
+  mean the argument is wrong and would matter more than anything else in the
+  report.
+* **But NOT equal recall — and that is the result so far.** At the same
+  ceiling the union recovers 0.500 / 0.600 against centralized 0.760. The
+  union's deficit is **scoring**, not visibility, and it leaves 0.16-0.26 of
+  relative recall for 4.2 to act on. Expect the lower targets to show the
+  same shape; what would be surprising is the gap closing as fragmentation
+  increases.
+* **Budgets that DO bind — REVERSED from the sample by session B.** Every
+  per-institution budget point came back binding, `binding_fraction = 1.0`,
+  against 0 of 8 on the sample: the full background is ~100x denser, so the
+  grid floor is far above 100 alarms a day. The `uncapped_*` name therefore
+  says the wrong thing and becomes `own_*` after this stage completes. Read
+  `budget_binding` per cell, not the column name.
+* **A low-edge F1 tau is possible at 0.50 and 0.25.** Two of B's cells chose
+  0.1, one step above the floor, and each institution sees more of each
+  campaign at the lower targets. If a cell lands on 0.05 the session stops
+  without recording it and exits 3 — that is the rule working. Report it; do
+  **not** re-run with `--allow-low-edge-tau`.
+* **Nothing from 0.50 or 0.25 is quotable before this runs.** Those figures
+  are still from the 1% sample and are marked development-only, and session
+  B's two targets are reported in the README without committed CSVs behind
+  them until this session's reports land.

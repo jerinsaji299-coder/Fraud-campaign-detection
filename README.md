@@ -52,6 +52,8 @@ git clone https://github.com/jerinsaji299-coder/Fraud-campaign-detection.git
         - [What was built](#what-was-built)
         - [Measured on the 1% sample — development only](#measured-on-the-1-sample--development-only-not-for-quotation)
         - [Session A: the 96 boosters](#the-full-data-run-session-a-the-96-boosters--done-2026-11-15)
+        - [Session B: the ceiling holds, the recall does not](#the-full-data-run-session-b-the-ceiling-holds-the-recall-does-not--done-2026-11-15)
+        - [Session C: proposed](#the-full-data-run-session-c-proposed-not-yet-run)
         - [What the 96 boosters say](#what-the-96-boosters-say-before-any-detection-is-run)
         - [The institutions are not exchangeable](#the-institutions-are-not-exchangeable-institution-0-holds-the-hub-bank)
 20. [Version history](#version-history)
@@ -164,7 +166,7 @@ feature set only, three seeds, one lookback**. See
 | Stage | Description | Status |
 |---|---|---|
 | 4.0 | Institution-split data: per-institution views of every window, and the account features each institution can compute from its own view alone | **done** — `federation/views.py`, 31 tests, per-institution training loads measured on the sample, visibility cross-check exact on all 370 campaigns |
-| 4.1 | **The `isolated` condition**: each institution trained and scoring on its own view alone, with its **own** oracle ceiling per target, and the two pooled numbers (per-institution mean, and the union over institutions) | **built and tested** — `federation/isolated.py`, 51 tests, backend 413 passed / 25 skipped; `train-isolated` and `evaluate-isolated` runner subcommands, resumable. Full-data **session A (training) done 2026-11-15**: 96 boosters, exit 0; sessions B and C (evaluation) next. Detection numbers so far are from the 1% sample only. §[stage 4.1](#stage-41-the-isolated-condition--approved-and-implemented-2026-11-14) |
+| 4.1 | **The `isolated` condition**: each institution trained and scoring on its own view alone, with its **own** oracle ceiling per target, and the two pooled numbers (per-institution mean, and the union over institutions) | **built and tested** — `federation/isolated.py`, 53 tests, backend 415 passed / 25 skipped; `train-isolated` and `evaluate-isolated` runner subcommands, resumable. Full-data **sessions A (training) and B (6 of 12 cells) done 2026-11-15**: 96 boosters exit 0; B exit 3 with one cell excluded at the grid top. **B's result: the union's ceiling equals the centralized ceiling exactly, and the union still recovers 0.16-0.26 less of it — the deficit is scoring, not visibility** ([session B](#the-full-data-run-session-b-the-ceiling-holds-the-recall-does-not--done-2026-11-15)). Session C, the remaining two targets and the complete report, is next. §[stage 4.1](#stage-41-the-isolated-condition--approved-and-implemented-2026-11-14) |
 | 4.2 | `fedavg`: what "FedAvg" means for a tree model, then implementation and tests, reusing the Phase 3 evaluation code unchanged | not started — the design question moved here from 4.1 |
 | 4.3 | `fedavg_exchange`: what crosses the institution boundary, then the gate — centralized vs `fedavg_exchange` at the 100 bin, full data. A failed gate stops the sweep | not started |
 | 4.4 | Kaggle runner subcommands, resumable per (condition, bin, seed) | not started |
@@ -2589,7 +2591,10 @@ small one: on the sample **166 of 224** `(institution, operating point)` cells
 chose tau = 0.05, of which **163 are budget points** and only **3 are F1
 points**. Treating every low edge alike would have excluded or stopped on
 three quarters of the matrix for the uninteresting reason that `uncapped_100`
-is easy to satisfy.
+is easy to satisfy. *On the full data that row fires far less: session B
+reports every per-institution budget binding, so those taus are no longer at
+the floor. The refinement was still the right call — it was made to avoid
+stopping on a property of the thinned sample, and that is what it did.*
 
 A high-edge cell is excluded for exactly the reason an unaffordable budget is,
 and is reported the same way: *a detector that could not be operated at a
@@ -2650,7 +2655,7 @@ is beyond what can be resolved, so the operating point was not found.
 |---|---|
 | `federation/isolated.py` | the condition: the masking scorer, per-institution training, the per-institution oracle ceiling, the union (outcomes, and the deduplicating cluster pass), the two pooled means, the seven operating points, and `run_cell`, which both runners call so the local and Kaggle reports come from one code path |
 | `constants.PHASE4_SEEDS`, `constants.PHASE4_LOOKBACK_H` | the frozen scope **in code** — `[0, 1, 2]` and `48` — so a runner cannot drift from this README. `evaluate-isolated` refuses more than one lookback outright |
-| `tests/test_federation_isolated.py` | **51 tests**, including the grid-edge policy, the budget-binding audit, the primary-point designation and the pooled spread's denominator and tie-breaking; backend suite **413 passed, 25 skipped** |
+| `tests/test_federation_isolated.py` | **53 tests**, including the grid-edge policy at both one-of-eight and eight-of-eight, the reload path's carry-over of a cell's exclusions, the budget-binding audit, the primary-point designation and the pooled spread's denominator and tie-breaking; backend suite **415 passed, 25 skipped** |
 | `scripts/run_isolated.py` | the condition on the 1% sample, for development |
 | `scripts/run_institution_composition.py` | why institution 0 is not like the other seven: bank composition per institution, and campaign accounts owned against campaign accounts visible. The reproducible evidence for [not exchangeable](#the-institutions-are-not-exchangeable-institution-0-holds-the-hub-bank) |
 | `train-isolated` | one booster per institution per `(target, seed)`, saved as it finishes, **resumable per institution** |
@@ -2675,20 +2680,39 @@ day are not together inside 10 a day.
 realized test volume is not the budget: at `total_10` the union realizes
 12.4-18.3 a day across the four targets. That is reported, not corrected.*
 
-**Why they are called `uncapped_*` and not `budget_*`.** For an isolated
-institution they are **not budgeted operating points at all**. An institution
-seeing a fraction of the traffic cannot raise 10 alarms a day even at the most
-sensitive threshold on the grid, so the budget never binds and the threshold
-is set by the grid's floor instead. Measured on the sample: the budget binds
-in **0 of 8** institutions at every target at `uncapped_10/50/100`, against
-**5-7 of 8** at `total_10`. The name says so, and `budget_binding` remains the
-authoritative answer per cell — a full-data cell that does bind will say so
-there.
+**Why they are called `uncapped_*`, and why that word is now wrong.** The
+name was chosen on 2026-11-14 for two reasons and **one of them has since
+reversed.** On the 1% sample these were not budgeted operating points at all:
+an institution seeing a fraction of the traffic could not raise 10 alarms a
+day even at the grid's most sensitive threshold, so the budget bound in **0 of
+8** institutions at every target against **5-7 of 8** at `total_10`, and the
+threshold was set by the grid floor. On the **full data** every one of them
+binds — session B reports `budget_binding = True` and `binding_fraction = 1.0`
+throughout — because a ~100× denser background puts the grid floor far above
+100 alarms a day. The word asserts the opposite of the data.
+
+The reason that *stands* is the other one: `budget_10` invites comparison
+against a centralized model's genuinely budgeted 10/day, which would let the
+union spend 8 × B. So reverting is a worse error than the current name, not a
+fix — the point comparable to a centralized `budget_10` is `total_10`, which
+is why that is PRIMARY. The lesson is that a label should carry the
+**structure** and never a measured finding, since findings move with the data.
+The rename to `own_10/50/100` and its migration are in the [decision
+log](#decision-log), deferred until stage 4.1 is complete because the per-cell
+CSVs carry the literal string and a report assembled from two sessions'
+cells would otherwise carry two names for one point. `budget_binding` is the
+authoritative per-cell answer either way, and is the thing to read.
 
 **The two PRIMARY points, designated 2026-11-14 before any federated arm
-existed:** **`f1`** and **`total_10`**. They are the only two where the
-threshold is determined by *something* — the frozen selection rule on
-validation, and a budget that actually binds. Every Phase 4 comparison
+existed:** **`f1`** and **`total_10`**. `f1` is set by the frozen selection
+rule on validation; `total_10` is the only budget point at which the
+**union's summed** alarm volume is held to the same B a centralized model is
+held to, so it is the only one where a condition comparison is not also a
+spending comparison. That justification is structural and did not move when
+the sample's binding result did — an earlier draft of this line called them
+"the only two where the threshold is determined by *something*", `total_10`
+being the one with a budget that actually binds, which on the full data would
+now pick out four points rather than two. Every Phase 4 comparison
 between conditions is made at these two; the other five are reported and are
 not comparison points. Fixing this in advance is the same discipline as equal
 tuning effort: a comparison point chosen after seeing which arm it favoured
@@ -2800,8 +2824,19 @@ exists to measure therefore runs in **opposite directions** for the two
 pooled numbers, which is exactly why they are reported separately and never
 averaged into one figure.
 
-**Reading 2 — the one that reframes the stage: each institution already
-achieves most of its *own* ceiling.** Test split, pooled per-institution:
+**Reading 2 — WITHDRAWN on full data. On the sample, each institution
+already achieves most of its *own* ceiling.** Test split, pooled
+per-institution:
+
+> **This reading does not survive the full data, and its prediction about 4.2
+> is withdrawn.** On the full data an institution reaches **0.306-0.369** of
+> its own ceiling, not 0.62-0.89, and the union reaches 0.500-0.600 of a
+> ceiling *identical* to the centralized model's 0.760. The premise below —
+> that an institution is already a strong detector on what it can see, so only
+> evidence sharing has room — is a sample artefact of the ~3.3% positive rate.
+> The table is kept because the prediction was made in advance and this is
+> where it was made. Read it with [session
+> B](#the-full-data-run-session-b-the-ceiling-holds-the-recall-does-not--done-2026-11-15).
 
 | Target | recall | relative to its **own** ceiling | union recall | union, relative to ceiling |
 |---|---:|---:|---:|---:|
@@ -2828,16 +2863,26 @@ clearest evidence the headroom was real: the missing operating point was
 missing because the grid stopped too early, not because the detector could
 not be operated.
 
-**And the budgets mostly do not bind, exactly as predicted.** At the
-per-institution budgets, `uncapped_10/50/100`, the budget binds in **0 of 8**
-institutions at every target: an institution that sees a fraction of the
-traffic cannot raise 10 alarms a day even at the most sensitive threshold on
-the grid, so "recall at 10 FA/day" is not a budgeted operating point for it
-at all. Only the matched-total points bind, and only at the tightest:
-**5-7 of 8** at `total_10`, **0-2** at `total_50`, **0** at `total_100`. This
-is what the `budget_binding` count exists to make visible — the centralized
-model at the same nominal budget will be in the opposite position, and the
-two must not be averaged into one "recall at B a day".
+**And on the sample the budgets mostly do not bind — which did NOT hold on
+full data.** At the per-institution budgets, `uncapped_10/50/100`, the budget
+binds in **0 of 8** institutions at every target: an institution that sees a
+fraction of the traffic cannot raise 10 alarms a day even at the most
+sensitive threshold on the grid, so "recall at 10 FA/day" is not a budgeted
+operating point for it at all. Only the matched-total points bind, and only at
+the tightest: **5-7 of 8** at `total_10`, **0-2** at `total_50`, **0** at
+`total_100`.
+
+> **Reversed on full data.** Session B reports every per-institution budget
+> point binding, `binding_fraction = 1.0`. A ~100× denser background puts the
+> grid floor well above 100 alarms a day, so the budget sets the threshold
+> rather than the floor. Whether a budget binds is a property of **data
+> density**, not of being an isolated institution — which is exactly why
+> `binding_fraction` is measured per cell and reported rather than assumed.
+> See [session B](#the-full-data-run-session-b-the-ceiling-holds-the-recall-does-not--done-2026-11-15).
+
+This is what the `budget_binding` count exists to make visible: a binding cell
+and a non-binding one must not be averaged into one "recall at B a day",
+whichever way round the two conditions fall.
 
 Deduplication is not cosmetic either: the union sheds **80-138** duplicate
 clusters per cell at targets 0.75 and below, against **3-8** at target 1.0 —
@@ -3113,7 +3158,131 @@ condition is measuring. The unweighted mean over a named, fixed panel,
 reported with its spread, is the honest estimator — and the union is reported
 beside it precisely because it does not average institutions at all.
 
-#### The full-data run, sessions B and C: proposed, not yet run
+#### The full-data run, session B: the ceiling holds, the recall does not — done 2026-11-15
+
+Six cells, targets **1.00** and **0.75** at all three seeds, reloaded by
+session C rather than re-run. Exit **3**, for one excluded cell — a reportable
+outcome of the grid-edge policy, not a failure.
+
+> **Provenance.** The figures in this subsection are read off session B's CSVs
+> and were reported into this README before those CSVs were committed; B's
+> reports cover two of four targets, so the complete set lands in
+> `docs/reference/` after session C and these numbers are to be re-checked
+> against it then. Every other figure in this README cites a committed file.
+
+**1. The union's ceiling equals the centralized ceiling, exactly. The stage's
+structural argument survives full data.** The union's test oracle recall is
+**0.8928571** — 50 of 56 campaigns — at target 1.00 in both reported seeds,
+against the centralized L = 48 ceiling of **0.893**. Not close: the same
+number. This is the first confirmation on full data of the claim §5 rests on —
+that eight institutions, between them, can in principle reach every campaign a
+centralized model can reach, because a campaign's detectable component always
+has an account whose institution is an endpoint of both of its edges. The
+sample showed it; the full data shows it with 100× the background.
+
+**2. And the union recovers far less of that ceiling than the centralized
+model does. That is the result.** Test split, target 1.00, relative to the
+relevant ceiling:
+
+| Detector | seed 0 | seed 1 | raw campaign recall |
+|---|---:|---:|---|
+| one institution alone, against **its own** ceiling | 0.306 | 0.369 | — |
+| the **union**, against the union ceiling | **0.500** | **0.600** | 0.446 / 0.536 |
+| **centralized**, against the same ceiling | **0.760** | **0.760** | 0.679 |
+
+**The union reaches the same ceiling and converts it into 0.16-0.26 less
+relative recall.** Those two facts together localize the deficit: it is *not*
+a visibility deficit, because the ceilings are identical and a ceiling is
+exactly what visibility determines. What differs is how much of the reachable
+set each arm's **scorer** actually finds. The gap is scoring, not structure.
+
+*The reported figures are internally consistent, which is the only check
+available before the CSVs land: 0.446 / 0.8928571 = 0.4995 and
+0.536 / 0.8928571 = 0.6003 and 0.679 / 0.8928571 = 0.7605, reproducing the
+three relative values to rounding.*
+
+**3. This CONTRADICTS the prediction this stage wrote down, and the
+contradiction is the useful part.** [Reading 2 on the
+sample](#measured-on-the-1-sample--development-only-not-for-quotation) found
+each institution already reaching **0.62-0.89** of its own ceiling and
+concluded: an institution's problem is not that it is a weak detector on what
+it can see, it is that it cannot see — so sharing **model knowledge**
+(`fedavg`) addresses a part that is already near saturation, and only sharing
+**evidence** (`fedavg_exchange`) addresses what is missing.
+
+On the full data an institution reaches **0.306-0.369** of its own ceiling,
+roughly **half** the sample's fraction, and the union reaches 0.500-0.600 of a
+ceiling that is *identical* to the centralized one. So the premise is wrong on
+full data: an institution is *also* a weak detector on what it can see, and
+the union's shortfall sits entirely in scoring. Consequence for 4.2 and 4.3,
+stated before either runs:
+
+* **`fedavg` now has measured room.** There is **0.16-0.26 of relative
+  recall** between the union and the centralized model at unchanged
+  visibility. Sharing model knowledge is exactly the mechanism that could
+  close a scoring gap, and the sample's reading said this room did not exist.
+* The earlier expectation that a high union floor would leave 4.2 **little to
+  do** is withdrawn. It was a sample artefact of the same kind as the
+  positive-rate and spread artefacts already recorded: at a ~3.3% positive
+  rate a crude detector looks near-ceiling, and at 0.102% it does not.
+* It does **not** follow that `fedavg_exchange` has less room. Evidence
+  sharing raises a view's ceiling, which these numbers do not bear on. The
+  two conditions now have distinct, separately measurable targets rather than
+  one being pre-emptively explained away.
+
+*Not yet pinned:* the hand-off did not name the operating point these recall
+figures were read at, and it matters — at `total_10` the union is volume-matched
+to the centralized model, while at a per-institution budget point the union
+spends up to 8 × B and a shortfall would be a stronger result still. The
+figures above are therefore recorded as a localization of the deficit, and the
+comparison is not quoted at a named operating point until the CSVs are
+committed. Seed 2's figures were also not in the hand-off.
+
+**4. The per-institution budgets DO bind on full data — the opposite of the
+sample, and the `uncapped_*` name now says the wrong thing.** Every
+per-institution budget point in every reported cell came back
+`budget_binding = True` with `binding_fraction = 1.0`, against **0 of 8 at
+every target** on the 1% sample. The mechanism is the one that has explained
+every other sample/full-data reversal here: the full background is ~100×
+denser, so the grid's most sensitive threshold now raises far more than 100
+alarms a day, and the budget is what sets the threshold rather than the grid
+floor. The flag is sound — `select_tau_for_budget` returns the *lowest
+affordable* tau, so a chosen tau above the floor means the floor was
+unaffordable — and `budget_binding` was built to be the authoritative per-cell
+answer precisely so the name would not have to be. See [the naming
+decision](#decision-log) for what happens to the label and when.
+
+**5. One cell was excluded, and the grid cannot be extended to rescue it.**
+Seed 0, institution 0, the **F1** point: the chosen tau was rejected at
+**0.9999999**, the top of the grid. Policy applied as fixed in advance —
+undefined, **excluded from both pooled means**, listed with its rejected tau,
+never scored 0 — leaving that one pooled mean over seven institutions and
+naming institution 0 in `undefined_institutions`.
+
+This is a **representability** limit, not a short grid. The grid's tail is the
+decimal ladder `1 - 1e-k`, and `1 - 1e-7` is its last rung that float32 keeps
+distinct from 1.0: the next rung down, `1 - 1e-8`, *is* 1.0 in float32. Exactly
+one float32 value lies between the grid top and 1.0 — `1 - 6.0e-8` — and the
+grid stops short of it deliberately, because a threshold that close to 1.0
+would keep whichever scores happen to round to exactly 1.0, which depends on
+the build and the hardware. So the F1-optimal threshold for that cell is not
+representable, and `MODEL_TAU_GRID` is already at its useful maximum. What
+this points at is the one thing the grid's own docstring says to look at when
+the top edge is hit: the **class weighting** — 435-4,015 on the full data —
+which crushes scores against 1. That is a design decision, recorded here and
+not changed mid-stage.
+
+**6. A low-edge F1 tau is now a live risk for session C.** Two cells chose an
+F1 tau of **0.1**, one grid step above the bottom: seed 0 institution 3, and
+seed 1 institution 4. At targets 0.50 and 0.25 each institution sees more of
+each campaign, which pushes the optimum lower still, so a cell may land on
+**0.05** and stop the run. If it does, that is the rule working as designed:
+the cell is **not** recorded, the session exits 3, and it gets reported rather
+than re-run with `--allow-low-edge-tau`, which exists for the thinned sample
+alone. The cells finished before it keep their files, so a resumed session
+picks up from there.
+
+#### The full-data run, session C: proposed, not yet run
 
 Three CPU sessions in commit mode, cell by cell in
 [`scripts/kaggle/run_on_kaggle.md` §5l](backend/scripts/kaggle/run_on_kaggle.md),
@@ -3122,8 +3291,15 @@ with the estimates below and no GPU quota consumed:
 | Session | Command | Inputs | Estimate | Status |
 |---|---|---|---:|---|
 | **A** | `train-isolated` — 96 boosters | the IBM dataset | 2.5-4 h | **done, 2.25 h, exit 0** |
-| **B** | `evaluate-isolated --targets 1.0,0.75` — 6 cells | dataset + A | **2.5-5.5 h** | next |
-| **C** | `evaluate-isolated` — evaluates 0.50 and 0.25, **reloads** B's six, writes the complete report | dataset + A + B | **2.5-5.5 h** | after B |
+| **B** | `evaluate-isolated --targets 1.0,0.75` — 6 cells | dataset + A | **2.5-5.5 h** | **done, exit 3 — one cell excluded at the grid top** |
+| **C** | `evaluate-isolated` — evaluates 0.50 and 0.25, **reloads** B's six, writes the complete report | dataset + A + B | **2.5-5.5 h** | next |
+
+Session C will exit **3** as well, and that is correct rather than a new
+failure: it assembles its report from B's reloaded cells together with its
+own, so B's excluded cell is part of the report C writes and C reports it.
+That was [a defect until 2026-11-15](#decision-log) — the reload path carried
+the rows but not the exclusions, so the session writing the authoritative
+report would have been the one session not to name them.
 
 Three rather than one because the total is **7-14 CPU hours** against a
 12-hour session limit: one session would fit the optimistic end and lose
@@ -3160,10 +3336,13 @@ rather than the run.
 
 | Date | Decision | Reason | Evidence |
 |---|---|---|---|
+| 2026-11-15 | **Recorded, from session B: the union's ceiling equals the centralized ceiling exactly, and the union still recovers 0.16-0.26 less of it. The deficit is SCORING, not visibility** — and [Reading 2's prediction](#measured-on-the-1-sample--development-only-not-for-quotation) that a near-ceiling floor would leave 4.2 little to do is **withdrawn** | Union test oracle recall **0.8928571** (50/56) at target 1.00, identical to the centralized L = 48 ceiling; union relative recall 0.500 / 0.600 against centralized 0.760. Identical ceilings mean identical visibility, so what differs is what each arm's scorer finds inside the reachable set. On the sample an institution reached 0.62-0.89 of its own ceiling and the conclusion was that only evidence sharing had room; on full data it reaches 0.306-0.369, so `fedavg` has **measured** room at unchanged visibility. Keeping the withdrawn reading in place, where it was written in advance, rather than deleting it | session B CSVs, uncommitted pending session C; §[session B](#the-full-data-run-session-b-the-ceiling-holds-the-recall-does-not--done-2026-11-15) |
+| 2026-11-15 | **The `uncapped_10/50/100` name is wrong and becomes `own_10/50/100`, but the rename is DEFERRED until stage 4.1 is complete** | Session B measured `binding_fraction = 1.0` for every per-institution budget point: the budgets **do** bind on full data, against 0 of 8 on the sample, so "uncapped" asserts the opposite of the data. Reverting to `budget_*` would be worse, not a fix — it invites comparison against a centralized model's budgeted 10/day while the union spends 8 × B, which is what `total_10` exists to avoid. `own_*` carries the structure (each institution at its own full B) and no finding, which is the actual lesson: a label must not encode a measurement. Deferred because `isolated_cells/*.csv` store the literal operating-point string and session C assembles its report from B's cells plus its own, so renaming now would put two names for one point in one report. **Migration, after C:** rename in `operating_points`, rewrite the string in the 12 cached cell CSVs, re-run `evaluate-isolated` (every cell cached, so it reloads and re-emits the combined report in minutes), update the tables | `federation/isolated.py` `operating_points`; `phase4_isolated_taus.csv` `budget_binding`; §[session B](#the-full-data-run-session-b-the-ceiling-holds-the-recall-does-not--done-2026-11-15) |
+| 2026-11-15 | **Defect fixed before session C: a RELOADED cell's exclusions are re-derived from its rows, so the session that writes the authoritative report names every excluded cell in it and its exit code describes the report it wrote** | Sessions B and C split the 12 cells and C writes the one report. The reload path re-read the rows but left `high_edge`, `edge_taus` and the per-cell provenance behind with the session that evaluated them, so C would have exited **0** while reporting B's cell that was excluded at the grid top, and would not have **named** it — the one thing "excluded and named" requires, in the only report that matters. Found while confirming the grid-edge policy had been applied as agreed. Same class as the session-B `sys.path` defect: created by splitting one run across sessions, invisible on the sample | `scripts/kaggle/kaggle_runner.py` `_reloaded_cell_edges`; `tests/test_federation_isolated.py` (2 new tests) |
 | 2026-11-15 | **Recorded: the eight institutions are NOT exchangeable, and institution 0 is the hub holder by construction. The LEVEL of the isolated per-institution mean is therefore not interpretable on its own — only differences against 4.2 and 4.3, paired per institution, are.** This is stated beside the numbers themselves (§5(a), the head of the measured subsection, the generated report's preamble) and not only in Known limitations; §5(a)'s earlier phrasing "what does a typical bank achieve alone" is removed. The unweighted mean over the fixed panel is kept, and **every pooled mean now carries its median, min and max with the institutions that produced them**, over the same institutions the mean averages | Institution 0 held the most training positives in **12 of 12** full-data cells. The cause is deterministic, not stochastic: `assign_institutions` walks banks largest-volume-first into the least-loaded institution and breaks ties at the **lowest index**, so with every load at 0 the dataset's largest bank lands in institution 0 every time, and the assignment is seed-independent. Volume is balanced to within one endpoint-slot, but institution 0 is one hub bank plus small ones (bank 70 = 33.6% of its own load, against 4.7-9.9% elsewhere) and a hub is an endpoint of disproportionately many edges — so it holds 44.2% more positives on 2.0% more rows. **Reach, not ownership**: campaign-account ownership is not biased toward it. The mean survives as the floor because 4.2 and 4.3 are **paired per institution**, so institution 0 appears on both sides and its atypicality cancels in the contrast; it biases the level, not the result. No interval is affected, because the CIs are per-seed bootstrap over campaigns and no standard error is ever taken across institutions. Weighting was rejected: by rows it moves the figure ~2% and answers a question nobody asked, by positives it weights each institution by the fraud it already sees — the very quantity being measured | user question, 2026-11-15; `docs/reference/train_isolated.csv`; `federation.isolated.pooled_mean`; `tests/test_federation_isolated.py`; §[not exchangeable](#the-institutions-are-not-exchangeable-institution-0-holds-the-hub-bank) |
 | 2026-11-15 | **Recorded: the thin-positive tiers were the right decision in advance and did not bind on the full data.** They stay in the code unchanged | 96 of 96 cells came out `normal` — 0 `untrained`, 0 `thin` — and the thinnest cell carries 1,003 positives against a `MIN_POSITIVES_TO_TRAIN` of 10. Kept because the scheme cost nothing, because it is what separates "this bank caught nothing" from "this bank had nothing to learn from" should 4.2 or 4.3 produce such a cell, and because the alternative was discovering at evaluation time that a booster had never seen a positive. Recorded explicitly so the absence of `untrained` cells in the reports reads as a measured outcome rather than as machinery that was never built | `docs/reference/train_isolated.{md,csv}`; §[stage 4.1](#stage-41-the-isolated-condition--approved-and-implemented-2026-11-14) §8 |
 | 2026-11-14 | **PRIMARY comparison points for all of Phase 4, designated 2026-11-14 before any federated arm existed: `f1` and `total_10`.** Every condition-to-condition comparison is made at these two; the other five points are reported and are not comparison points. The designation travels in the data as a `primary` column | They are the only two points where the threshold is determined by something: `f1` by the frozen selection rule on validation, `total_10` by a budget that actually binds (5-7 of 8 institutions, against 0 of 8 at the per-institution budgets). Fixed in advance for the same reason equal tuning effort was — a comparison point chosen after seeing which arm it favoured is not a comparison point, and the choice would be invisible in the result | user decision, 2026-11-14; `federation.isolated.PRIMARY_POINTS`; §[stage 4.1](#stage-41-the-isolated-condition--approved-and-implemented-2026-11-14) §5 |
-| 2026-11-14 | **The per-institution full-budget points are renamed `uncapped_10/50/100`** (from `budget_*`) in the schema, the reports and every table, with the binding count kept beside them | For an isolated institution they are **not budgeted operating points**: an institution seeing a fraction of the traffic cannot raise 10 alarms a day even at the grid's most sensitive threshold, so the budget never binds and the threshold is set by the grid floor. Measured: binding in **0 of 8** institutions at every target. A name reading `budget_10` invites a reader to compare it against a centralized model's genuinely budgeted 10/day, which is the error the binding count exists to prevent; the name should not have to be corrected by a footnote | user decision, 2026-11-14; `phase4_isolated_taus.csv` |
+| 2026-11-14 | **The per-institution full-budget points are renamed `uncapped_10/50/100`** (from `budget_*`) in the schema, the reports and every table, with the binding count kept beside them. **First reason REVERSED on full data 2026-11-15 — see the `own_*` row above; the second reason stands and is why the name does not revert** | For an isolated institution they are **not budgeted operating points**: an institution seeing a fraction of the traffic cannot raise 10 alarms a day even at the grid's most sensitive threshold, so the budget never binds and the threshold is set by the grid floor. Measured: binding in **0 of 8** institutions at every target. A name reading `budget_10` invites a reader to compare it against a centralized model's genuinely budgeted 10/day, which is the error the binding count exists to prevent; the name should not have to be corrected by a footnote | user decision, 2026-11-14; `phase4_isolated_taus.csv` |
 | 2026-11-14 | **Recorded before 4.2 is designed: any benefit from `fedavg` or `fedavg_exchange` must come from improving the SCORER** — not from assembling clusters that could not otherwise be assembled, and not from relieving alert pressure | Two stage 4.1 findings combine. The isolated **union** already reaches the centralized ceiling, by the argument from the frozen visibility rule, so there is no structural headroom. And isolated institutions are **evidence-limited, not alert-limited**: each reaches 0.6-0.9 of its own ceiling while holding a fraction of the evidence, and the alert budget binds in 0 of 8 at the per-institution budgets. Written down before the conditions are designed so the claim cannot be adjusted afterwards to fit a result; a null result stays an expected possible outcome, reported as a finding | user decision, 2026-11-14; §[stage 4.1](#stage-41-the-isolated-condition--approved-and-implemented-2026-11-14) |
 | 2026-11-14 | **`MODEL_TAU_GRID` extended to `1 - 1e-7`, approved and applied**: six points added — 0.99995, 0.99999, 0.999995, 0.999999, 0.9999995, 0.9999999 — before the full-data run. 1.0 is excluded | Headroom was one grid point (the highest tau ever chosen on full data was 0.9995 against a top of 0.9999) and stage 4.1 makes 672 threshold choices; a sweep step above 0.99 costs 2.6s against 9.1s at 0.05, so the six points add ~26 min to a 96-cell run; and the tail stops where float32 does, since the largest float32 below 1.0 is 0.99999994 while `1 - 1e-8` **is** 1.0. **A finer tail does give selection slightly more freedom, and that is acceptable because the selection rule is fixed in advance and applied identically across every model and condition** — so it is not a tuning advantage for any arm. 1.0 is excluded because `score >= 1.0` would keep whatever rounds to exactly 1.0, which depends on the build and is not reproducible | user decision, 2026-11-14; §[stage 4.1 §12](#12-grid-edge-policy-and-the-extension-of-model_tau_grid); `tests/test_tau_and_budgets.py` |
 | 2026-11-14 | **Every `(institution, operating point)` cell carries a `budget_binding` flag, and every pooled budget number prints how many of its cells had a binding budget**, with the non-binding institutions listed. If the binding fraction differs materially between two conditions, the README says so rather than averaging over it | An isolated institution sees a fraction of the traffic, so a nominal 100 alarms a day is often more than it could raise at its loosest threshold, while the centralized model at the same nominal budget is in the opposite position. Pooling the two into one "recall at 100 FA/day" compares a **budgeted** operating point against an **unbudgeted** one, and the difference would be invisible in the recall alone. The F1 point has no budget and reports no binding fraction rather than a misleading zero | user decision, 2026-11-14; `federation.isolated.binding_summary`; `tests/test_federation_isolated.py` |
@@ -4815,6 +4994,21 @@ is recorded here rather than in the suite.
   undemonstrated rather than claimed. The single lookback rests on a
   validation margin that did not survive to test. See
   §[Phase 4 frozen scope](#phase-4-frozen-scope).
+- **Stage 4.1's full-data detection numbers cover two of four targets, and
+  their reports are not committed yet.** Session B evaluated targets 1.00 and
+  0.75; session C evaluates 0.50 and 0.25 and writes the one complete report,
+  which is what lands in `docs/reference/`. The session B figures quoted in
+  this README were read off its CSVs before those CSVs were committed, and
+  they are the only figures here that do not cite a committed file. They are
+  to be re-checked against the complete set — including the operating point
+  they were read at, which the hand-off did not name, and seed 2, which it did
+  not include. Everything at targets 0.50 and 0.25 is still sample-only.
+- **The `uncapped_10/50/100` label currently says the opposite of what the
+  full data shows.** The budgets bind; the name says they do not. It becomes
+  `own_10/50/100` after stage 4.1 completes — renaming mid-stage would put two
+  names for one operating point into the same report, because the cached cell
+  CSVs carry the literal string. Until then, read `budget_binding`, which is
+  the authoritative per-cell answer, and not the column name.
 - **The LEVEL of the isolated per-institution mean is not interpretable on its
   own.** `K = 8` is a construction, not a sample of banks, and institution 0 is
   a deterministic hub: the bank-to-institution assignment hands it the
@@ -4974,6 +5168,61 @@ Tagged points in the repository, newest first. Check one out with
 | `v0.1-data-pipeline` | 2026-10-08 | Phase 2 complete, plus the stage 3.0 Kaggle runner. The research pipeline (campaign ground truth, splits, topology groups, institutions, visibility), the artifact export, the read-only FastAPI server, and the full React frontend — 69 backend tests and 48 frontend tests passing. **No models and no experiment results**: the four conditions are defined and the result schema is fixed, but nothing has been trained or run, and the full-data regression numbers are still unverified (that is what stage 3.0's Kaggle run is for). |
 
 ## Changelog
+
+- **2026-11-15 (stage 4.1 — session B: six cells evaluated, and the stage's own
+  prediction overturned)** — the ceiling argument survives full data; the
+  reading built on top of it does not.
+
+  *The structural claim is confirmed.* The union's test oracle recall is
+  **0.8928571** — 50 of 56 campaigns — at target 1.00, **identical** to the
+  centralized L = 48 ceiling of 0.893. Eight institutions between them can
+  reach every campaign a centralized model can reach, on the full data and not
+  only on the sample.
+
+  *The result is that reaching the ceiling and recovering it are different
+  things.* Relative to that same ceiling the union recovers **0.500 / 0.600**
+  (seeds 0 / 1) against centralized **0.760**, raw 0.446 / 0.536 against 0.679.
+  Identical ceilings mean identical visibility, so the gap is **scoring**, not
+  structure. This **contradicts** Reading 2, which found each institution
+  reaching 0.62-0.89 of its own ceiling on the sample and concluded that
+  sharing model knowledge addressed an already-saturated part. On full data an
+  institution reaches **0.306-0.369** of its own ceiling, and there is
+  **0.16-0.26 of relative recall** between the union and the centralized model
+  at unchanged visibility — measured room for `fedavg`, where the sample said
+  there was none. Reading 2 is marked withdrawn in place rather than deleted,
+  because it was written in advance and that is where it was written.
+
+  *Three things handled alongside it.* **(1)** The grid-edge policy fired for
+  real: seed 0, institution 0, the F1 point, rejected at 0.9999999 — undefined,
+  excluded from **both** pooled means, named in `undefined_institutions`, never
+  scored 0, leaving that mean over seven. It is a **representability** limit,
+  not a short grid: `1 - 1e-7` is the last rung of the tail's decimal ladder
+  that float32 keeps distinct from 1.0, and the single float32 value above it
+  is excluded deliberately for reproducibility, so the grid is already at its
+  useful maximum and what the top edge points at is the class weighting.
+  **(2)** The per-institution budgets **bind** on full data,
+  `binding_fraction = 1.0`, against 0 of 8 on the sample — so `uncapped_*` now
+  says the opposite of the data. It becomes `own_*`, deferred until 4.1 is
+  complete because the cached cell CSVs carry the literal string; reverting to
+  `budget_*` is rejected for the reason it was rejected before. The PRIMARY
+  pair is unaffected: `f1` and `total_10` were designated on the matched-volume
+  reading, which is structural. **(3)** A low-edge F1 tau is a live risk at
+  targets 0.50 and 0.25 — two cells chose 0.1, one step above the floor. If a
+  cell lands on 0.05 the session stops without recording it, and that is the
+  rule working; it gets reported, not re-run with `--allow-low-edge-tau`.
+
+  *One defect fixed before C.* Confirming the grid-edge policy turned up that
+  the reload path carried a cell's rows but **not** its exclusions: session C
+  would have exited 0 while writing a report containing B's excluded cell, and
+  would not have named it. `_reloaded_cell_edges` re-derives both from the
+  reloaded rows, with the CSV round trip handled explicitly — `tau_edge` comes
+  back as NaN and a boolean column can come back as the truthy string
+  `"False"`. Two tests added (**53** in `test_federation_isolated.py`, backend
+  **415 passed / 25 skipped**): the one-of-eight exclusion session B actually
+  produced, where an off-by-one would still look plausible, and the reload
+  carry-over. Session B's reports are **not** committed yet — they cover two of
+  four targets and C writes the complete set, which lands in `docs/reference/`
+  after it.
 
 - **2026-11-15 (stage 4.1 — session A: 96 boosters trained on the full data)**
   — the first full-data numbers of Phase 4, and one finding that had to be
