@@ -1286,7 +1286,14 @@ print("evaluate-isolated exit code:", code)
 !ls -la /kaggle/working/phase4_isolated*  /kaggle/working/isolated_cells | head -40
 ```
 
-### Session C — the remaining targets and the complete report, CPU, commit mode
+### Session C — SUPERSEDED 2026-11-16, do not run. See [5n](#5n-stage-41-the-10-remaining-cells--sessions-c0-to-c5-supersedes-5ls-session-c)
+
+> Its input check asserts **six** of session B's cells. B produced
+> **two**, so the cell fails in 44 seconds - correctly. The replacement
+> plan is §5n; this section is kept only as the record of what was
+> planned before B's outcome was known.
+
+### Session C (superseded) — the remaining targets and the complete report
 
 **Inputs:** the IBM dataset, **session A's output**, **session B's output**.
 Six cells, C1-C6. B's staging cell and B's input assertion merge into **C3**,
@@ -2250,3 +2257,434 @@ files to send and the cells are the whole output.
 * **A low-edge F1 tau remains the one stop condition that is likely.** Two of
   session B's cells chose 0.1, one step above the floor. Report it; do not
   re-run with `--allow-low-edge-tau`.
+
+## 5n. Stage 4.1, the 10 remaining cells — sessions C0 to C5 (supersedes §5l's Session C)
+
+**§5l's Session C is wrong and must not be run.** Its C3 asserts six of
+session B's cells. B produced **two** — `t100_s0` and `t100_s1` — so that
+assertion fires in 44 seconds, which is the cell doing its job. The plan below
+replaces it.
+
+### What B actually produced, and what is still unknown
+
+| | |
+|---|---|
+| cells written | `t100_s0`, `t100_s1` — 2 of the 6 requested |
+| cells missing | `t100_s2`, `t075_s0`, `t075_s1`, `t075_s2` |
+| boosters | all 96, verified loadable at L = 48 with 66 features |
+| **exit code** | **unknown.** §5l's session table said "exit 3" — that was *inferred* from the reported high-edge tau, not observed. It is now withdrawn as a claim |
+| **wall time** | **unknown**, and it is the fact that distinguishes the two live explanations |
+
+A low-edge stop writes **nothing** for the stopping cell and **no** combined
+report (`return 3` precedes both), so "2 cells and no `phase4_isolated_*.csv`"
+is also exactly what a killed session looks like. Run **C0** before anything
+else; it costs seconds and settles it.
+
+### C0 — the diagnostic. Interactive, not commit mode. Seconds.
+
+**Inputs:** session B's output only. Nothing else, and no long cell.
+
+```python
+# C0 - why did B stop, and how long does a cell really take?
+#      Three questions, answered from B's own output:
+#        1. did B reach the low-edge rule, get killed, or crash?
+#        2. is there a combined report, or only cells?
+#        3. what is the REAL per-cell wall time?
+import pathlib, subprocess, json
+import pandas as pd
+
+roots = sorted(subprocess.run(
+    ["find", "/kaggle/input", "-maxdepth", "4", "-type", "d", "-name", "isolated_cells"],
+    capture_output=True, text=True, check=True).stdout.split())
+assert roots, "attach session B's output"
+cells_dir = pathlib.Path(roots[0])
+base = cells_dir.parent
+
+# --- 2. combined report, or only cells? -----------------------------
+combined = sorted(p.name for p in base.glob("phase4_isolated*"))
+print("combined report files in B's output:", combined or "NONE")
+print("  NONE is expected for a low-edge stop AND for a killed session;")
+print("  a non-empty list would mean the loop finished, which 2 cells cannot be.")
+
+done = sorted({p.name.split("_summary")[0] for p in cells_dir.glob("*_summary.csv")})
+print("\ncells written:", done)
+
+# --- 1. what do the finished cells say about the margin? ------------
+#     Every F1 tau B chose, and how close to the grid floor it came. The
+#     floor is 0.05; a tau of 0.1 is ONE grid step above it.
+taus = pd.concat([pd.read_csv(p) for p in sorted(cells_dir.glob("*_taus.csv"))],
+                 ignore_index=True)
+f1 = taus[(taus.operating_point == "f1") & taus.tau.notna()]
+print("\nF1 taus chosen, by cell and institution:")
+print(f1[["visibility_target", "seed", "institution", "tau", "tau_edge",
+          "rejected_tau"]].sort_values(["seed", "institution"]).to_string(index=False))
+print("\nhow many are at or within one step of the floor (<= 0.1):",
+      int((f1.tau <= 0.1).sum()), "of", len(f1))
+
+# --- 3. the REAL per-cell wall time ---------------------------------
+#     sum(eval_seconds) over the 8 institutions, scaled by 1.08 - the
+#     cell-wall-to-eval-sum ratio measured across all four cells of the
+#     sample dry run (1.05-1.11). The union cluster pass is the remainder.
+inst = pd.concat([pd.read_csv(p) for p in sorted(cells_dir.glob("*_institutions.csv"))],
+                 ignore_index=True)
+per_cell = inst.groupby(["visibility_target", "seed"]).eval_seconds.sum() * 1.08
+print("\nREAL per-cell wall time, from B's own cells:")
+for (t, s), secs in per_cell.items():
+    print(f"  t{round(t * 100):03d}_s{s}: {secs / 60:6.1f} min  ({secs / 3600:.2f} h)")
+print(f"\n  mean {per_cell.mean() / 60:.1f} min, max {per_cell.max() / 60:.1f} min")
+print(f"  10 remaining cells at the max: {10 * per_cell.max() / 3600:.1f} h")
+print(f"  cells that fit in a 10 h session: "
+      f"{int(10 * 3600 // per_cell.max())}")
+```
+
+**Then read it like this:**
+
+* **max per-cell under ~1 h** → B was *not* killed by the 12 h limit (2 cells
+  plus part of a third cannot reach 12 h), so B stopped on the **low-edge
+  rule** at `t100_s2`. That is the pre-registered stop condition firing.
+* **max per-cell 4-6 h** → 2 cells plus a third in flight *is* ~12 h, so B was
+  **killed by the session limit** and the original 25-55 min estimate was 5-10x
+  low. The low-edge rule may not have fired at all.
+* Either way, **send back the last 30 lines of B's log.** `STOPPING, and NOT
+  recording t100_s2` is definitive for the first; a log that ends mid-cell with
+  no message is definitive for the second.
+
+### The remaining sessions
+
+**Sized from C0's measured per-cell time**, with one rule:
+
+> **cells per session = min(3, floor(10 h / measured per-cell hours))**
+
+10 h not 12, so a cell that runs long cannot take the session with it. One
+target per session, so **a stop in one session costs that target and nothing
+else** — and each session evaluates only its own cells and stages none from any
+other, which is what decouples them.
+
+| Session | Cells | Inputs | Why it is alone |
+|---|---|---|---|
+| **C1** | `t100_s2` | dataset + A | The cell B stopped on, and the **highest-risk cell that remains**: target 1.0 is the starved regime. Run it by itself so a repeat stop costs one cell |
+| **C2** | `t075_s0/s1/s2` | dataset + A | |
+| **C3** | `t050_s0/s1/s2` | dataset + A | |
+| **C4** | `t025_s0/s1/s2` | dataset + A | |
+| **C5** | none — assembly | dataset + B + C1 + C2 + C3 + C4 | Reloads all 12 cells and writes the one report. Minutes. Needs no boosters at all, because every cell is cached |
+
+If C0 reports a per-cell time above ~3.3 h, split C2/C3/C4 into one seed each
+(9 sessions instead of 3) — the rule above gives the count, and the `--seeds`
+flag selects them.
+
+**The low-edge risk is concentrated in C1 and falls from there.** Both of B's
+near-floor taus (0.1, one step above the bottom) were at **target 1.0**, and
+that is the mechanism rather than a coincidence: an institution's own ceiling
+*rises* as the target falls (0.139 → 0.346 on validation), so the starved
+regime — one institution holding a whole campaign, the other seven seeing
+almost nothing — is target 1.0. Expect C2, C3 and C4 to be progressively
+safer.
+
+### The policy switch, which has to be set before C1 runs
+
+Under the **current** policy, C1 stops at `t100_s2` again and records nothing,
+so running it unchanged learns nothing new. Every long cell below therefore
+builds its command from one list:
+
+```python
+# The low-edge policy for this session. Leave it EMPTY under the current
+# policy. Set it to ["--allow-low-edge-tau"] only if that change has been
+# approved - it is a pre-registered stop condition, not a nuisance flag, and
+# the printed command below records which way it was run.
+LOW_EDGE: list[str] = []
+```
+
+It is printed with the command in every session, so the log says which policy
+produced the numbers.
+
+### C1 — `t100_s2` alone. CPU, commit mode.
+
+**Inputs:** the IBM dataset, **session A's output**.
+
+```python
+# C1a - dataset path
+!ls /kaggle/input/datasets/ealtman2019/ibm-transactions-for-anti-money-laundering-aml/ | head
+```
+
+```python
+# C1b - clone and install. Must report fdb666e or later.
+!rm -rf /kaggle/temp/repo
+!git clone --depth 1 https://github.com/jerinsaji299-coder/Fraud-campaign-detection.git /kaggle/temp/repo
+%cd /kaggle/temp/repo/backend
+!pip install -q -r requirements.txt
+!git -C /kaggle/temp/repo rev-parse --short HEAD
+```
+
+```python
+# C1c - INPUT CHECK, first. Asserts EXACTLY what this session needs: A's 96
+#       boosters, and nothing about any other session's cells. The old C3
+#       asserted six of B's cells, which is what failed in 44s - this session
+#       evaluates one cell from scratch and needs no cell from anywhere.
+import pathlib, shutil, subprocess, sys
+
+sys.path.insert(0, "/kaggle/temp/repo/backend/src")
+
+found = sorted(subprocess.run(
+    ["find", "/kaggle/input", "-maxdepth", "6", "-type", "d",
+     "-path", "*/models/isolated"],
+    capture_output=True, text=True, check=True).stdout.split())
+print("isolated model trees found:", found)
+assert found, "no models/isolated under /kaggle/input - attach session A's output"
+
+dest = pathlib.Path("/kaggle/working/models/isolated")
+dest.mkdir(parents=True, exist_ok=True)
+for tree in found:
+    for cell in sorted(pathlib.Path(tree).iterdir()):
+        if not (dest / cell.name).exists():
+            shutil.copytree(cell, dest / cell.name)
+
+cells = sorted(d for d in dest.iterdir() if d.is_dir())
+REQUIRED = ("xgb_model.json", "feature_spec.json", "model_meta.json")
+broken = [
+    c.name for c in cells
+    if not (c / "untrained.json").exists()
+    and any(not (c / n).exists() or (c / n).stat().st_size == 0 for n in REQUIRED)
+]
+print(f"{len(cells)} institution-cells, {len(broken)} broken")
+assert len(cells) == 96, f"expected 96, found {len(cells)}"
+assert not broken, f"{len(broken)} booster(s) incomplete - re-run session A"
+
+# the 8 boosters THIS cell needs, by name, loaded for real
+from fraudcamp.models import xgb_baseline
+from fraudcamp.federation import isolated
+mine = [isolated.cell_name(1.0, 2, i) for i in range(8)]
+for name in mine:
+    model = xgb_baseline.TrainedBaseline.load(dest / name)
+    assert model.lookback_h == 48, (name, model.lookback_h)
+    assert len(model.feature_names) == 66, (name, len(model.feature_names))
+print("loaded all 8 boosters for t100_s2:", mine)
+
+# and no stale cell may be lying around to be silently reloaded
+stale = sorted(pathlib.Path("/kaggle/working").glob("isolated_cells/*_summary.csv"))
+assert not stale, f"unexpected cached cells in /kaggle/working: {stale}"
+print("no cached cells present: this session will evaluate t100_s2 for real")
+```
+
+```python
+# C1d - PRE-FLIGHT, second: the frozen scope and the tau grid, including the
+#       floor, because the floor is what this session is about.
+import sys
+sys.path.insert(0, "/kaggle/temp/repo/backend/src")
+from fraudcamp import constants, evaluation
+from fraudcamp.federation import isolated
+
+assert constants.PHASE4_SEEDS == [0, 1, 2]
+assert constants.PHASE4_LOOKBACK_H == 48
+assert constants.K_INSTITUTIONS == 8
+assert constants.VISIBILITY_TARGETS == [1.0, 0.75, 0.5, 0.25]
+grid = evaluation.MODEL_TAU_GRID
+assert len(grid) == 22, len(grid)
+assert grid[0] == 0.05, ("the grid FLOOR is what the low-edge rule fires on; "
+                         "if it has moved, this session is not comparable to "
+                         "t100_s0 and t100_s1", grid[0])
+assert grid[-1] == 0.9999999 and 1.0 not in grid
+points = [p["operating_point"] for p in isolated.operating_points()]
+assert points == ["f1", "per_inst_10", "per_inst_50", "per_inst_100",
+                  "total_10", "total_50", "total_100"], points
+print(f"scope OK. grid floor {grid[0]}, top {grid[-1]}, {len(grid)} points")
+print("operating points:", points)
+```
+
+```python
+# C1e - evaluate t100_s2 ONLY. Expect roughly the per-cell time C0 measured.
+#       Exit 3 with "STOPPING, and NOT recording" is the low-edge rule firing
+#       again: a finding, not a failure. Nothing from the cell is recorded.
+LOW_EDGE: list[str] = []          # see "The policy switch" above
+
+import subprocess
+cmd = ["python", "scripts/kaggle/kaggle_runner.py", "evaluate-isolated",
+       "--config", "configs/kaggle.yaml",
+       "--targets", "1.0", "--seeds", "2"] + LOW_EDGE
+print("running:", " ".join(cmd))
+code = subprocess.run(cmd, cwd="/kaggle/temp/repo/backend").returncode
+print("evaluate-isolated exit code:", code)
+print("low-edge policy this session:", LOW_EDGE or "(current policy: stop)")
+```
+
+```python
+# C1f - what came out, and the F1 taus this cell chose
+!ls -la /kaggle/working/isolated_cells 2>/dev/null | head
+import pathlib, pandas as pd
+p = pathlib.Path("/kaggle/working/isolated_cells/t100_s2_taus.csv")
+if p.exists():
+    t = pd.read_csv(p)
+    f1 = t[(t.operating_point == "f1")]
+    print(f1[["institution", "tau", "tau_edge", "rejected_tau",
+              "undefined_reason"]].to_string(index=False))
+    print("\nat or within one step of the floor (<= 0.1):",
+          int((f1.tau <= 0.1).sum()), "of", len(f1))
+else:
+    print("t100_s2 was NOT recorded - read the exit message above.")
+```
+
+### C2, C3, C4 — one target each. CPU, commit mode.
+
+**Inputs for each:** the IBM dataset, **session A's output**. Nothing else.
+Cells **a, b, d** are C1a, C1b, C1d verbatim. Cell **c** is C1c with its two
+cell-specific lines changed, and cell **e** changes the target:
+
+```python
+# C2c / C3c / C4c - the input check, with THIS session's target.
+#      Change TARGET only. Everything else is C1c verbatim.
+TARGET = 0.75            # C3: 0.5    C4: 0.25
+SEEDS = [0, 1, 2]
+
+# ... C1c's booster staging and the 96/broken assertions, verbatim ...
+
+from fraudcamp.models import xgb_baseline
+from fraudcamp.federation import isolated
+mine = [isolated.cell_name(TARGET, s, i) for s in SEEDS for i in range(8)]
+for name in mine:
+    model = xgb_baseline.TrainedBaseline.load(dest / name)
+    assert model.lookback_h == 48, (name, model.lookback_h)
+    assert len(model.feature_names) == 66, (name, len(model.feature_names))
+print(f"loaded all {len(mine)} boosters for target {TARGET}, seeds {SEEDS}")
+
+stale = sorted(pathlib.Path("/kaggle/working").glob("isolated_cells/*_summary.csv"))
+assert not stale, f"unexpected cached cells in /kaggle/working: {stale}"
+```
+
+```python
+# C2e / C3e / C4e - evaluate one target, all three seeds.
+#      If C0 measured a per-cell time above ~3.3 h, run one seed per session
+#      instead: add --seeds 0 (then 1, then 2) and run three sessions.
+LOW_EDGE: list[str] = []          # see "The policy switch" above
+TARGET = "0.75"                   # C3: "0.5"   C4: "0.25"
+
+import subprocess
+cmd = ["python", "scripts/kaggle/kaggle_runner.py", "evaluate-isolated",
+       "--config", "configs/kaggle.yaml", "--targets", TARGET] + LOW_EDGE
+print("running:", " ".join(cmd))
+code = subprocess.run(cmd, cwd="/kaggle/temp/repo/backend").returncode
+print("evaluate-isolated exit code:", code)
+print("low-edge policy this session:", LOW_EDGE or "(current policy: stop)")
+```
+
+### C5 — assembly. CPU, commit mode. Minutes.
+
+**Inputs:** the IBM dataset, **session B's output**, and the outputs of **C1,
+C2, C3 and C4**. **No boosters needed** — every cell is cached, so the runner
+reloads all 12 and never looks for a model.
+
+```python
+# C5a, C5b - as C1a and C1b.
+```
+
+```python
+# C5c - INPUT CHECK: all 12 cells, named, from wherever they came. This is the
+#       ONE session that asserts a complete set, because it is the one that
+#       writes the report over all of them.
+import pathlib, shutil, subprocess, sys
+
+sys.path.insert(0, "/kaggle/temp/repo/backend/src")
+from fraudcamp import constants
+from fraudcamp.federation import isolated
+
+found = sorted(subprocess.run(
+    ["find", "/kaggle/input", "-maxdepth", "6", "-type", "d",
+     "-name", "isolated_cells"],
+    capture_output=True, text=True, check=True).stdout.split())
+print("finished-cell directories found:")
+for d in found:
+    print("  ", d)
+cells_dir = pathlib.Path("/kaggle/working/isolated_cells")
+cells_dir.mkdir(parents=True, exist_ok=True)
+for tree in found:
+    for item in sorted(pathlib.Path(tree).glob("*.csv")):
+        if not (cells_dir / item.name).exists():
+            shutil.copy2(item, cells_dir / item.name)
+
+SUFFIXES = ("institutions", "taus", "ceilings", "summary", "pooled",
+            "union", "outcomes")
+expected = [isolated.cell_name(t, s)
+            for t in constants.VISIBILITY_TARGETS
+            for s in constants.PHASE4_SEEDS]
+done = sorted({p.name.split("_summary")[0] for p in cells_dir.glob("*_summary.csv")})
+print(f"\n{len(done)} of {len(expected)} cells staged")
+missing = [n for n in expected if n not in done]
+incomplete = [(n, s) for n in done for s in SUFFIXES
+              if not (cells_dir / f"{n}_{s}.csv").exists()]
+for n, s in incomplete:
+    print(f"  INCOMPLETE {n}: no _{s}.csv")
+print("missing:", missing or "none")
+assert not incomplete, f"{len(incomplete)} cell file(s) missing"
+assert not missing, (
+    f"cells {missing} are not staged. This session writes the report over all "
+    "twelve, so it will not run on a partial set - attach the session that "
+    "produced each missing cell, or re-run that session."
+)
+
+# D6: B ran before the uncapped_* -> per_inst_* rename. One report must never
+# carry two names for one operating point.
+renamed = 0
+for path in sorted(cells_dir.glob("*.csv")):
+    text = path.read_text(encoding="utf-8")
+    if "uncapped_" in text:
+        path.write_text(text.replace("uncapped_", "per_inst_"), encoding="utf-8")
+        renamed += 1
+print(f"D6: rewrote uncapped_* -> per_inst_* in {renamed} staged file(s)")
+leftover = [p.name for p in cells_dir.glob("*.csv")
+            if "uncapped_" in p.read_text(encoding="utf-8")]
+assert not leftover, leftover
+print("all twelve cells staged and consistently named")
+```
+
+```python
+# C5d - as C1d verbatim (scope, grid floor and top, operating points).
+```
+
+```python
+# C5e - assemble. Every cell is cached, so this reloads all twelve and writes
+#       the one complete stage 4.1 report. Minutes, not hours.
+#       Expect exit 3 if ANY cell carries a high-edge exclusion - t100_s0 does
+#       (institution 0, the F1 point, rejected at 0.9999999). That is this
+#       report describing itself, not a new failure.
+import subprocess
+code = subprocess.run(
+    ["python", "scripts/kaggle/kaggle_runner.py", "evaluate-isolated",
+     "--config", "configs/kaggle.yaml"],
+    cwd="/kaggle/temp/repo/backend",
+).returncode
+print("evaluate-isolated exit code:", code)
+```
+
+```python
+# C5f - the headline, read back from the files. The mean never prints alone:
+#       institution 0 holds the dataset's largest bank by construction.
+import pandas as pd
+pooled = pd.read_csv("/kaggle/working/phase4_isolated_pooled.csv")
+union = pd.read_csv("/kaggle/working/phase4_isolated_union.csv")
+print("cells:", pooled[["visibility_target", "seed"]].drop_duplicates().shape[0], "of 12")
+print(pooled[(pooled.eval_split == "test") & (pooled.metric == "campaign_recall")]
+      [["visibility_target", "seed", "operating_point",
+        "mean_over_all_institutions", "n_institutions_in_mean",
+        "median_over_institutions", "min_over_institutions", "min_institution",
+        "max_over_institutions", "max_institution",
+        "n_binding_budgets", "n_cells_with_a_budget"]].to_string(index=False))
+print(union[(union.eval_split == "test") & (union.test_subset == "all")]
+      [["visibility_target", "seed", "operating_point", "campaign_recall",
+        "oracle_recall", "recall_relative_to_ceiling", "false_alarms_per_day",
+        "summed_false_alarms_per_day", "n_institutions_operating"]].to_string(index=False))
+```
+
+### Does anything already run need redoing?
+
+**`t100_s0` and `t100_s1` stand as they are, and session A stands.** The
+per-cell writer runs only after a cell completes, so a written cell is a
+complete cell; the boosters are unchanged and C0/C1c verify them; and the
+high-edge exclusion inside `t100_s0` is carried in its own rows and
+re-derived by the assembly session. The only thing that touches them is the
+D6 relabelling in C5c, which changes an operating-point string and no number.
+
+**One exception, and it is the reason the policy decision comes first.** If
+the low-edge policy is resolved by **extending the tau grid downward**, then
+`t100_s0` and `t100_s1` were selected on a 22-point grid and every later cell
+on a longer one — so their F1 taus are not comparable and **both must be
+re-run**, making 12 cells rather than 10. C1d asserts `grid[0] == 0.05` for
+exactly this reason: it fails loudly rather than letting a mixed-grid report
+assemble. Any policy that leaves the grid alone keeps the two cells.

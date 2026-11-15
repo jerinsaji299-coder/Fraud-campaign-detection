@@ -3293,15 +3293,126 @@ the top edge is hit: the **class weighting** — 435-4,015 on the full data —
 which crushes scores against 1. That is a design decision, recorded here and
 not changed mid-stage.
 
-**6. A low-edge F1 tau is now a live risk for session C.** Two cells chose an
-F1 tau of **0.1**, one grid step above the bottom: seed 0 institution 3, and
-seed 1 institution 4. At targets 0.50 and 0.25 each institution sees more of
-each campaign, which pushes the optimum lower still, so a cell may land on
-**0.05** and stop the run. If it does, that is the rule working as designed:
+**6. A low-edge F1 tau is now a live risk, and it is concentrated at target
+1.0.** Two cells chose an F1 tau of **0.1**, one grid step above the bottom:
+seed 0 institution 3, and seed 1 institution 4 — **both at target 1.0**.
+
+> *Corrected 2026-11-16.* An earlier version of this paragraph said the risk
+> grows at targets 0.50 and 0.25 because "each institution sees more of each
+> campaign, which pushes the optimum lower still". That has the direction
+> backwards. Seeing **more** of a campaign moves the F1 optimum **up**, away
+> from the floor: an institution's own ceiling *rises* as the target falls
+> (0.139 → 0.346 on validation, [Reading
+> 1](#measured-on-the-1-sample--development-only-not-for-quotation)), so the
+> starved regime is target **1.0**, where one institution holds a whole
+> campaign and the other seven see almost nothing. Both observed near-floor
+> taus being at target 1.0 is the mechanism, not a coincidence, and it means
+> the remaining risk is concentrated in the target-1.0 cells and decreasing
+> as the target falls. If it does, that is the rule working as designed:
 the cell is **not** recorded, the session exits 3, and it gets reported rather
 than re-run with `--allow-low-edge-tau`, which exists for the thinned sample
 alone. The cells finished before it keep their files, so a resumed session
 picks up from there.
+
+#### Session B produced 2 of 6 cells, and what that means — 2026-11-16
+
+Session C's input check failed in 44 seconds, correctly: it asserted six of
+session B's cells and found **two**. B wrote `t100_s0` and `t100_s1`.
+`t100_s2`, `t075_s0`, `t075_s1` and `t075_s2` do not exist.
+
+**What was known and what was inferred, separated.** The §5l session table
+recorded B as *"done 2026-11-15: exit 3, one cell excluded at the grid top"*.
+"Done" came from the hand-off. **"Exit 3" did not — it was inferred** from the
+reported high-edge tau, because a high edge exits 3 after the reports are
+written. The inference was reasonable and it was presented as a measured
+outcome in a table of measured outcomes, which was wrong. It is withdrawn:
+**B's exit code and wall time are unknown.**
+
+Worse, two signals that B was incomplete were in the hand-off and were read as
+reporting gaps rather than run gaps: the figures covered **seeds 0 and 1
+only**, and the binding count was described as holding in *"both seeds"*. Both
+were recorded at the time as things to pin down later. They were in fact the
+evidence that B stopped after two cells.
+
+**Why B stopped: what the runner's own logic allows.** A high-edge tau cannot
+explain it — a high edge is recorded and the loop continues. The candidates
+that *can* stop a run after two cells are:
+
+| Cause | Signature |
+|---|---|
+| **the low-edge F1 tau rule** firing on `t100_s2` | `return 3` **before** the cell's CSVs and before any combined report, with `STOPPING, and NOT recording t100_s2` in the log |
+| **the 12 h session limit** | identical on disk — 2 cells, no combined report — with a log that ends mid-cell and no message |
+| an exception, or the kernel killed for memory | same on disk, with a traceback or nothing |
+| a missing booster | ruled out: C3 loaded all 96 at L = 48 with 66 features |
+
+The first two are indistinguishable from the files alone, which is why the
+replacement plan opens with a **diagnostic session that costs seconds**
+([§5n](backend/scripts/kaggle/run_on_kaggle.md)). **The discriminator is the
+per-cell wall time**, and it is recoverable from B's own cells: the
+`eval_seconds` column of each `*_institutions.csv`, summed over the eight
+institutions and scaled by **1.08** — the cell-wall-to-eval-sum ratio measured
+across all four cells of the sample dry run, where it ranged 1.05-1.11.
+
+* per-cell **under ~1 h** → two cells plus part of a third cannot reach 12 h,
+  so B stopped on the **low-edge rule**;
+* per-cell **4-6 h** → two cells plus one in flight *is* ~12 h, so B was
+  **killed by the limit** and the 25-55 min estimate was 5-10× low.
+
+#### If it is the low-edge rule: why, when it was supposed to be impossible
+
+The policy said a low-edge F1 tau "should not happen at the full data's 0.102%
+prevalence", on the stage 3.3 reasoning that class weights of 435-4,015 crush
+scores toward 1 and push the optimum **up**. That reasoning was about the
+**centralized** model, and it does not transfer to a starved institution:
+
+* the selection rule maximises **campaign** F1, not edge F1. A campaign counts
+  only when a cluster reaches **≥3 of its accounts at ≥50% purity**;
+* an institution's own ceiling at target 1.0 is **0.139** on validation — it
+  can reach almost nothing. At a selective threshold its components never
+  reach three campaign accounts, so recall is ~0 and campaign F1 is ~0;
+* with F1 ~0 everywhere selective, **any** detection beats none, so the
+  optimum slides to wherever edges are numerous enough to form components at
+  all — the grid floor.
+
+So the operative quantity is not the dataset's prevalence but **how much of a
+campaign the detector can see**, and the policy generalised from the wrong
+one. The regime where that bites is **target 1.0**, which concentrates a
+campaign into one view and starves the other seven — the same construction
+session A measured as the outlier at 2.42× spread. Both of B's near-floor taus
+(0.1, exactly one grid step above the 0.05 floor) were at target 1.0, in
+different institutions in each of the two cells. The margin was one step in
+2 of 2 cells, so a third cell reaching the floor is unsurprising.
+
+#### OPEN: what the low-edge policy should be. Proposed, not decided.
+
+**Not changed unilaterally.** Four options, with what each costs:
+
+| | Policy | Keeps `t100_s0/s1`? | Touches a frozen definition? |
+|---|---|---|---|
+| **(a)** | **Record at the floor tau, flagged** `tau_at_low_edge`, and keep the cell in the pooled means — what `--allow-low-edge-tau` already does, as policy rather than an override | **yes** | no |
+| (b) | **Extend `MODEL_TAU_GRID` downward** (0.02, 0.01, …) so the optimum can be found | **no** — they were selected on a 22-point grid, so all 12 cells must be re-run | **yes**, and low taus are the expensive end: clustering scales with edges kept, 9.1s at tau 0.05 against 2.6s above 0.99 |
+| (c) | **Undefined, like a high edge** — excluded from both means, named | yes | no |
+| (d) | Keep stopping | yes | no |
+
+**Recommendation: (a).** It is the conservative reading — it keeps the weakest
+institutions *in* the mean with their weak numbers, where **(c)** would drop
+exactly the starved institutions and flatter the isolated floor, which is the
+arm the whole phase is trying not to flatter. It costs nothing already run, it
+touches no frozen definition, and the flag makes every affected cell
+auditable. The pre-registered reason for stopping was that a low edge "means
+something is wrong with the training data, the weighting or the grid" — a
+suspected bug. The mechanism above is not a bug, so that reason no longer
+applies, and **(d)** would leave the isolated arm simply unmeasurable at target
+1.0.
+
+**(b) is the rigorous answer to a different question** — *where* the optimum
+actually is — and is worth doing as a follow-up study rather than as the fix
+here, because it re-runs all 12 cells and cannot be compared with anything
+already measured.
+
+Whichever is chosen must be recorded as a change to a pre-registered stop
+condition, with the date and the reason, because it was fixed in advance
+precisely so it could not be relaxed after seeing a result.
 
 #### The full-data run, session C: proposed, not yet run
 
@@ -3312,8 +3423,8 @@ with the estimates below and no GPU quota consumed:
 | Session | Command | Inputs | Estimate | Status |
 |---|---|---|---:|---|
 | **A** | `train-isolated` — 96 boosters | the IBM dataset | 2.5-4 h | **done, 2.25 h, exit 0** |
-| **B** | `evaluate-isolated --targets 1.0,0.75` — 6 cells | dataset + A | **2.5-5.5 h** | **done, exit 3 — one cell excluded at the grid top** |
-| **C** | `evaluate-isolated` — evaluates 0.50 and 0.25, **reloads** B's six, writes the complete report | dataset + A + B | **2.5-5.5 h** | next |
+| **B** | `evaluate-isolated --targets 1.0,0.75` — 6 cells | dataset + A | **2.5-5.5 h** | **2 of 6 cells written** (`t100_s0`, `t100_s1`). Exit code and wall time **unknown**; the earlier "exit 3" was inferred, not observed, and is withdrawn |
+| **C** | **superseded.** Its input check asserted six of B's cells and failed in 44s, correctly | — | — | replaced by sessions C0-C5 in [§5n](backend/scripts/kaggle/run_on_kaggle.md) |
 
 Session C will exit **3** as well, and that is correct rather than a new
 failure: it assembles its report from B's reloaded cells together with its
@@ -3357,6 +3468,9 @@ rather than the run.
 
 | Date | Decision | Reason | Evidence |
 |---|---|---|---|
+| 2026-11-16 | **OPEN, proposed not decided: what the low-edge F1 tau policy should be.** Recommendation **(a)** — record the cell at the floor tau, flagged `tau_at_low_edge`, and keep it in the pooled means | The pre-registered rule stops on a low edge because it "means something is wrong with the training data, the weighting or the grid". The mechanism is now understood and is **not** a bug: campaign F1 needs a cluster to reach 3 of a campaign's accounts, an institution's own ceiling at target 1.0 is 0.139, so at any selective threshold it detects nothing and F1 is ~0 everywhere — leaving the floor as the only place detection happens at all. The policy generalised from the **dataset's** 0.102% prevalence to a **per-institution** detector's optimum, which depends instead on how much of a campaign that detector can see. (a) is conservative: it keeps starved institutions in the mean with their weak numbers, where "undefined" would drop exactly those institutions and flatter the isolated floor. **(b) extending the grid downward re-runs all 12 cells** and is a frozen-definition change, so it is proposed as a follow-up study, not as the fix | §[session B produced 2 of 6 cells](#session-b-produced-2-of-6-cells-and-what-that-means--2026-11-16); B's `t100_s0/s1` taus CSVs |
+| 2026-11-16 | **WITHDRAWN: the claim that session B "exited 3"** | It was **inferred** from the reported high-edge tau — a high edge exits 3 after the reports are written — and then written into a table of measured outcomes as though observed. B's exit code and wall time are unknown. Two signals that B was incomplete (figures for seeds 0 and 1 only; the binding count holding in "both seeds") were in the hand-off and were read as reporting gaps rather than run gaps | §[session B produced 2 of 6 cells](#session-b-produced-2-of-6-cells-and-what-that-means--2026-11-16) |
+| 2026-11-16 | **CORRECTED: the low-edge risk falls as the visibility target falls; it does not rise** | An earlier note said targets 0.50 and 0.25 would push the F1 optimum "lower still" because institutions see more of each campaign. Backwards: seeing more moves the optimum **up**. An institution's own ceiling *rises* as the target falls (0.139 → 0.346 on validation), so the starved regime is target **1.0**. Both observed near-floor taus were at target 1.0, which is the mechanism rather than a coincidence, and it is why the replacement plan runs `t100_s2` alone and first | README Reading 1; B's taus CSVs |
 | 2026-11-15 | **OPEN, stopped for a decision (O1): which model seed(s) the centralized arm of 4.4 uses** | Phase 3's seeds are **model** seeds; Phase 4's are **visibility** seeds, and all 96 Phase 4 boosters are trained at model seed 0. The three readings give 0.696 / 0.780, 0.6845 / 0.7667 and 0.679 / 0.760, and D4 asks for both the 3-seed Phase 4 scope and reproduction of a headline that is a **5-seed mean**. Implemented with no default so it cannot be chosen silently. Recommendation: `matched_seed0`, the only reading where the arms differ only in the condition | §[O1](#o1-which-model-seeds-the-centralized-arm-uses); `federation/centralized.py` `MODEL_SEED_POLICIES`; `docs/reference/evaluate_baseline.csv` |
 | 2026-11-15 | **D1 — the model under federation is the frozen Phase 3 XGBoost baseline, 66 features, unchanged from 4.1** | Changing the model and the condition at once would make every difference uninterpretable. Nothing in 4.2/4.3/4.4 touches the hyperparameters or the feature set | user decision D1; `models/xgb_baseline.py` |
 | 2026-11-15 | **D2 — stage 4.2's FedAvg analogue is SCORE AVERAGING**: all K boosters applied to each institution's own view, equal weights, nothing retrained. No weighted variant | A booster has no parameter vector space to average in: tree content is discrete structure, trees are fitted sequentially on residuals so index `j` pairs unrelated corrections, and two views split differently at the root. Where parameters cannot be averaged, federated learning combines at the output. Equal weights because unweighted is **untuned** — any weighting is fitted and would breach the equal-effort constraint | user decision D2; §[stage 4.2](#stage-42-the-fedavg-analogue-for-a-tree-ensemble--implemented-2026-11-15); `federation/fedavg.py` |
