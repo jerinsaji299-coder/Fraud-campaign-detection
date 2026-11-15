@@ -5667,16 +5667,28 @@ def _run_condition_cells(
                     )
                 seconds = time.perf_counter() - started
                 if calibration is None:
+                    _runs = len(targets) * len(seeds) * len(conditions)
+                    _projected = seconds * _runs
+                    # Minutes under an hour: this is the line the runbook tells
+                    # the operator to act on, and "about 0.0 h" tells them
+                    # nothing.
+                    _budget = (
+                        f"{_projected / 3600:.1f} h"
+                        if _projected >= 3600
+                        else f"{_projected / 60:.0f} min"
+                    )
                     calibration = {"condition": condition, "cell": name,
-                                   "seconds": round(seconds, 1)}
+                                   "seconds": round(seconds, 1),
+                                   "cell_runs_in_session": _runs,
+                                   "projected_seconds": round(_projected, 1)}
                     print(
                         f"\n  CALIBRATION: the first cell of {condition} took "
-                        f"{seconds / 60:.1f} min. This session has "
-                        f"{len(targets) * len(seeds) * len(conditions)} cell-runs "
-                        f"in all, so expect about "
-                        f"{seconds * len(targets) * len(seeds) * len(conditions) / 3600:.1f} h. "
-                        "Every cell is written as it finishes, so stopping early "
-                        "costs the cell in flight and nothing else.",
+                        f"{seconds / 60:.1f} min. This session has {_runs} "
+                        f"cell-run(s) in all, so expect about {_budget} "
+                        f"({_projected / 3600:.2f} h). Size the remaining "
+                        "sessions from this, not from the runbook's estimate. "
+                        "Every cell is written as it finishes, so stopping "
+                        "early costs the cell in flight and nothing else.",
                         flush=True,
                     )
 
