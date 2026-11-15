@@ -393,7 +393,7 @@ def dry_run(checker: Checker) -> None:
     rel = "backend/artifacts/phase4_dev/phase4_chain.json"
     if not path.exists():
         checker.skip(
-            "dry-run ratios and checks", "1.41 / 1.15 / 0.44 / 4.2, 0.0, 0.0",
+            "dry-run ratios and checks", "1.21 / 0.85 / 1.06 / 1.46, 0.0, 0.0",
             rel,
             "development artifact, not committed: regenerate with "
             "`python scripts/run_phase4_chain.py --config configs/local.yaml`",
@@ -413,20 +413,35 @@ def dry_run(checker: Checker) -> None:
         union.get("max_difference"), rel,
         "checks.union_ceiling_equals_centralized.max_difference", tol=1e-12,
     )
-    timings = {row["step"]: row["seconds"] for row in payload.get("timings", [])}
-    base = next((v for k, v in timings.items() if k.endswith(" isolated")), None)
+    # Totals over EVERY cell, matched on the exact step suffix. Matching on
+    # `endswith(" isolated")` also matches "train isolated", which is how an
+    # earlier version of this check reported a fedavg ratio of 20.45: it was
+    # dividing an evaluation by a training time.
+    def total(condition: str) -> float | None:
+        seconds = [
+            row["seconds"] for row in payload.get("timings", [])
+            if row["step"].split(" ", 1)[-1] == condition
+        ]
+        return sum(seconds) if seconds else None
+
+    base = total("isolated")
+    train_base = total("train isolated")
     if base:
-        for condition, claimed in (("fedavg", 1.41), ("evidence", 1.15),
-                                   ("fedavg_evidence", 0.44)):
-            value = next(
-                (v for k, v in timings.items() if k.endswith(f" {condition}")),
-                None,
-            )
+        for condition, claimed in (("fedavg", 1.21), ("evidence", 0.85),
+                                   ("fedavg_evidence", 1.06)):
+            value = total(condition)
             checker.check(
                 f"{condition} cost ratio to isolated", claimed,
                 (value / base) if value else None, rel,
-                "timings, first cell", tol=5e-2,
+                "sum of per-cell timings / sum of isolated timings", tol=2e-2,
             )
+    if train_base:
+        value = total("train evidence")
+        checker.check(
+            "train-evidence cost ratio to train-isolated", 1.46,
+            (value / train_base) if value else None, rel,
+            "sum of per-cell training timings", tol=2e-2,
+        )
 
 
 def uncommitted_session_b(checker: Checker) -> None:

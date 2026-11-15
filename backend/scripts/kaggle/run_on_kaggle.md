@@ -1544,18 +1544,35 @@ silently absent. That is verified, not assumed — see "Dropping 4.3" below.
 Every estimate below is a **sample ratio applied to a full-data baseline**,
 and the ratio is the only part that was measured on real code:
 
-| Per cell (8 institutions) | Sample, measured | Ratio to isolated |
-|---|---:|---:|
-| `evaluate-isolated` | 162s | 1.00 |
-| `evaluate-fedavg` | 228s | **1.41** |
-| `evaluate-evidence` (4.3a) | 186s | 1.15 |
-| `evaluate-evidence` (4.3b, cache warm) | 72s | 0.44 |
-| `train-evidence`, per institution | 7.4s | **4.2** vs isolated training |
+Measured over **all four cells in one process** - 2,609s for the whole chain
+on the sample - which is the only way the halves of a ratio are comparable:
 
-`fedavg` costing 1.41x rather than 8x is the shared featurisation doing its
-job: the raw features of a view do not depend on which booster scores next,
-so they are built once and the eight scalers are applied to them. Two tests
-pin that path to bit equality against featurising once per booster.
+| Per cell (8 institutions) | Total, 4 cells | Ratio to isolated | Per-cell spread |
+|---|---:|---:|---:|
+| `evaluate-isolated` | 574.6s | 1.00 | 112.7 - 173.6s |
+| `evaluate-fedavg` | 698.0s | **1.21** | 1.09 - 1.48x |
+| `evaluate-evidence` (4.3a) | 488.9s | **0.85** | 0.58 - 1.19x |
+| `evaluate-evidence` (4.3b) | 608.5s | **1.06** | 0.79 - 1.33x |
+| `train-evidence` (all 8) | 110.7s | **1.46** vs isolated training | 27.1 - 28.3s |
+
+**The finding that matters for sizing: no condition is meaningfully more
+expensive than `isolated`.** All four evaluation ratios sit between 0.85 and
+1.21, with a per-cell spread of about +/-40% that swamps the differences
+between them. `fedavg` applies eight boosters instead of one and still costs
+1.21x, because **featurisation dominates and is shared**: the raw features of
+a view do not depend on which booster scores next, so they are built once and
+the eight scalers are applied to them. Two tests pin that path to bit
+equality against featurising once per booster.
+
+> **These numbers replace an earlier version of this table that read 1.41 /
+> 1.15 / 0.44 / 4.2.** Those came from a **single** cell, and every one of
+> them was wrong: the one-cell `fedavg` was measured under different machine
+> load, and the one-cell `train-evidence` included the cold boundary-account
+> pass (58.8s against 27-28s for every later cell), which inflated it to 4.2x.
+> The same `fedavg` cell was separately timed at 173s and 228s in two runs - a
+> 25% spread from nothing but load. **Only ratios measured in one process
+> transfer, and even they carry +/-40% per cell.** Which is why every session
+> prints a CALIBRATION line and the runbook says to act on that instead.
 
 The full-data baseline is `evaluate-isolated`, whose per-cell time is the one
 number nobody has yet measured — session B ran six cells inside its 2.5-5.5 h
@@ -1564,19 +1581,30 @@ uncertainty, which is why **every session prints a CALIBRATION line after its
 first cell**, projecting the session from a measurement instead of from this
 table. Act on that line, not on these estimates.
 
+Sized from `evaluate-isolated` at **25-55 min per cell** on the full data -
+session B ran six cells inside its 2.5-5.5 h bracket, and that bracket is the
+one number still unmeasured:
+
 | Session | Command | Inputs | Estimate | Produces |
 |---|---|---|---:|---|
-| **D** | `evaluate-fedavg --targets 1.0,0.75` | dataset + A | 3.5-8 h | 6 of 12 fedavg cells |
-| **E** | `evaluate-fedavg` (all; reloads D's six) | dataset + A + D | 3.5-8 h | all 12 fedavg cells |
+| **D** | `evaluate-fedavg --targets 1.0,0.75` | dataset + A | 3-6.5 h | 6 of 12 fedavg cells |
+| **E** | `evaluate-fedavg` (all; reloads D's six) | dataset + A + D | 3-6.5 h | all 12 fedavg cells |
 | **F** | `evaluate-centralized` then `compare-conditions` | dataset + A + B/C + E + Phase 3 models | 1-2 h | **a complete 4.1/4.2/4.4 result** |
-| **G** | `train-evidence` (96 augmented boosters) | dataset | 7-11 h | the 4.3 boosters |
-| **I** | `evaluate-evidence --targets 1.0,0.75` | dataset + G | 4-9 h | 6 of 12 cells, both 4.3a and 4.3b |
-| **J** | `evaluate-evidence` (all) then `compare-conditions` | dataset + G + I + everything from F | 4-9 h | the full Phase 4 comparison |
+| **G** | `train-evidence` (96 augmented boosters) | dataset | **3-4 h** | the 4.3 boosters |
+| **I** | `evaluate-evidence --targets 1.0,0.75` | dataset + G | 5-10 h | 6 of 12 cells, both 4.3a and 4.3b |
+| **J** | `evaluate-evidence` (all) then `compare-conditions` | dataset + G + I + everything from F | 5-10 h | the full Phase 4 comparison |
 
-Session **H** exists only if G's calibration line projects past ~10 h: G is
-resumable per booster, so stop it and run the remainder as H with the same
-cell. Sessions D, E, I and J are resumable per `(condition, target, seed)`, so
-an over-run costs the cell in flight and nothing else.
+**G is a 3-4 h session, not the 7-11 h an earlier version of this plan
+claimed.** That estimate came from the inflated 4.2x training ratio; at the
+measured 1.46x it is 96 x 1.46 x 83.8s = 3.3 h. Session **H** is therefore
+not expected to be needed - G is still resumable per booster, so if its
+calibration projects past ~10 h, stop it and run the remainder as H with the
+same cell.
+
+**I and J are the tight ones**, because they each run *two* conditions over
+six cells: `(0.85 + 1.06) = 1.91x` isolated per cell, so 6 cells is 5-10 h and
+12 would not fit. Both are resumable per `(condition, target, seed)`, so an
+over-run costs the cell in flight and nothing else.
 
 **4.4 needs the Phase 3 centralized booster.** `evaluate-centralized` loads
 `models/xgboost_centralized_L48_s0` and **refuses to train** unless given

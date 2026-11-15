@@ -14,7 +14,7 @@ It re-derives every **committed** figure from its source file and prints PASS
 or FAIL per figure with the value it recomputed. Exit 0 if all match. Add
 `--json` for the machine-readable form.
 
-**Current state: 70 passed, 0 failed, 9 skipped.** The nine skipped are the
+**Current state: 76 passed, 0 failed, 8 skipped.** The eight skipped are the
 only Phase 4 figures in the README that are **not** reproducible from a
 committed file — they are listed in their own section at the bottom, and they
 are the things to re-check when their evidence lands. A skipped figure is one
@@ -107,9 +107,23 @@ reports them as skipped otherwise.
 | stage 4.0 spread at L = 48 | 3.13 / 2.03 / 1.76 / 1.60 | `backend/artifacts/federation_dev/institution_split.csv` | `python scripts/run_institution_split.py --config configs/local.yaml` |
 | stage 4.1 spread, seed 0 | 2.01 / 1.86 / 1.44 / 1.53 | `backend/artifacts/isolated_dev/phase4_isolated_institutions.csv` | `python scripts/run_isolated.py --config configs/local.yaml` |
 | institution composition, bank 70 at 33.6% of institution 0's load | — | `backend/artifacts/federation_dev/institution_composition.csv` | `python scripts/run_institution_composition.py --config configs/local.yaml` |
-| chain ratios: fedavg 1.41×, evidence 1.15×, fedavg_evidence 0.44×, evidence training 4.2× | — | `backend/artifacts/phase4_dev/phase4_chain.json` | `python scripts/run_phase4_chain.py --config configs/local.yaml` |
-| ceilings agree across all four conditions | max disagreement **0.0** | same | same |
-| union ceiling equals centralized ceiling | difference **0.0** | same | same |
+| chain ratios: fedavg **1.21×**, evidence **0.85×**, fedavg_evidence **1.06×**, evidence training **1.46×** | — | **`docs/reference/phase4_chain_sample.json`** (committed) | `python scripts/run_phase4_chain.py --config configs/local.yaml` |
+| ceilings agree across all four conditions, 256 ceiling cells each | max disagreement **0.0** | same | same |
+| union ceiling equals centralized ceiling, 32 comparisons | difference **0.0** | same | same |
+| whole chain, 4 targets, seed 0 | 2,609s, exit 3 (12 low-edge taus) | same | same |
+
+The dry run's own figures **are** committed, as
+`docs/reference/phase4_chain_sample.{md,json}` and
+`phase4_compare_sample{,_headline}.csv`, fenced as development-only. The
+verifier checks the ratios and both ceiling checks against them.
+
+> **The ratios above replaced a first set taken from one cell** — 1.41 / 1.15
+> / 0.44 / 4.2 — every one of which was wrong. The one-cell `train-evidence`
+> had the cold boundary-account pass inside it; the one-cell `fedavg` was
+> measured under different load. Fixing the verifier's own baseline matcher
+> was what surfaced it: matching `" isolated"` also matched
+> `"train isolated"`, so it first reported a fedavg ratio of **20.45** by
+> dividing an evaluation by a training time.
 
 **A caution the README repeats and this table restates:** the sample thins the
 background to 1%, so its positive rate is ~3.3% against the full data's
@@ -132,6 +146,9 @@ re-checked against it then.
 | union relative, seeds 0 / 1 | 0.500 / 0.600 |
 | union raw recall, seeds 0 / 1 | 0.446 / 0.536 |
 | `binding_fraction` at `per_inst_*` | 1.0 |
+
+(Nine were skipped before the dry run was committed; its ratios are now
+checked, leaving these eight.)
 
 What **can** be checked about them now, and does pass:
 

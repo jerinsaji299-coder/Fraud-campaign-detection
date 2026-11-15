@@ -1,0 +1,743 @@
+{
+  "stage": "4.1-4.4 + compare",
+  "scope": {
+    "targets": [
+      1.0,
+      0.75,
+      0.5,
+      0.25
+    ],
+    "seeds": [
+      0
+    ],
+    "lookback_h": 48,
+    "splits": [
+      "val",
+      "test"
+    ],
+    "conditions": [
+      "isolated",
+      "fedavg",
+      "evidence",
+      "fedavg_evidence"
+    ],
+    "centralized_policy": "matched_seed0",
+    "centralized_model_seeds": [
+      0
+    ],
+    "centralized_retrained_here": true
+  },
+  "DEVELOPMENT_ONLY": "1% sample. The positive rate is ~3.3% against the full data's 0.102%, so precision, false alarms per day, budget-chosen taus and binding counts are properties of the thinned sample. Not a result; not comparable to Phase 3's full-data centralized 0.679 / 0.760.",
+  "checks": {
+    "ceilings_agree_across_conditions": {
+      "n_ceiling_cells": {
+        "evidence": 256,
+        "fedavg": 256,
+        "fedavg_evidence": 256,
+        "isolated": 256
+      },
+      "max_disagreement": 0.0
+    },
+    "union_ceiling_equals_centralized": {
+      "compared": 32,
+      "max_difference": 0.0,
+      "agrees": true
+    }
+  },
+  "provenance": [
+    {
+      "label": "fedavg - isolated [per_institution]",
+      "cells_in_grid": 1792,
+      "pairs_compared": 1792,
+      "pairs_dropped_undefined_on_one_side": 0,
+      "dropped_cells": [],
+      "contrast": "fedavg - isolated",
+      "unit": "per_institution"
+    },
+    {
+      "label": "fedavg - isolated [union]",
+      "cells_in_grid": 224,
+      "pairs_compared": 224,
+      "pairs_dropped_undefined_on_one_side": 0,
+      "dropped_cells": [],
+      "contrast": "fedavg - isolated",
+      "unit": "union"
+    },
+    {
+      "label": "evidence - isolated [per_institution]",
+      "cells_in_grid": 1792,
+      "pairs_compared": 1792,
+      "pairs_dropped_undefined_on_one_side": 0,
+      "dropped_cells": [],
+      "contrast": "evidence - isolated",
+      "unit": "per_institution"
+    },
+    {
+      "label": "evidence - isolated [union]",
+      "cells_in_grid": 224,
+      "pairs_compared": 224,
+      "pairs_dropped_undefined_on_one_side": 0,
+      "dropped_cells": [],
+      "contrast": "evidence - isolated",
+      "unit": "union"
+    },
+    {
+      "label": "fedavg_evidence - fedavg [per_institution]",
+      "cells_in_grid": 1792,
+      "pairs_compared": 1792,
+      "pairs_dropped_undefined_on_one_side": 0,
+      "dropped_cells": [],
+      "contrast": "fedavg_evidence - fedavg",
+      "unit": "per_institution"
+    },
+    {
+      "label": "fedavg_evidence - fedavg [union]",
+      "cells_in_grid": 224,
+      "pairs_compared": 224,
+      "pairs_dropped_undefined_on_one_side": 0,
+      "dropped_cells": [],
+      "contrast": "fedavg_evidence - fedavg",
+      "unit": "union"
+    },
+    {
+      "label": "fedavg_evidence - isolated [per_institution]",
+      "cells_in_grid": 1792,
+      "pairs_compared": 1792,
+      "pairs_dropped_undefined_on_one_side": 0,
+      "dropped_cells": [],
+      "contrast": "fedavg_evidence - isolated",
+      "unit": "per_institution"
+    },
+    {
+      "label": "fedavg_evidence - isolated [union]",
+      "cells_in_grid": 224,
+      "pairs_compared": 224,
+      "pairs_dropped_undefined_on_one_side": 0,
+      "dropped_cells": [],
+      "contrast": "fedavg_evidence - isolated",
+      "unit": "union"
+    },
+    {
+      "label": "fedavg_evidence - evidence [per_institution]",
+      "cells_in_grid": 1792,
+      "pairs_compared": 1792,
+      "pairs_dropped_undefined_on_one_side": 0,
+      "dropped_cells": [],
+      "contrast": "fedavg_evidence - evidence",
+      "unit": "per_institution"
+    },
+    {
+      "label": "fedavg_evidence - evidence [union]",
+      "cells_in_grid": 224,
+      "pairs_compared": 224,
+      "pairs_dropped_undefined_on_one_side": 0,
+      "dropped_cells": [],
+      "contrast": "fedavg_evidence - evidence",
+      "unit": "union"
+    },
+    {
+      "label": "centralized - isolated [union_vs_centralized]",
+      "cells_in_grid": 224,
+      "pairs_compared": 224,
+      "pairs_dropped_undefined_on_one_side": 0,
+      "dropped_cells": [],
+      "contrast": "centralized - isolated",
+      "unit": "union_vs_centralized"
+    },
+    {
+      "label": "centralized - fedavg [union_vs_centralized]",
+      "cells_in_grid": 224,
+      "pairs_compared": 224,
+      "pairs_dropped_undefined_on_one_side": 0,
+      "dropped_cells": [],
+      "contrast": "centralized - fedavg",
+      "unit": "union_vs_centralized"
+    },
+    {
+      "label": "centralized - evidence [union_vs_centralized]",
+      "cells_in_grid": 224,
+      "pairs_compared": 224,
+      "pairs_dropped_undefined_on_one_side": 0,
+      "dropped_cells": [],
+      "contrast": "centralized - evidence",
+      "unit": "union_vs_centralized"
+    },
+    {
+      "label": "centralized - fedavg_evidence [union_vs_centralized]",
+      "cells_in_grid": 224,
+      "pairs_compared": 224,
+      "pairs_dropped_undefined_on_one_side": 0,
+      "dropped_cells": [],
+      "contrast": "centralized - fedavg_evidence",
+      "unit": "union_vs_centralized"
+    }
+  ],
+  "skipped_contrasts": [],
+  "seed_noise_floor": {
+    "campaign_recall": 0.0357142857142857,
+    "recall_relative_to_ceiling": 0.04
+  },
+  "centralized_reproduction": {
+    "per_seed": [
+      {
+        "model_seed": 0,
+        "measured": {
+          "campaign_recall": 0.8035714285714286,
+          "relative": 0.9,
+          "oracle_recall": 0.8928571428571429,
+          "tau": 0.8
+        },
+        "phase3_recorded": {
+          "campaign_recall": 0.6964285714285714,
+          "relative": 0.78,
+          "n_detected": 39
+        },
+        "recall_matches": false,
+        "ceiling_matches": true
+      }
+    ],
+    "measured_mean_recall": 0.8035714285714286,
+    "phase3_mean_over_these_seeds": {
+      "model_seeds": [
+        0
+      ],
+      "campaign_recall": 0.6964285714285714,
+      "relative": 0.78,
+      "oracle_recall": 0.8928571428571429
+    },
+    "phase3_headline": {
+      "campaign_recall": 0.6785714285714286,
+      "relative": 0.76
+    },
+    "headline_is_five_seed_mean": true
+  },
+  "evidence_stats": [
+    {
+      "visibility_target": 1.0,
+      "seed": 0,
+      "n_boundary_accounts": 60135,
+      "windows_cached": 33,
+      "global_node_hits": 495,
+      "global_node_misses": 33,
+      "global_node_seconds": 5.92,
+      "max_cached_windows": null
+    },
+    {
+      "visibility_target": 0.75,
+      "seed": 0,
+      "n_boundary_accounts": 61490,
+      "windows_cached": 33,
+      "global_node_hits": 495,
+      "global_node_misses": 33,
+      "global_node_seconds": 5.87,
+      "max_cached_windows": null
+    },
+    {
+      "visibility_target": 0.5,
+      "seed": 0,
+      "n_boundary_accounts": 61493,
+      "windows_cached": 33,
+      "global_node_hits": 495,
+      "global_node_misses": 33,
+      "global_node_seconds": 3.83,
+      "max_cached_windows": null
+    },
+    {
+      "visibility_target": 0.25,
+      "seed": 0,
+      "n_boundary_accounts": 61409,
+      "windows_cached": 33,
+      "global_node_hits": 495,
+      "global_node_misses": 33,
+      "global_node_seconds": 5.95,
+      "max_cached_windows": null
+    }
+  ],
+  "cells": [
+    {
+      "condition": "isolated",
+      "target": 1.0,
+      "seed": 0,
+      "seconds": 173.6,
+      "untrained": [],
+      "thin": [],
+      "n_high_edge": 0,
+      "n_low_edge": 0,
+      "n_no_affordable_tau": 0
+    },
+    {
+      "condition": "fedavg",
+      "target": 1.0,
+      "seed": 0,
+      "seconds": 208.6,
+      "untrained": [],
+      "thin": [],
+      "n_high_edge": 0,
+      "n_low_edge": 0,
+      "n_no_affordable_tau": 0
+    },
+    {
+      "condition": "evidence",
+      "target": 1.0,
+      "seed": 0,
+      "seconds": 100.0,
+      "untrained": [],
+      "thin": [],
+      "n_high_edge": 0,
+      "n_low_edge": 0,
+      "n_no_affordable_tau": 0
+    },
+    {
+      "condition": "fedavg_evidence",
+      "target": 1.0,
+      "seed": 0,
+      "seconds": 137.8,
+      "untrained": [],
+      "thin": [],
+      "n_high_edge": 0,
+      "n_low_edge": 0,
+      "n_no_affordable_tau": 0
+    },
+    {
+      "condition": "isolated",
+      "target": 0.75,
+      "seed": 0,
+      "seconds": 151.1,
+      "untrained": [],
+      "thin": [],
+      "n_high_edge": 0,
+      "n_low_edge": 0,
+      "n_no_affordable_tau": 0
+    },
+    {
+      "condition": "fedavg",
+      "target": 0.75,
+      "seed": 0,
+      "seconds": 164.6,
+      "untrained": [],
+      "thin": [],
+      "n_high_edge": 0,
+      "n_low_edge": 0,
+      "n_no_affordable_tau": 0
+    },
+    {
+      "condition": "evidence",
+      "target": 0.75,
+      "seed": 0,
+      "seconds": 155.6,
+      "untrained": [],
+      "thin": [],
+      "n_high_edge": 0,
+      "n_low_edge": 2,
+      "n_no_affordable_tau": 0
+    },
+    {
+      "condition": "fedavg_evidence",
+      "target": 0.75,
+      "seed": 0,
+      "seconds": 162.1,
+      "untrained": [],
+      "thin": [],
+      "n_high_edge": 0,
+      "n_low_edge": 0,
+      "n_no_affordable_tau": 0
+    },
+    {
+      "condition": "isolated",
+      "target": 0.5,
+      "seed": 0,
+      "seconds": 112.7,
+      "untrained": [],
+      "thin": [],
+      "n_high_edge": 0,
+      "n_low_edge": 1,
+      "n_no_affordable_tau": 0
+    },
+    {
+      "condition": "fedavg",
+      "target": 0.5,
+      "seed": 0,
+      "seconds": 166.5,
+      "untrained": [],
+      "thin": [],
+      "n_high_edge": 0,
+      "n_low_edge": 1,
+      "n_no_affordable_tau": 0
+    },
+    {
+      "condition": "evidence",
+      "target": 0.5,
+      "seed": 0,
+      "seconds": 70.4,
+      "untrained": [],
+      "thin": [],
+      "n_high_edge": 0,
+      "n_low_edge": 2,
+      "n_no_affordable_tau": 0
+    },
+    {
+      "condition": "fedavg_evidence",
+      "target": 0.5,
+      "seed": 0,
+      "seconds": 150.3,
+      "untrained": [],
+      "thin": [],
+      "n_high_edge": 0,
+      "n_low_edge": 1,
+      "n_no_affordable_tau": 0
+    },
+    {
+      "condition": "isolated",
+      "target": 0.25,
+      "seed": 0,
+      "seconds": 137.2,
+      "untrained": [],
+      "thin": [],
+      "n_high_edge": 0,
+      "n_low_edge": 2,
+      "n_no_affordable_tau": 0
+    },
+    {
+      "condition": "fedavg",
+      "target": 0.25,
+      "seed": 0,
+      "seconds": 158.1,
+      "untrained": [],
+      "thin": [],
+      "n_high_edge": 0,
+      "n_low_edge": 0,
+      "n_no_affordable_tau": 0
+    },
+    {
+      "condition": "evidence",
+      "target": 0.25,
+      "seed": 0,
+      "seconds": 162.9,
+      "untrained": [],
+      "thin": [],
+      "n_high_edge": 0,
+      "n_low_edge": 2,
+      "n_no_affordable_tau": 0
+    },
+    {
+      "condition": "fedavg_evidence",
+      "target": 0.25,
+      "seed": 0,
+      "seconds": 158.3,
+      "untrained": [],
+      "thin": [],
+      "n_high_edge": 0,
+      "n_low_edge": 1,
+      "n_no_affordable_tau": 0
+    }
+  ],
+  "tau_at_grid_edge": [
+    {
+      "condition": "evidence",
+      "visibility_target": 0.75,
+      "seed": 0,
+      "institution": 2
+    },
+    {
+      "condition": "evidence",
+      "visibility_target": 0.75,
+      "seed": 0,
+      "institution": 6
+    },
+    {
+      "condition": "isolated",
+      "visibility_target": 0.5,
+      "seed": 0,
+      "institution": 2
+    },
+    {
+      "condition": "fedavg",
+      "visibility_target": 0.5,
+      "seed": 0,
+      "institution": 0
+    },
+    {
+      "condition": "evidence",
+      "visibility_target": 0.5,
+      "seed": 0,
+      "institution": 0
+    },
+    {
+      "condition": "evidence",
+      "visibility_target": 0.5,
+      "seed": 0,
+      "institution": 5
+    },
+    {
+      "condition": "fedavg_evidence",
+      "visibility_target": 0.5,
+      "seed": 0,
+      "institution": 0
+    },
+    {
+      "condition": "isolated",
+      "visibility_target": 0.25,
+      "seed": 0,
+      "institution": 0
+    },
+    {
+      "condition": "isolated",
+      "visibility_target": 0.25,
+      "seed": 0,
+      "institution": 3
+    },
+    {
+      "condition": "evidence",
+      "visibility_target": 0.25,
+      "seed": 0,
+      "institution": 0
+    },
+    {
+      "condition": "evidence",
+      "visibility_target": 0.25,
+      "seed": 0,
+      "institution": 5
+    },
+    {
+      "condition": "fedavg_evidence",
+      "visibility_target": 0.25,
+      "seed": 0,
+      "institution": 4
+    }
+  ],
+  "high_edge": [],
+  "low_edge": [
+    {
+      "condition": "evidence",
+      "visibility_target": 0.75,
+      "seed": 0,
+      "institution": 2,
+      "operating_point": "f1"
+    },
+    {
+      "condition": "evidence",
+      "visibility_target": 0.75,
+      "seed": 0,
+      "institution": 6,
+      "operating_point": "f1"
+    },
+    {
+      "condition": "isolated",
+      "visibility_target": 0.5,
+      "seed": 0,
+      "institution": 2,
+      "operating_point": "f1"
+    },
+    {
+      "condition": "fedavg",
+      "visibility_target": 0.5,
+      "seed": 0,
+      "institution": 0,
+      "operating_point": "f1"
+    },
+    {
+      "condition": "evidence",
+      "visibility_target": 0.5,
+      "seed": 0,
+      "institution": 0,
+      "operating_point": "f1"
+    },
+    {
+      "condition": "evidence",
+      "visibility_target": 0.5,
+      "seed": 0,
+      "institution": 5,
+      "operating_point": "f1"
+    },
+    {
+      "condition": "fedavg_evidence",
+      "visibility_target": 0.5,
+      "seed": 0,
+      "institution": 0,
+      "operating_point": "f1"
+    },
+    {
+      "condition": "isolated",
+      "visibility_target": 0.25,
+      "seed": 0,
+      "institution": 0,
+      "operating_point": "f1"
+    },
+    {
+      "condition": "isolated",
+      "visibility_target": 0.25,
+      "seed": 0,
+      "institution": 3,
+      "operating_point": "f1"
+    },
+    {
+      "condition": "evidence",
+      "visibility_target": 0.25,
+      "seed": 0,
+      "institution": 0,
+      "operating_point": "f1"
+    },
+    {
+      "condition": "evidence",
+      "visibility_target": 0.25,
+      "seed": 0,
+      "institution": 5,
+      "operating_point": "f1"
+    },
+    {
+      "condition": "fedavg_evidence",
+      "visibility_target": 0.25,
+      "seed": 0,
+      "institution": 4,
+      "operating_point": "f1"
+    }
+  ],
+  "timings": [
+    {
+      "step": "build pipeline",
+      "seconds": 1.3
+    },
+    {
+      "step": "t100_s0 train isolated",
+      "seconds": 10.2
+    },
+    {
+      "step": "t100_s0 isolated",
+      "seconds": 173.6
+    },
+    {
+      "step": "t100_s0 fedavg",
+      "seconds": 208.6
+    },
+    {
+      "step": "t100_s0 train evidence",
+      "seconds": 28.3
+    },
+    {
+      "step": "t100_s0 evidence",
+      "seconds": 100.0
+    },
+    {
+      "step": "t100_s0 fedavg_evidence",
+      "seconds": 137.8
+    },
+    {
+      "step": "t075_s0 train isolated",
+      "seconds": 24.4
+    },
+    {
+      "step": "t075_s0 isolated",
+      "seconds": 151.1
+    },
+    {
+      "step": "t075_s0 fedavg",
+      "seconds": 164.7
+    },
+    {
+      "step": "t075_s0 train evidence",
+      "seconds": 27.2
+    },
+    {
+      "step": "t075_s0 evidence",
+      "seconds": 155.6
+    },
+    {
+      "step": "t075_s0 fedavg_evidence",
+      "seconds": 162.1
+    },
+    {
+      "step": "t050_s0 train isolated",
+      "seconds": 16.6
+    },
+    {
+      "step": "t050_s0 isolated",
+      "seconds": 112.7
+    },
+    {
+      "step": "t050_s0 fedavg",
+      "seconds": 166.5
+    },
+    {
+      "step": "t050_s0 train evidence",
+      "seconds": 27.1
+    },
+    {
+      "step": "t050_s0 evidence",
+      "seconds": 70.4
+    },
+    {
+      "step": "t050_s0 fedavg_evidence",
+      "seconds": 150.3
+    },
+    {
+      "step": "t025_s0 train isolated",
+      "seconds": 24.8
+    },
+    {
+      "step": "t025_s0 isolated",
+      "seconds": 137.2
+    },
+    {
+      "step": "t025_s0 fedavg",
+      "seconds": 158.2
+    },
+    {
+      "step": "t025_s0 train evidence",
+      "seconds": 28.1
+    },
+    {
+      "step": "t025_s0 evidence",
+      "seconds": 162.9
+    },
+    {
+      "step": "t025_s0 fedavg_evidence",
+      "seconds": 158.3
+    },
+    {
+      "step": "train centralized s0",
+      "seconds": 7.4
+    },
+    {
+      "step": "evaluate centralized",
+      "seconds": 24.3
+    }
+  ],
+  "total_seconds": 2608.6,
+  "files": [
+    "phase4_centralized_ceilings.csv",
+    "phase4_centralized_outcomes.csv",
+    "phase4_centralized_summary.csv",
+    "phase4_centralized_taus.csv",
+    "phase4_compare.csv",
+    "phase4_compare_headline.csv",
+    "phase4_evidence_ceilings.csv",
+    "phase4_evidence_institutions.csv",
+    "phase4_evidence_outcomes.csv",
+    "phase4_evidence_pooled.csv",
+    "phase4_evidence_stats.csv",
+    "phase4_evidence_summary.csv",
+    "phase4_evidence_taus.csv",
+    "phase4_evidence_union.csv",
+    "phase4_fedavg_ceilings.csv",
+    "phase4_fedavg_evidence_ceilings.csv",
+    "phase4_fedavg_evidence_institutions.csv",
+    "phase4_fedavg_evidence_outcomes.csv",
+    "phase4_fedavg_evidence_pooled.csv",
+    "phase4_fedavg_evidence_summary.csv",
+    "phase4_fedavg_evidence_taus.csv",
+    "phase4_fedavg_evidence_union.csv",
+    "phase4_fedavg_institutions.csv",
+    "phase4_fedavg_outcomes.csv",
+    "phase4_fedavg_pooled.csv",
+    "phase4_fedavg_summary.csv",
+    "phase4_fedavg_taus.csv",
+    "phase4_fedavg_union.csv",
+    "phase4_isolated_ceilings.csv",
+    "phase4_isolated_institutions.csv",
+    "phase4_isolated_outcomes.csv",
+    "phase4_isolated_pooled.csv",
+    "phase4_isolated_summary.csv",
+    "phase4_isolated_taus.csv",
+    "phase4_isolated_union.csv"
+  ]
+}

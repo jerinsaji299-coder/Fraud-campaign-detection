@@ -52,6 +52,8 @@ git clone https://github.com/jerinsaji299-coder/Fraud-campaign-detection.git
     - [Stage 4.3: boundary-account evidence](#stage-43-boundary-account-evidence--implemented-2026-11-15)
         - [Result: evidence cannot raise a ceiling](#result-boundary-account-evidence-cannot-raise-an-institutions-ceiling)
     - [Stage 4.4: centralized in the Phase 4 grid](#stage-44-the-centralized-arm-inside-the-phase-4-cell-grid--implemented-2026-11-15)
+    - [The Phase 4 dry run on the 1% sample](#the-phase-4-dry-run-on-the-1-sample--done-2026-11-15)
+    - [The live detection panel](#the-live-detection-panel--implemented-2026-11-15)
         - [The two centralized numbers, and why both are right](#the-two-centralized-numbers-and-why-both-are-right)
         - [O1: which model seeds centralized uses — decided](#o1-which-model-seeds-the-centralized-arm-uses)
         - [Grid-edge policy](#12-grid-edge-policy-and-the-extension-of-model_tau_grid)
@@ -177,6 +179,7 @@ feature set only, three seeds, one lookback**. See
 | 4.3 | **The `evidence` and `fedavg_evidence` conditions**: boundary accounts receive the window node features computed across the views that hold them; boosters retrained on augmented views; evaluated with own-model scoring (4.3a) and score averaging (4.3b) | **built and tested** 2026-11-15 — `federation/evidence.py`. Under this definition the ceiling cannot move, which is what keeps every comparison paired; see [stage 4.3](#stage-43-boundary-account-evidence--implemented-2026-11-15). No numbers yet |
 | 4.4 | **The `centralized` arm re-reported in the Phase 4 cell grid**, as the `K = 1` case of a per-institution condition | **built and tested** 2026-11-15 — `federation/centralized.py`. **One open decision blocks its number**: which model seed(s) it uses. See [O1](#o1-which-model-seeds-the-centralized-arm-uses) |
 | 4.5 | **The Phase 4 comparison report and the Kaggle runner subcommands**: `evaluate-fedavg`, `train-evidence`, `evaluate-evidence`, `evaluate-centralized`, `compare-conditions`, resumable per (condition, target, seed) | **built and tested** 2026-11-15 — `federation/compare.py` enforces rule 1 rather than assuming it: cells that do not match raise, a cell undefined on one side removes the pair, and the ceilings must agree across all four per-institution conditions. Dry run on the sample passed end to end. Sessions D-J are in [`run_on_kaggle.md` §5m](backend/scripts/kaggle/run_on_kaggle.md) |
+| 4.5b | **The Phase 4 dry run**: the whole chain on the 1% sample, from scratch | **done** 2026-11-15 — 2,609s, exit 3 (12 low-edge taus, expected on the sample). Both checks held across all four targets: ceilings agree across every condition (max disagreement **0.0**, 256 cells each) and the union ceiling equals the centralized one (**0.0**, 32 comparisons). [Committed](docs/reference/phase4_chain_sample.md), fenced development-only |
 | 4.6 | **The live detection panel** at `/live`: one window, one toggle, recomputed on the spot, with the aggregate figures beneath it | **built and tested** 2026-11-15 — see [the live detection panel](#the-live-detection-panel--implemented-2026-11-15) |
 
 **Later phases (not started)**
@@ -3744,6 +3747,71 @@ named. **`matched_seed0` was chosen.** 0.679 / 0.760 stays what it already is
 — the Phase 3 headline and the reproduction reference — and is never the
 comparator.
 
+### The Phase 4 dry run on the 1% sample — done 2026-11-15
+
+The whole chain from scratch on a laptop: 4.1 → 4.2 → 4.3a → 4.3b → 4.4 →
+`compare-conditions`, four targets at seed 0, **2,609s**, exit **3**.
+Committed as
+[`docs/reference/phase4_chain_sample.{md,json}`](docs/reference/phase4_chain_sample.md)
+and `phase4_compare_sample{,_headline}.csv`.
+
+> **DEVELOPMENT ONLY.** The sample thins the background to 1%, so its positive
+> rate is ~3.3% against the full data's 0.102%. Nothing here is a result. Its
+> job was to prove the chain runs end to end, that the pairing rules hold on
+> real rows, and that the report assembles — before anything is run on Kaggle.
+
+**The two checks that had to hold, held across all four targets.**
+
+| Check | Result |
+|---|---|
+| every per-institution condition shares every oracle ceiling | **max disagreement 0.0**, over 256 ceiling cells per condition |
+| the union's ceiling equals the centralized ceiling | **difference 0.0**, over 32 comparisons |
+
+The first is the measurable form of [the 4.3
+result](#result-boundary-account-evidence-cannot-raise-an-institutions-ceiling):
+sharing node features changes what a model knows, never which rows it has, so
+no condition may move a ceiling. It is now confirmed on real rows across all
+four conditions and all four targets, not only argued from the definitions.
+The second is the stage 4.1 structural claim, holding on the sample as it does
+on the full data and in Phase 3's committed record.
+
+**Exit 3, for 12 F1 taus at the LOW edge of the grid.** Expected on the
+sample and not a defect: at a ~3.3% positive rate the most sensitive threshold
+on the grid can genuinely be the best one, which is why the sample runners
+record a low edge and the full-data runner refuses to. On the full data the
+same event is a **stop condition**.
+
+**Cost, measured in one process over four cells — the number the Kaggle plan
+is sized from.**
+
+| Step | Total, 4 cells | Ratio | Per-cell spread |
+|---|---:|---:|---:|
+| `evaluate-isolated` | 574.6s | 1.00 | 112.7 – 173.6s |
+| `evaluate-fedavg` | 698.0s | **1.21** | 1.09 – 1.48× |
+| `evaluate-evidence` (4.3a) | 488.9s | **0.85** | 0.58 – 1.19× |
+| `evaluate-evidence` (4.3b) | 608.5s | **1.06** | 0.79 – 1.33× |
+| `train-evidence` (all 8) | 110.7s | **1.46** vs isolated training | 27.1 – 28.3s |
+| `evaluate-centralized` | 24.3s | — | one run, replicated |
+
+**No condition is meaningfully more expensive than `isolated`.** All four
+evaluation ratios fall between 0.85 and 1.21, inside a per-cell spread of
+about ±40% that swamps the differences between them. `fedavg` applies eight
+boosters instead of one and still costs 1.21×, because **featurisation
+dominates and is shared** — the raw features of a view do not depend on which
+booster scores next, so they are built once and the eight scalers applied to
+them. That is what makes the full-data plan affordable rather than eight times
+over budget.
+
+*These replaced a first set of ratios taken from a single cell — 1.41 / 1.15 /
+0.44 / 4.2 — every one of which was wrong. The one-cell `train-evidence`
+figure had the cold boundary-account pass inside it (58.8s against 27-28s for
+every later cell), and the one-cell `fedavg` was measured under different
+machine load: the same cell timed 173s and 228s in two runs, a 25% spread from
+load alone. Correcting them cut session G's estimate from 7-11 h to 3-4 h.
+Only ratios measured in one process transfer, and even those carry ±40% per
+cell, which is why every Kaggle session prints a CALIBRATION line and the
+runbook says to act on that instead.*
+
 ### The live detection panel — implemented 2026-11-15
 
 A presentation panel at `/live` in the frontend: one detection window, scored
@@ -3971,6 +4039,9 @@ project-root/
       train_isolated.{md,csv,json}    the 96 isolated boosters: rows, positives, class weights, tiers, timing
       phase4_unprompted_decisions.md  every Phase 4 choice D1-D6 did not cover, with the alternative rejected
       phase4_crosscheck.md            every Phase 4 figure in the README, its source row, and the one command that reproduces it
+      phase4_chain_sample.{md,json}   the Phase 4 dry run on the 1% sample, DEVELOPMENT ONLY: evidence the chain runs end to end and its checks hold
+      phase4_compare_sample.csv       every paired contrast from that dry run, with its denominators and seed-noise flags (sample, not a result)
+      phase4_compare_sample_headline.csv  the primary-point view of the same
   backend/
     requirements.txt               Python dependencies: pandas, numpy, pyarrow, pyyaml, pytest, fastapi, uvicorn, pydantic
     pyproject.toml                 setuptools packaging for `fraudcamp` (src/ layout) + pytest `fulldata` marker
@@ -5742,13 +5813,25 @@ Tagged points in the repository, newest first. Check one out with
   standard error is taken across the non-exchangeable institutions — each
   difference carries its median, range and sign counts.
 
-  *Dry run on the 1% sample, the whole chain, exit 0.* Two checks came out
-  exactly right: all four per-institution conditions share **every** oracle
-  ceiling (max disagreement 0.0), and the union ceiling equals the centralized
-  ceiling (difference 0.0). Measured per-cell ratios against isolated:
-  **fedavg 1.41x** — not 8x, because the raw featurisation of a view is shared
-  across the eight boosters scoring it — evidence 1.15x, fedavg_evidence 0.44x
-  with the shared-node cache warm, and evidence training 4.2x. Dropping 4.3 is
+  *Dry run on the 1% sample, the whole chain, four targets, 2,609s, exit 3.*
+  Exit 3 is 12 F1 taus at the **low** edge of the grid, which is expected at
+  the sample's ~3.3% positive rate and is a stop condition only on full data.
+  Two checks came out exactly right **across all four targets**: all four
+  per-institution conditions share **every** oracle ceiling (max disagreement
+  0.0, over 256 ceiling cells each), and the union ceiling equals the
+  centralized ceiling (difference 0.0, over 32 comparisons). Committed as
+  [`phase4_chain_sample.{md,json}`](docs/reference/phase4_chain_sample.md),
+  fenced development-only. Measured per-cell ratios against isolated:
+  **fedavg 1.21x** — not 8x, because the raw featurisation of a view is shared
+  across the eight boosters scoring it — evidence 0.85x, fedavg_evidence 1.06x,
+  and evidence training 1.46x. *Those replace a first set of ratios taken from
+  a single cell (1.41 / 1.15 / 0.44 / 4.2), every one of which was wrong: the
+  four-cell measurement is in one process, and the one-cell training figure had
+  the cold boundary-account pass inside it.* **No condition is meaningfully
+  more expensive than isolated** — all four ratios fall between 0.85 and 1.21,
+  inside a per-cell spread of ±40% — which is what makes the Kaggle plan
+  affordable, and it cut session G's estimate from 7-11 h to 3-4 h. Dropping
+  4.3 is
   **verified** to leave a complete 4.1/4.2/4.4 result with the four missing
   contrasts named rather than silently absent.
 
