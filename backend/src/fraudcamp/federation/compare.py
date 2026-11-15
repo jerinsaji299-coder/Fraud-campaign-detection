@@ -168,6 +168,22 @@ def paired(
             f"{label or 'contrast'}: missing key column(s) {missing_cols}"
         )
 
+    # Duplicate keys would make the merge below a cross product and inflate
+    # `n_pairs` - the one number a reader uses to judge how much the
+    # difference rests on. Caught here rather than discovered from a
+    # suspiciously round denominator.
+    for side, frame in (("baseline", baseline), ("treatment", treatment)):
+        counts = frame.groupby(keys, dropna=False).size()
+        repeated = counts[counts > 1]
+        if len(repeated):
+            raise NonIdenticalCells(
+                f"{label or 'contrast'}: the {side} has {len(repeated)} "
+                f"duplicated cell key(s), e.g. {repeated.index[0]} appearing "
+                f"{int(repeated.iloc[0])} times. A merge on a duplicated key "
+                "is a cross product, so every pair count downstream would be "
+                "inflated. Deduplicate the input or widen the key."
+            )
+
     left_all = set(map(tuple, baseline[keys].to_numpy().tolist()))
     right_all = set(map(tuple, treatment[keys].to_numpy().tolist()))
     only_left = left_all - right_all
