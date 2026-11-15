@@ -14,14 +14,14 @@ It re-derives every **committed** figure from its source file and prints PASS
 or FAIL per figure with the value it recomputed. Exit 0 if all match. Add
 `--json` for the machine-readable form.
 
-**Current state: 76 passed, 0 failed, 8 skipped.** The eight skipped are the
+**Current state: 77 passed, 0 failed, 10 skipped.** The ten skipped are the
 only Phase 4 figures in the README that are **not** reproducible from a
 committed file — they are listed in their own section at the bottom, and they
 are the things to re-check when their evidence lands. A skipped figure is one
 the README asserts on trust; that is a smaller list than the passing one on
 purpose.
 
-Last updated 2026-11-15.
+Last updated 2026-11-16.
 
 ---
 
@@ -112,6 +112,17 @@ reports them as skipped otherwise.
 | union ceiling equals centralized ceiling, 32 comparisons | difference **0.0** | same | same |
 | whole chain, 4 targets, seed 0 | 2,609s, exit 3 (12 low-edge taus) | same | same |
 
+| backfill reconstructs the measured F1 value to | **≤ 2.22e-16** over 32 (cell, institution) pairs | `artifacts/isolated_dev/phase4_isolated.json` + its combined CSVs | `python scripts/verify_f1_backfill.py` |
+
+That last row has its **own** command because it is the evidence for a
+decision not to spend ~1.5 h re-running session B's two cells. It needs a run
+where both the tau curve and the summary row are on disk, which is a local
+isolated run: the JSON carries `tau_curves`, the Kaggle per-cell CSVs do not.
+The script stages the run's cells with the new columns stripped, runs the real
+`backfill-f1-value`, and compares. It is **one ULP, not bit-exact** - the
+per-cell CSV stores precision and recall at 16 significant digits, so `1/26`
+round-trips as `0.0384615384615384`.
+
 The dry run's own figures **are** committed, as
 `docs/reference/phase4_chain_sample.{md,json}` and
 `phase4_compare_sample{,_headline}.csv`, fenced as development-only. The
@@ -132,15 +143,17 @@ binding count are properties of the thinned sample. Two figures already
 reversed between the sample and the full data — the budget binding (0 of 8 →
 all) and the near-ceiling reading (0.62-0.89 → 0.306-0.369).
 
-## 5. SKIPPED — the nine figures not reproducible from a committed file
+## 5. SKIPPED — the ten figures not reproducible from a committed file
 
-All nine are **session B's**, reported into the README before its CSVs were
+All ten are **session B's**, reported into the README before its CSVs were
 committed. Session B covered targets 1.00 and 0.75 only; the complete report
 lands in `docs/reference/` after stage 4.1 session C, and these are to be
 re-checked against it then.
 
 | Figure | Value as reported |
 |---|---:|
+| `t100_s0` wall time, sum(`eval_seconds`) × 1.08 | 2,568.5s (46.2 min) |
+| `t100_s1` wall time, sum(`eval_seconds`) × 1.08 | 2,465.0s (44.4 min) |
 | union test oracle recall | 0.8928571 (50 of 56) |
 | lone institution relative, seeds 0 / 1 | 0.306 / 0.369 |
 | union relative, seeds 0 / 1 | 0.500 / 0.600 |
@@ -148,7 +161,8 @@ re-checked against it then.
 | `binding_fraction` at `per_inst_*` | 1.0 |
 
 (Nine were skipped before the dry run was committed; its ratios are now
-checked, leaving these eight.)
+checked, and session B's two derived wall times were added, leaving these
+ten.)
 
 What **can** be checked about them now, and does pass:
 
@@ -160,7 +174,16 @@ What **can** be checked about them now, and does pass:
 
 Two further gaps in session B's hand-off, recorded rather than guessed: the
 **operating point** those recall figures were read at was not named, and
-**seed 2** was not included.
+**seed 2** was not included — because B stopped before reaching it.
+
+The two wall times are the figures that settled **why** B stopped: at 44-46
+minutes a cell, two cells plus one in flight is ~2.3 h, which excludes the
+12 h session limit and leaves the low-edge F1 tau rule as the only cause that
+fits. They were derived from B's own `*_institutions.csv` rather than
+re-measured, and the 1.08 scale factor between a cell's wall time and the sum
+of its per-institution `eval_seconds` is itself from the committed dry run,
+where it ranged 1.05-1.11 across four cells. Both become checkable here when
+B's CSVs are committed after session C3.
 
 ## 6. Figures that are definitions, not measurements
 
@@ -176,3 +199,8 @@ rather than by this script.
 | score averaging's fast path is bit-identical to the naive one | `test_shared_featurisation_is_bit_identical_to_one_spec_at_a_time`, `test_the_fast_and_naive_averaged_scorers_agree_exactly` |
 | the three model-seed policies give different numbers | `test_the_model_seed_policy_must_be_named_and_the_three_disagree` |
 | 0.679 / 0.760 is the five-seed mean | `test_the_phase3_headline_is_the_five_seed_mean` |
+| the degeneracy epsilon is **0.01**, with an inclusive boundary | `test_the_degeneracy_epsilon_is_fixed_and_its_boundary_is_inclusive` — fixed 2026-11-16, before any cell ran under the recording policy |
+| `f1_best_value` is the value **at** the chosen tau | `test_f1_best_value_is_the_value_at_the_chosen_tau` |
+| a cell with no F1 curve is out of both terms of the degenerate count | `test_degenerate_summary_excludes_cells_with_no_curve` |
+| `2PR/(P+R)` of the validation `f1` row is the curve maximum | `test_the_backfill_identity_holds_for_the_f1_point_on_validation`, and empirically by `scripts/verify_f1_backfill.py` |
+| a low-edge F1 tau is recorded, not a stop | `test_a_low_edge_f1_tau_is_recorded_under_the_2026_11_16_policy` |

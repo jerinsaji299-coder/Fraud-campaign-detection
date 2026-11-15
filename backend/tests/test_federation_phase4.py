@@ -540,6 +540,110 @@ def test_the_phase3_ceiling_is_the_union_ceiling_stage_41_predicts():
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# the F1 value behind the chosen tau, and the degeneracy flag
+#
+# The low-edge policy records a cell whose F1 tau sits at the floor. That is
+# only honest if the report also says whether the curve had a maximum at all:
+# at a per-institution ceiling of 0.139 campaign F1 is ~0 at every tau, the
+# argmax is settled by the tie-break, and the floor tau is not an optimum.
+# ---------------------------------------------------------------------------
+
+
+def test_the_degeneracy_epsilon_is_fixed_and_its_boundary_is_inclusive():
+    """Fixed 2026-11-16, before any cell ran under the recording policy.
+
+    Pinned by a test so it cannot drift after someone sees which cells it
+    would catch - the whole point of fixing it in advance.
+    """
+    assert isolated.F1_DEGENERATE_EPSILON == 0.01
+    assert isolated.f1_is_degenerate(0.0) is True
+    assert isolated.f1_is_degenerate(0.01) is True, "the boundary is inclusive"
+    assert isolated.f1_is_degenerate(0.0100001) is False
+    assert isolated.f1_is_degenerate(0.5) is False
+    # no curve at all is not the same as a flat curve
+    assert isolated.f1_is_degenerate(None) is None
+
+
+def test_degenerate_summary_excludes_cells_with_no_curve():
+    """Mirrors `binding_summary`: `None` is out of both terms, not a 0."""
+    out = isolated.degenerate_summary({0: True, 1: False, 2: None})
+    assert out["n_cells_with_an_f1_curve"] == 2
+    assert out["n_f1_degenerate"] == 1
+    assert out["f1_degenerate_fraction"] == pytest.approx(0.5)
+    assert out["f1_degenerate_epsilon"] == 0.01
+    empty = isolated.degenerate_summary({0: None})
+    assert empty["n_cells_with_an_f1_curve"] == 0
+    assert empty["n_f1_degenerate"] == 0
+    assert empty["f1_degenerate_fraction"] is None
+
+
+def test_f1_best_value_is_the_value_at_the_chosen_tau(world, trained):
+    """The recorded value must be the one at `tau_f1`, not a nearby maximum.
+
+    `best_tau` maximises campaign F1 over the curve, and the recorded value
+    is the maximum over that same curve, so the two must agree exactly - and
+    the row AT the chosen tau must carry it. If they ever diverged, a cell
+    would be flagged degenerate (or not) on a different threshold from the
+    one it operates at.
+    """
+    result, assignment = world
+    institution = sorted(i for i, m in trained.items() if m.trained)[0]
+    ev = isolated.evaluate_institution(
+        result.full_df, result.camp, result.pattern_df,
+        result.accounts_by_campaign, trained[institution], assignment,
+        lookback_h=L, splits=("val",),
+    )
+    assert ev.tau_curve, "the fixture produced no tau curve"
+    # exact equality, not `approx`: both are values from the same grid, and
+    # its top six points are within 1e-6 of each other, so a relative
+    # tolerance would match several rows at once
+    at_chosen = [row for row in ev.tau_curve if row["tau"] == ev.tau_f1]
+    assert len(at_chosen) == 1
+    assert ev.f1_best_value == max(r["campaign_f1"] for r in ev.tau_curve)
+    assert ev.f1_best_value == at_chosen[0]["campaign_f1"]
+    assert ev.f1_degenerate is isolated.f1_is_degenerate(ev.f1_best_value)
+
+
+def _f1_outcome(campaign_id: int, detected: bool):
+    return evaluation.CampaignOutcome(
+        campaign_id=campaign_id, split="val", base_type="FAN-OUT",
+        group="treatment", detected=detected,
+        detection_time=pd.Timestamp("2022-09-10") if detected else None,
+        lead_time_h=6.0 if detected else None,
+        normalized_lead_time=None, frac_observed=None,
+        crosses_cutoff=False, shares_train_account=False,
+        deadline=pd.Timestamp("2022-09-20"), end=pd.Timestamp("2022-09-15"),
+        duration_h=48.0, n_txn=5,
+    )
+
+
+def test_the_backfill_identity_holds_for_the_f1_point_on_validation():
+    """`2PR / (P + R)` of the validation F1 row reconstructs the curve maximum.
+
+    This is what makes a cell written before the column existed backfillable
+    instead of re-runnable: the validation row at the `f1` point was evaluated
+    at the chosen tau, so its precision and recall ARE the precision and
+    recall at the argmax, and campaign F1 is their harmonic mean.
+    `summarize` and `campaign_f1` compute both from the same filtered outcome
+    list with the same denominators, which is the step this pins - if either
+    changed its definition of precision, the backfill would silently drift.
+    """
+    outcomes = [
+        _f1_outcome(i, detected=i % 3 != 0) for i in range(9)
+    ]
+    result = evaluation.EvaluationResult(
+        split="val", scorer="t", tau=0.5, lookback_h=L, seed=0,
+        outcomes=outcomes, n_clusters=10, n_hits_clusters=6,
+        n_false_alarms=4, horizon_days=10.0,
+    )
+    curve = evaluation.campaign_f1(result)
+    summary = evaluation.summarize(result, "all", n_resamples=1)
+    precision, recall = summary["campaign_precision"], summary["campaign_recall"]
+    reconstructed = 2 * precision * recall / (precision + recall)
+    assert reconstructed == pytest.approx(curve["campaign_f1"], abs=1e-15)
+
+
 def test_the_phase4_guards_can_fail(world, trained):
     """Each guard above, shown failing on the bug it is there to catch."""
     result, assignment = world

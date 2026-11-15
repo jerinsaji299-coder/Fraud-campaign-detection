@@ -297,6 +297,9 @@ def run(
                         "tau_edge": ev.tau_edges.get(name),
                         "budget_binding": ev.budget_binding.get(name),
                         "undefined_reason": ev.undefined_reason.get(name),
+                        "f1_best_value": ev.f1_best_value,
+                        "f1_degenerate": ev.f1_degenerate,
+                        "f1_degenerate_epsilon": isolated.F1_DEGENERATE_EPSILON,
                     })
                     for split in splits:
                         res = ev.results.get((name, split))
@@ -310,6 +313,8 @@ def run(
                                     "defined": False, "tau": None,
                                     "rejected_tau": ev.rejected_taus.get(name),
                                     "budget_binding": ev.budget_binding.get(name),
+                                    "f1_best_value": ev.f1_best_value,
+                                    "f1_degenerate": ev.f1_degenerate,
                                     "undefined_reason": ev.undefined_reason.get(
                                         name, isolated.NO_AFFORDABLE_TAU
                                     ),
@@ -327,6 +332,8 @@ def run(
                                 "replicated_from_model_seed": model_seed,
                                 "defined": True,
                                 "budget_binding": ev.budget_binding.get(name),
+                                "f1_best_value": ev.f1_best_value,
+                                "f1_degenerate": ev.f1_degenerate,
                                 "undefined_reason": None,
                                 "primary": point["primary"],
                                 **summary,

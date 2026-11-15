@@ -388,15 +388,31 @@ def sample_runs(checker: Checker) -> None:
 
 
 def dry_run(checker: Checker) -> None:
-    """The chain dry run's ratios and checks, when the artifacts are present."""
-    path = BACKEND / "artifacts" / "phase4_dev" / "phase4_chain.json"
-    rel = "backend/artifacts/phase4_dev/phase4_chain.json"
-    if not path.exists():
+    """The chain dry run's ratios and checks, from the COMMITTED payload.
+
+    The committed `docs/reference/phase4_chain_sample.json` first, and the
+    local development artifact only as a fallback. The order matters and used
+    to be the other way round, which was a defect: the README's dry-run
+    figures are sourced from the committed file, so checking them against a
+    regenerable artifact meant any later local run could make them pass or
+    fail for reasons that had nothing to do with the committed evidence.
+    Re-running the chain on 2026-11-16 is what surfaced it - four ratios
+    "failed" against a run whose timings were contaminated by a concurrent
+    test suite, while the committed figures they describe were untouched.
+    """
+    committed = REFERENCE / "phase4_chain_sample.json"
+    local = BACKEND / "artifacts" / "phase4_dev" / "phase4_chain.json"
+    if committed.exists():
+        path, rel = committed, "docs/reference/phase4_chain_sample.json"
+    elif local.exists():
+        path, rel = local, "backend/artifacts/phase4_dev/phase4_chain.json"
+    else:
         checker.skip(
             "dry-run ratios and checks", "1.21 / 0.85 / 1.06 / 1.46, 0.0, 0.0",
-            rel,
-            "development artifact, not committed: regenerate with "
-            "`python scripts/run_phase4_chain.py --config configs/local.yaml`",
+            "docs/reference/phase4_chain_sample.json",
+            "neither the committed payload nor a local artifact is present: "
+            "regenerate with `python scripts/run_phase4_chain.py --config "
+            "configs/local.yaml`",
         )
         return
     payload = json.loads(path.read_text(encoding="utf-8"))
@@ -444,6 +460,48 @@ def dry_run(checker: Checker) -> None:
         )
 
 
+def _cell_wall_ratios() -> list[float]:
+    """A cell's isolated wall time over the sum of its eight eval_seconds.
+
+    The factor every per-cell wall time derived from `eval_seconds` rests on,
+    including the two that settled why session B stopped. Returns an empty
+    list when the development artifacts are absent, in which case the caller
+    lists the figure instead of checking it.
+    """
+    import csv
+
+    chain = BACKEND / "artifacts" / "phase4_dev" / "phase4_chain.json"
+    rows = BACKEND / "artifacts" / "phase4_dev" / "phase4_isolated_institutions.csv"
+    if not chain.exists() or not rows.exists():
+        return []
+    payload = json.loads(chain.read_text(encoding="utf-8"))
+    # `split(" ", 1)[-1] == "isolated"`, NOT `endswith(" isolated")`: the
+    # latter also matches "t100_s0 train isolated", and dividing an
+    # evaluation by a training time is exactly the bug that once made this
+    # script report a fedavg ratio of 20.45.
+    wall = {
+        row["step"].split(" ", 1)[0]: row["seconds"]
+        for row in payload.get("timings", [])
+        if row["step"].split(" ", 1)[-1] == "isolated"
+    }
+    summed: dict[str, float] = {}
+    with io.open(rows, encoding="utf-8", newline="") as handle:
+        for row in csv.DictReader(handle):
+            try:
+                target = float(row["visibility_target"])
+                seed = int(row["seed"])
+                seconds = float(row["eval_seconds"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            name = "t%03d_s%d" % (round(target * 100), seed)
+            summed[name] = summed.get(name, 0.0) + seconds
+    return [
+        wall[name] / summed[name]
+        for name in sorted(set(wall) & set(summed))
+        if summed[name] > 0
+    ]
+
+
 def uncommitted_session_b(checker: Checker) -> None:
     """Session B's figures: reported, not yet committed. Listed, never passed."""
     for figure, claimed in (
@@ -455,6 +513,13 @@ def uncommitted_session_b(checker: Checker) -> None:
         ("union raw recall, seed 0", 0.446),
         ("union raw recall, seed 1", 0.536),
         ("binding_fraction at per_inst_* on full data", 1.0),
+        # the two wall times that settled WHY session B stopped: at 44-46
+        # min a cell, two cells plus one in flight is ~2.3 h, which
+        # excludes the 12 h limit and leaves the low-edge rule as the
+        # only cause that fits. Derived from B's own eval_seconds, so
+        # they become checkable with the same CSVs as the rows above.
+        ("t100_s0 wall time, sum(eval_seconds) x 1.08", 2568.5),
+        ("t100_s1 wall time, sum(eval_seconds) x 1.08", 2465.0),
     ):
         checker.skip(
             figure, claimed, "session B CSVs (not committed)",
@@ -466,6 +531,28 @@ def uncommitted_session_b(checker: Checker) -> None:
         "50/56 is the union ceiling session B reported", 0.8928571, 50 / 56,
         "arithmetic", "50 / 56",
     )
+    # The 1.08 scale factor behind those two wall times is itself a
+    # measurement, from the dry run's per-cell `eval_seconds` against its
+    # step wall times - but `eval_seconds` lives in the per-cell CSVs, which
+    # are development artifacts and are not committed. So it is listed here
+    # rather than checked, and `_cell_wall_ratios` below recomputes it from
+    # the local artifacts when they are present.
+    ratios = _cell_wall_ratios()
+    if ratios:
+        checker.check(
+            "cell wall time / sum(eval_seconds), mean", 1.08,
+            sum(ratios) / len(ratios),
+            "backend/artifacts/phase4_dev (not committed)",
+            f"mean of {len(ratios)} per-cell ratios", tol=5e-2,
+        )
+    else:
+        checker.skip(
+            "cell wall time / sum(eval_seconds)", 1.08,
+            "backend/artifacts/phase4_dev (not committed)",
+            "regenerate with `python scripts/run_phase4_chain.py --config "
+            "configs/local.yaml`; the factor needs per-institution "
+            "eval_seconds, which only the per-cell CSVs carry",
+        )
     for label, raw, claimed in (
         ("union seed 0", 0.446, 0.4995), ("union seed 1", 0.536, 0.6003),
         ("centralized five-seed", 0.679, 0.7605),

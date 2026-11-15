@@ -581,6 +581,73 @@ def pooled_mean(values: dict[int, float | None], tiers: dict[int, str]) -> Poole
     )
 
 
+#: The threshold below which a chosen F1 tau is treated as having been
+#: picked out of a flat curve rather than at a maximum. **Fixed 2026-11-16,
+#: before any cell ran under the recording policy**, and quoted wherever the
+#: flag appears, so it can never be chosen after seeing which cells it would
+#: catch.
+#:
+#: Why the flag is needed at all: campaign F1 needs a cluster reaching >= 3 of
+#: a campaign's accounts at >= 50% purity. A lone institution at visibility
+#: target 1.0 has its own oracle ceiling at 0.139 on validation, so at any
+#: selective threshold its components never reach three campaign accounts and
+#: campaign F1 is ~0 at *every* tau on the grid. The argmax is then arbitrary
+#: - the tie-break in `evaluation.best_tau` settles it, not the data - and the
+#: tau it lands on is not an optimum. The number is still recorded (the
+#: recording policy, 2026-11-16), but a reader must be told which cells are in
+#: that regime, which is what this flag is for.
+#:
+#: 0.01 rather than exactly 0: a curve flat at 0.004 is in the same regime as
+#: one flat at 0.0, and demanding an exact zero would let a single lucky
+#: cluster in one window hide it.
+F1_DEGENERATE_EPSILON = 0.01
+
+
+def f1_is_degenerate(best_value: float | None) -> bool | None:
+    """Was the F1 curve flat enough that its argmax carries no information?
+
+    ``None`` when there is no curve at all - an untrained institution - which
+    is not the same as a curve that is flat.
+    """
+    if best_value is None:
+        return None
+    return bool(best_value <= F1_DEGENERATE_EPSILON)
+
+
+def degenerate_summary(flags: dict[int, bool | None]) -> dict:
+    """How many of a pooled number's cells had a **degenerate** F1 curve.
+
+    Mirrors `binding_summary` deliberately, and travels with every pooled
+    figure for the same reason: a mean taken over cells whose threshold was
+    chosen out of a flat curve is not the same quantity as one taken over
+    cells with a real optimum, and hiding the mixture inside a single number
+    would make them look alike.
+
+    At a **budget** point the threshold comes from the alarm budget and not
+    from the argmax, so the flag there describes the institution's detector
+    rather than how that operating point was chosen. It is still counted,
+    because "this institution detects almost nothing at any threshold" is
+    context the budget rows need too.
+
+    The flag informs interpretation and must never select the comparison
+    point: `f1` and `total_10` stay primary as designated, or the choice
+    becomes post hoc.
+
+    ``None`` entries are cells with no curve - an untrained institution - and
+    are out of both the numerator and the denominator.
+    """
+    with_curve = {i: value for i, value in flags.items() if value is not None}
+    n_degenerate = sum(1 for value in with_curve.values() if value)
+    return {
+        "n_cells_with_an_f1_curve": len(with_curve),
+        "n_f1_degenerate": n_degenerate,
+        "f1_degenerate_fraction": (
+            n_degenerate / len(with_curve) if with_curve else None
+        ),
+        "f1_degenerate_epsilon": F1_DEGENERATE_EPSILON,
+    }
+
+
 def binding_summary(flags: dict[int, bool | None]) -> dict:
     """How many of a pooled budget number's cells had a **binding** budget.
 
@@ -733,6 +800,12 @@ class InstitutionEvaluation:
     tier: str
     tau_f1: float | None = None
     tau_at_grid_edge: bool = False
+    #: the best campaign F1 the validation sweep actually reached, i.e. the
+    #: value AT ``tau_f1``. Recorded beside the tau because the tau alone
+    #: cannot say whether it was chosen at a maximum or out of a flat curve.
+    f1_best_value: float | None = None
+    #: was that best value at or below ``F1_DEGENERATE_EPSILON``?
+    f1_degenerate: bool | None = None
     tau_curve: list[dict] = field(default_factory=list)
     #: operating point -> tau, or ``None`` when the point has no operating
     #: point at all: either no tau on the grid meets that budget, or the
@@ -839,6 +912,12 @@ def evaluate_institution(
     out.tau_at_grid_edge = evaluation.tau_is_at_grid_edge(
         tau_f1, evaluation.MODEL_TAU_GRID
     )
+    # The value AT the argmax, not just where the argmax was. `best_tau`
+    # maximises `campaign_f1` over this same curve, so the max over the curve
+    # IS the value at `tau_f1`; taking the max rather than looking the tau up
+    # avoids depending on the tie-break to find the row again.
+    out.f1_best_value = max(row["campaign_f1"] for row in curve) if curve else None
+    out.f1_degenerate = f1_is_degenerate(out.f1_best_value)
 
     for point in points:
         name = point["operating_point"]
@@ -1096,6 +1175,9 @@ def run_cell(
         row.update(models[institution].as_row())
         row["tau_f1"] = evaluations[institution].tau_f1
         row["tau_at_grid_edge"] = evaluations[institution].tau_at_grid_edge
+        row["f1_best_value"] = evaluations[institution].f1_best_value
+        row["f1_degenerate"] = evaluations[institution].f1_degenerate
+        row["f1_degenerate_epsilon"] = F1_DEGENERATE_EPSILON
         row["eval_seconds"] = round(evaluations[institution].seconds, 2)
         institution_rows.append(row)
 
@@ -1114,6 +1196,9 @@ def run_cell(
                 "tau_edge": evaluations[institution].tau_edges.get(name),
                 "budget_binding": evaluations[institution].budget_binding.get(name),
                 "undefined_reason": evaluations[institution].undefined_reason.get(name),
+                "f1_best_value": evaluations[institution].f1_best_value,
+                "f1_degenerate": evaluations[institution].f1_degenerate,
+                "f1_degenerate_epsilon": F1_DEGENERATE_EPSILON,
                 "tier": tiers[institution],
             })
 
@@ -1143,6 +1228,9 @@ def run_cell(
             binding_by_institution: dict[int, bool | None] = {
                 i: ev.budget_binding.get(name) for i, ev in evaluations.items()
             }
+            degenerate_by_institution: dict[int, bool | None] = {
+                i: ev.f1_degenerate for i, ev in evaluations.items()
+            }
 
             for institution in sorted(models):
                 ev = evaluations[institution]
@@ -1162,6 +1250,8 @@ def run_cell(
                             "tau": None, "defined": False,
                             "rejected_tau": ev.rejected_taus.get(name),
                             "budget_binding": ev.budget_binding.get(name),
+                            "f1_best_value": ev.f1_best_value,
+                            "f1_degenerate": ev.f1_degenerate,
                             "undefined_reason": ev.undefined_reason.get(
                                 name, NO_AFFORDABLE_TAU
                             ),
@@ -1187,6 +1277,8 @@ def run_cell(
                         "operating_point": name, "eval_split": split,
                         "tier": ev.tier, "defined": True,
                         "budget_binding": ev.budget_binding.get(name),
+                        "f1_best_value": ev.f1_best_value,
+                        "f1_degenerate": ev.f1_degenerate,
                         "undefined_reason": None, **row,
                     })
                     if subset == "all":
@@ -1228,6 +1320,9 @@ def run_cell(
                     **pooled.as_row(),
                     **binding_summary(
                         {i: binding_by_institution.get(i) for i in in_mean}
+                    ),
+                    **degenerate_summary(
+                        {i: degenerate_by_institution.get(i) for i in in_mean}
                     ),
                 })
 
@@ -1290,6 +1385,9 @@ def run_cell(
                         1 for i in operating
                         if evaluations[i].budget_binding.get(name) is True
                     ),
+                    **degenerate_summary(
+                        {i: evaluations[i].f1_degenerate for i in operating}
+                    ),
                     "summed_false_alarms": accounting["summed_false_alarms"],
                     "summed_false_alarms_per_day": accounting["summed_per_day"],
                     "duplicate_clusters": accounting["duplicate_clusters"],
@@ -1328,6 +1426,13 @@ def run_cell(
             (i, name)
             for i, ev in evaluations.items()
             for name, edge in ev.tau_edges.items() if edge == "low"
+        ),
+        # Institutions whose validation F1 curve was flat at or below
+        # F1_DEGENERATE_EPSILON, so the tau they operate at was settled by the
+        # tie-break and not by the data. Recorded, NOT excluded - see
+        # `degenerate_summary`.
+        "f1_degenerate": sorted(
+            i for i, ev in evaluations.items() if ev.f1_degenerate
         ),
         "no_affordable_tau": sorted(
             (i, name)

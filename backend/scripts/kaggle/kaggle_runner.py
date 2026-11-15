@@ -4944,6 +4944,173 @@ def _edge_tau_rows(institution_rows: list[dict]) -> list[dict]:
     return rows
 
 
+#: The low-edge F1 tau policy, **changed 2026-11-16 with the user's explicit
+#: approval**, after session B stopped on it at target 1.0 seed 2.
+#:
+#: The pre-registered rule was to STOP: at the full data's 0.102% prevalence
+#: the most sensitive threshold on the grid should not be the best one, and if
+#: it was, "something is wrong with the training data, the weighting or the
+#: grid" - a suspected bug. It is not a bug. Campaign F1 needs a cluster
+#: reaching >= 3 of a campaign's accounts at >= 50% purity; a lone institution
+#: at target 1.0 has its own ceiling at 0.139 on validation, so it detects
+#: nothing at any selective threshold and campaign F1 is ~0 across the whole
+#: grid. The optimum then slides to wherever edges are numerous enough to form
+#: components at all, which is the floor. The policy had generalised from the
+#: *dataset's* prevalence to a *per-institution detector's* optimum, and those
+#: depend on different things - reach, not prevalence.
+#:
+#: The policy is now to RECORD at the floor tau, flag it, and keep the cell in
+#: the pooled means. The reason it is recorded rather than excluded: excluding
+#: it would drop exactly the starved institutions that demonstrate what
+#: fragmentation costs, which would raise the isolated floor - the one arm
+#: that must not be flattered, since every Phase 4 contrast is measured
+#: against it. A lone bank with a ceiling of 0.139 cannot do that job, and its
+#: weak number is the finding, not an error.
+#:
+#: Because an F1 curve that is flat at ~0 has an arbitrary argmax, recording
+#: it is only honest with `f1_best_value` and `f1_degenerate` beside it -
+#: added in the same change, with the epsilon fixed at
+#: `isolated.F1_DEGENERATE_EPSILON` before any cell ran under this policy.
+LOW_EDGE_POLICY = "record_and_flag"
+LOW_EDGE_POLICY_DATE = "2026-11-16"
+
+
+def cells_without_f1_best_value(institution_rows) -> list[str]:
+    """Which cells among these rows have a trained institution with no
+    `f1_best_value`.
+
+    A cell written before the column existed reads back as NaN, and **NaN is
+    not False**: every pooled row reports `n_f1_degenerate`, so a missing
+    value counted as not-degenerate would be a different claim from not
+    knowing. An untrained institution has no curve and is skipped - that is
+    a real `None`, not a gap.
+    """
+    import pandas as pd
+
+    from fraudcamp.federation import isolated
+
+    frame = pd.DataFrame(list(institution_rows))
+    if not len(frame) or "trained" not in frame.columns:
+        return []
+    trained = frame[
+        frame["trained"].map(
+            lambda value: value is True or str(value).strip().lower() == "true"
+        )
+    ]
+    if not len(trained):
+        return []
+    if "f1_best_value" not in trained.columns:
+        gaps = trained
+    else:
+        gaps = trained[pd.to_numeric(
+            trained["f1_best_value"], errors="coerce"
+        ).isna()]
+    return sorted({
+        isolated.cell_name(float(row.visibility_target), int(row.seed))
+        for row in gaps.itertuples(index=False)
+    })
+
+
+def _require_f1_best_value(institution_rows) -> None:
+    """Refuse to write a combined report over cells missing the column.
+
+    Checked at assembly because that is the only place the whole set is in
+    one frame, and **refused rather than warned**: a warning in a two-hour
+    log is not read, and the figures would already have been quoted by the
+    time anyone noticed.
+    """
+    stale = cells_without_f1_best_value(institution_rows)
+    if not stale:
+        return
+    raise SystemExit(
+        f"{len(stale)} cell(s) have no f1_best_value: {', '.join(stale)}."
+        f"{_NEWLINE}They were written before the column existed. Every pooled "
+        "row reports n_f1_degenerate, and a missing value would be counted as "
+        f"not-degenerate, which is a different claim.{_NEWLINE}Backfill them - "
+        "it is arithmetic on rows they already wrote, and re-evaluates "
+        f"nothing:{_NEWLINE}  python scripts/kaggle/kaggle_runner.py "
+        "backfill-f1-value"
+    )
+
+
+def _low_edge_outcome(name: str, cell: dict, args) -> int | None:
+    """Apply the low-edge F1 tau policy to one finished cell.
+
+    Returns ``None`` to carry on and record the cell, or an exit code to stop
+    with it unrecorded. See :data:`LOW_EDGE_POLICY`: recording is the policy
+    as of 2026-11-16, and ``--stop-on-low-edge-tau`` restores the
+    pre-registered stop for anyone reproducing the earlier behaviour.
+
+    The policy in force is printed on **every** cell that hits a low edge, so
+    a log always says which rule produced its numbers rather than leaving it
+    to be inferred from the exit code.
+    """
+    from fraudcamp.federation import isolated
+
+    flags = cell["flags"]
+    if not flags["tau_at_low_edge"]:
+        return None
+
+    def _tau(institution, point):
+        return next(
+            (
+                row["tau"] for row in cell["tau_rows"]
+                if row["institution"] == institution
+                and row["operating_point"] == point
+            ),
+            None,
+        )
+
+    def _best(institution):
+        return next(
+            (
+                row.get("f1_best_value") for row in cell["institution_rows"]
+                if row.get("institution") == institution
+            ),
+            None,
+        )
+
+    if args.stop_on_low_edge_tau:
+        print(
+            f"{_NEWLINE}STOPPING, and NOT recording {name}: an F1 tau sits at "
+            "the LOW edge of the model grid, and --stop-on-low-edge-tau "
+            "restored the pre-registered stop."
+        )
+        for institution, point in flags["tau_at_low_edge"]:
+            print(
+                f"  institution {institution}, point {point}: "
+                f"tau = {_tau(institution, point)}"
+            )
+        print(
+            "Nothing from this cell is recorded. The standing policy since "
+            f"{LOW_EDGE_POLICY_DATE} is to record it instead; drop the flag "
+            "to do that."
+        )
+        return 3
+
+    print(
+        f"{_NEWLINE}LOW-EDGE F1 TAU in {name}. POLICY "
+        f"{LOW_EDGE_POLICY!r}, approved {LOW_EDGE_POLICY_DATE}: this cell IS "
+        "recorded, at the floor tau, flagged, and kept in the pooled means."
+    )
+    for institution, point in flags["tau_at_low_edge"]:
+        best = _best(institution)
+        shown = "unknown" if best is None else f"{best:.4f}"
+        print(
+            f"  institution {institution}, point {point}: "
+            f"tau = {_tau(institution, point)}, best validation campaign F1 "
+            f"= {shown}"
+        )
+    degenerate = flags.get("f1_degenerate") or []
+    print(
+        f"  f1_degenerate (best F1 <= {isolated.F1_DEGENERATE_EPSILON}): "
+        f"{degenerate or 'none'} - where the curve is flat at ~0 the argmax "
+        "is arbitrary and the floor tau is not an optimum. Every pooled row "
+        "carries n_f1_degenerate, and f1/total_10 stay primary regardless."
+    )
+    return None
+
+
 def _reloaded_cell_edges(
     reloaded: dict[str, list[dict]]
 ) -> tuple[list[dict], list[dict]]:
@@ -5144,6 +5311,134 @@ def xgb_params_for_report():
     return xgb_baseline.XGBParams()
 
 
+def command_backfill_f1_value(args: argparse.Namespace) -> int:
+    """Add `f1_best_value` / `f1_degenerate` to cells written before they existed.
+
+    **This recomputes nothing and re-runs nothing.** The value is already in
+    every finished cell's `_summary.csv`, implicitly: the validation row at
+    the `f1` operating point was evaluated at the chosen tau, so its
+    `campaign_precision` and `campaign_recall` are precisely the precision and
+    recall at the argmax, and campaign F1 is `2PR / (P + R)` of them.
+    `select_tau` maximises exactly that quantity over the same validation
+    split with the same seed, so the maximum over the curve and the value
+    reconstructed here are the same number - verified exactly, to 0.0, over
+    all 32 (cell, institution) pairs of the 1% sample dry run, where both the
+    curve and the summary row are on disk.
+
+    What cannot be backfilled: an (institution, point) pair whose F1 point is
+    **undefined**, which on the full data is session B's `t100_s0`
+    institution 0, rejected at the top of the grid. No validation evaluation
+    was run at a rejected tau, so nothing was written to reconstruct from.
+    Those get `None`, never 0, and they are already excluded from every
+    pooled mean - so the gap costs nothing. `f1_best_value_source` records
+    which of the three cases each row is.
+    """
+    import pandas as pd
+
+    from fraudcamp.federation import isolated
+
+    cells_dir = Path(args.cells_dir) if args.cells_dir else (
+        Path(args.out) / "isolated_cells"
+    )
+    if not cells_dir.is_dir():
+        raise SystemExit(f"no such directory: {cells_dir}")
+
+    summaries = sorted(cells_dir.glob("*_summary.csv"))
+    if not summaries:
+        raise SystemExit(f"no finished cells in {cells_dir}")
+
+    print(f"backfilling f1_best_value in {cells_dir}")
+    print(
+        "  epsilon = "
+        f"{isolated.F1_DEGENERATE_EPSILON} (fixed 2026-11-16, before any cell "
+        "ran under the recording policy)"
+    )
+    touched = 0
+    for summary_path in summaries:
+        name = summary_path.name[: -len("_summary.csv")]
+        summary = pd.read_csv(summary_path)
+        already = (
+            "f1_best_value" in summary.columns
+            and summary["f1_best_value"].notna().any()
+        )
+        if already and not args.force:
+            print(f"  {name}: already has f1_best_value, left alone")
+            continue
+
+        # the one row per institution that holds the value: the F1 point, on
+        # VALIDATION (where tau was chosen), over all campaigns
+        chosen = summary[
+            (summary["operating_point"] == "f1")
+            & (summary["eval_split"] == "val")
+            & (summary["test_subset"] == "all")
+        ]
+        values: dict[int, float | None] = {}
+        sources: dict[int, str] = {}
+        for _, row in chosen.iterrows():
+            institution = int(row["institution"])
+            if not bool(row.get("defined", False)):
+                values[institution] = None
+                sources[institution] = "undefined_f1_point_not_recoverable"
+                continue
+            precision = pd.to_numeric(row.get("campaign_precision"), errors="coerce")
+            recall = pd.to_numeric(row.get("campaign_recall"), errors="coerce")
+            if pd.isna(precision) or pd.isna(recall):
+                values[institution] = None
+                sources[institution] = "no_val_precision_or_recall"
+                continue
+            total = float(precision) + float(recall)
+            values[institution] = (
+                2 * float(precision) * float(recall) / total if total > 0 else 0.0
+            )
+            sources[institution] = "backfilled_from_val_summary"
+
+        def _apply(frame: pd.DataFrame) -> pd.DataFrame:
+            institutions = pd.to_numeric(frame["institution"], errors="coerce")
+            frame = frame.copy()
+            frame["f1_best_value"] = [
+                values.get(int(i)) if pd.notna(i) else None for i in institutions
+            ]
+            frame["f1_degenerate"] = [
+                isolated.f1_is_degenerate(values.get(int(i)))
+                if pd.notna(i) else None
+                for i in institutions
+            ]
+            frame["f1_degenerate_epsilon"] = isolated.F1_DEGENERATE_EPSILON
+            frame["f1_best_value_source"] = [
+                sources.get(int(i), "institution_not_in_val_f1_rows")
+                if pd.notna(i) else None
+                for i in institutions
+            ]
+            return frame
+
+        for suffix in ("institutions", "taus", "summary"):
+            path = cells_dir / f"{name}_{suffix}.csv"
+            if not path.exists():
+                raise SystemExit(
+                    f"{name}: {path.name} is missing, so this cell is "
+                    "incomplete and must not be backfilled; re-evaluate it"
+                )
+            _apply(pd.read_csv(path)).to_csv(path, index=False)
+
+        shown = ", ".join(
+            f"i{i}={'None' if v is None else format(v, '.4f')}"
+            for i, v in sorted(values.items())
+        )
+        degenerate = sorted(
+            i for i, v in values.items() if isolated.f1_is_degenerate(v)
+        )
+        print(f"  {name}: {shown}")
+        print(f"    f1_degenerate: {degenerate or 'none'}")
+        touched += 1
+
+    print(f"{_NEWLINE}{touched} cell(s) backfilled, {len(summaries)} seen.")
+    print(
+        "Nothing was re-evaluated: every value above is arithmetic on rows "
+        "the cell already wrote."
+    )
+    return 0
+
+
 def command_evaluate_isolated(args: argparse.Namespace) -> int:
     """Evaluate the isolated condition: stage 4.1.
 
@@ -5285,39 +5580,9 @@ def command_evaluate_isolated(args: argparse.Namespace) -> int:
 
             flags = cell["flags"]
 
-            # POLICY, decided before the run: an F1 tau at the LOW edge of the
-            # grid should not happen at the full data's 0.102% prevalence. If
-            # it does, stop and report it rather than recording it - so this
-            # cell's rows are NOT written. Finished cells keep their own files,
-            # so a restart resumes past them and nothing else is lost.
-            if flags["tau_at_low_edge"] and not args.allow_low_edge_tau:
-                print(
-                    f"{_NEWLINE}STOPPING, and NOT recording {name}: an F1 tau "
-                    "sits at the LOW edge of the model grid."
-                )
-                for institution, point in flags["tau_at_low_edge"]:
-                    chosen = next(
-                        (
-                            row["tau"] for row in cell["tau_rows"]
-                            if row["institution"] == institution
-                            and row["operating_point"] == point
-                        ),
-                        None,
-                    )
-                    print(
-                        f"  institution {institution}, point {point}: "
-                        f"tau = {chosen}"
-                    )
-                print(
-                    "At 0.102% prevalence the most sensitive threshold on the "
-                    "grid should not be the best one. Expected on the 1% "
-                    "sample, where the positive rate is ~3.3%, and the sample "
-                    "runner allows it; here it means something is wrong with "
-                    "the training data, the weighting or the grid. Nothing "
-                    "from this cell is recorded. Pass --allow-low-edge-tau "
-                    "only if you have decided to record it anyway."
-                )
-                return 3
+            code = _low_edge_outcome(name, cell, args)
+            if code is not None:
+                return code
 
             for key, suffix in keys.items():
                 pd.DataFrame(cell[key]).to_csv(
@@ -5337,8 +5602,11 @@ def command_evaluate_isolated(args: argparse.Namespace) -> int:
                 f"thin {flags['thin']}, "
                 f"{len(flags['no_affordable_tau'])} (institution, point) pair(s) "
                 f"with no affordable tau, {len(flags['tau_at_high_edge'])} "
-                "excluded for a tau at the top of the grid"
+                "excluded for a tau at the top of the grid, "
+                f"f1_degenerate {flags.get('f1_degenerate') or []}"
             )
+
+    _require_f1_best_value(collected["institution_rows"])
 
     files = {
         "phase4_isolated_institutions.csv": collected["institution_rows"],
@@ -5693,21 +5961,9 @@ def _run_condition_cells(
                     )
 
                 flags = cell["flags"]
-                if flags["tau_at_low_edge"] and not args.allow_low_edge_tau:
-                    print(
-                        f"{_NEWLINE}STOPPING, and NOT recording {condition} "
-                        f"{name}: an F1 tau sits at the LOW edge of the grid."
-                    )
-                    for institution, point in flags["tau_at_low_edge"]:
-                        print(f"  institution {institution}, point {point}")
-                    print(
-                        "At 0.102% prevalence the most sensitive threshold on "
-                        "the grid should not be the best one. Nothing from this "
-                        "cell is recorded. Report it; pass "
-                        "--allow-low-edge-tau only if you have decided to "
-                        "record it anyway."
-                    )
-                    return 3
+                code = _low_edge_outcome(f"{condition} {name}", cell, args)
+                if code is not None:
+                    return code
 
                 for key, suffix in keys.items():
                     pd.DataFrame(cell[key]).to_csv(
@@ -6192,6 +6448,7 @@ def main() -> int:
             "oracle-diagnose", "make-sample", "train", "evaluate",
             "gpu-check", "gpu-probe-windows", "train-gnn", "evaluate-gnn",
             "compare-models", "train-isolated", "evaluate-isolated",
+            "backfill-f1-value",
             "evaluate-fedavg", "train-evidence", "evaluate-evidence",
             "evaluate-centralized", "compare-conditions",
         ],
@@ -6308,11 +6565,26 @@ def main() -> int:
         ),
     )
     parser.add_argument(
+        "--cells-dir", default="",
+        help=(
+            "backfill-f1-value: the directory of finished per-cell CSVs "
+            "(default: <out>/isolated_cells)"
+        ),
+    )
+    parser.add_argument(
         "--allow-low-edge-tau", action="store_true",
         help=(
-            "evaluate-isolated: record a cell whose F1 tau sits at the LOW "
-            "edge of the model grid instead of stopping. Only for the thinned "
-            "1% sample, where a low edge is expected"
+            "accepted and ignored: recording a low-edge F1 tau has been the "
+            "policy since 2026-11-16, so this flag is now the default. Kept "
+            "so a cell pasted from an older runbook still runs identically"
+        ),
+    )
+    parser.add_argument(
+        "--stop-on-low-edge-tau", action="store_true",
+        help=(
+            "restore the PRE-REGISTERED behaviour: stop without recording a "
+            "cell whose F1 tau sits at the LOW edge of the model grid. The "
+            "standing policy since 2026-11-16 is to record and flag it"
         ),
     )
     parser.add_argument(
@@ -6349,6 +6621,7 @@ def main() -> int:
         "compare-models": command_compare_models,
         "train-isolated": command_train_isolated,
         "evaluate-isolated": command_evaluate_isolated,
+        "backfill-f1-value": command_backfill_f1_value,
         "evaluate-fedavg": command_evaluate_fedavg,
         "train-evidence": command_train_evidence,
         "evaluate-evidence": command_evaluate_evidence,

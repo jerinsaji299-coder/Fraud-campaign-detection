@@ -174,7 +174,7 @@ feature set only, three seeds, one lookback**. See
 | Stage | Description | Status |
 |---|---|---|
 | 4.0 | Institution-split data: per-institution views of every window, and the account features each institution can compute from its own view alone | **done** — `federation/views.py`, 31 tests, per-institution training loads measured on the sample, visibility cross-check exact on all 370 campaigns |
-| 4.1 | **The `isolated` condition**: each institution trained and scoring on its own view alone, with its **own** oracle ceiling per target, and the two pooled numbers (per-institution mean, and the union over institutions) | **built and tested** — `federation/isolated.py`, 53 tests, backend 415 passed / 25 skipped; `train-isolated` and `evaluate-isolated` runner subcommands, resumable. Full-data **sessions A (training) and B (6 of 12 cells) done 2026-11-15**: 96 boosters exit 0; B exit 3 with one cell excluded at the grid top. **B's result: the union's ceiling equals the centralized ceiling exactly, and the union still recovers 0.16-0.26 less of it — the deficit is scoring, not visibility** ([session B](#the-full-data-run-session-b-the-ceiling-holds-the-recall-does-not--done-2026-11-15)). Session C, the remaining two targets and the complete report, is next. §[stage 4.1](#stage-41-the-isolated-condition--approved-and-implemented-2026-11-14) |
+| 4.1 | **The `isolated` condition**: each institution trained and scoring on its own view alone, with its **own** oracle ceiling per target, and the two pooled numbers (per-institution mean, and the union over institutions) | **built and tested** — `federation/isolated.py`, 55 tests, backend 460 passed / 25 skipped; `train-isolated` and `evaluate-isolated` runner subcommands, resumable. Full-data **session A done 2026-11-15** (96 boosters, exit 0) and **session B 2 of 12 cells**: B wrote `t100_s0` and `t100_s1` — one cell excluded at the grid top — then **stopped on the low-edge F1 tau rule at `t100_s2`**, a pre-registered stop condition now [changed to record and flag](#decided-a-low-edge-f1-tau-is-recorded-and-flagged--2026-11-16). **B's result: the union's ceiling equals the centralized ceiling exactly, and the union still recovers 0.16-0.26 less of it — the deficit is scoring, not visibility** ([session B](#the-full-data-run-session-b-the-ceiling-holds-the-recall-does-not--done-2026-11-15)). Sessions **C1-C3**, the ten remaining cells and the complete report, are next. §[stage 4.1](#stage-41-the-isolated-condition--approved-and-implemented-2026-11-14) |
 | 4.2 | **The `fedavg` condition**: the FedAvg analogue for a tree ensemble is **score averaging** — each institution scores its own view with all K boosters, equal weights, nothing retrained | **built and tested** 2026-11-15 — `federation/fedavg.py`; the design question that moved here from 4.1 is answered in [stage 4.2](#stage-42-the-fedavg-analogue-for-a-tree-ensemble--implemented-2026-11-15). No numbers yet |
 | 4.3 | **The `evidence` and `fedavg_evidence` conditions**: boundary accounts receive the window node features computed across the views that hold them; boosters retrained on augmented views; evaluated with own-model scoring (4.3a) and score averaging (4.3b) | **built and tested** 2026-11-15 — `federation/evidence.py`. Under this definition the ceiling cannot move, which is what keeps every comparison paired; see [stage 4.3](#stage-43-boundary-account-evidence--implemented-2026-11-15). No numbers yet |
 | 4.4 | **The `centralized` arm re-reported in the Phase 4 cell grid**, as the `K = 1` case of a per-institution condition | **built and tested** 2026-11-15 — `federation/centralized.py`. **One open decision blocks its number**: which model seed(s) it uses. See [O1](#o1-which-model-seeds-the-centralized-arm-uses) |
@@ -2594,8 +2594,15 @@ the point:
 | The chosen tau sits at | What it means | What happens |
 |---|---|---|
 | the **top** of the grid | the optimum lies **beyond** the grid, so this operating point was **not found** | the cell is **undefined**: excluded from both pooled means, listed by `(institution, operating point)` with its **rejected tau** and the reason, and **never scored 0**. The run finishes and exits 3 |
-| the **bottom**, for the **F1** point | the most sensitive threshold on the grid is still the best one, so the optimum may lie **below** it | on the full data this **should not happen** at 0.102% prevalence. The runner **stops and does not record that cell** (`--allow-low-edge-tau` overrides, for the sample only). On the sample it is expected, and `run_isolated.py` records it and exits 3 |
+| the **bottom**, for the **F1** point | the most sensitive threshold on the grid is still the best one, so the optimum may lie **below** it | **recorded at that tau, flagged `tau_at_low_edge`, and kept in both pooled means**, with `f1_best_value` and `f1_degenerate` beside it ([policy changed 2026-11-16](#decided-a-low-edge-f1-tau-is-recorded-and-flagged--2026-11-16); it previously stopped the run unrecorded, and `--stop-on-low-edge-tau` restores that). The run finishes and exits 3 for the edge |
 | the **bottom**, for a **budget** point | the most sensitive threshold on the grid already fits the budget | **nothing.** This is a loose budget, not a missing optimum, and it is neither flagged nor excluded |
+
+> *The F1 row changed on 2026-11-16, with explicit approval, and it changed a
+> pre-registered stop condition.* It used to read: on the full data this
+> **should not happen** at 0.102% prevalence, so the runner stops and does not
+> record that cell. It happened — on session B's `t100_s2` — and [the
+> mechanism](#if-it-is-the-low-edge-rule-why-when-it-was-supposed-to-be-impossible)
+> is not the bug the rule was written against. The high-edge row is unchanged.
 
 That last row is a refinement of the rule as first stated, and it is not a
 small one: on the sample **166 of 224** `(institution, operating point)` cells
@@ -2666,14 +2673,16 @@ is beyond what can be resolved, so the operating point was not found.
 |---|---|
 | `federation/isolated.py` | the condition: the masking scorer, per-institution training, the per-institution oracle ceiling, the union (outcomes, and the deduplicating cluster pass), the two pooled means, the seven operating points, and `run_cell`, which both runners call so the local and Kaggle reports come from one code path |
 | `constants.PHASE4_SEEDS`, `constants.PHASE4_LOOKBACK_H` | the frozen scope **in code** — `[0, 1, 2]` and `48` — so a runner cannot drift from this README. `evaluate-isolated` refuses more than one lookback outright |
-| `tests/test_federation_isolated.py` | **53 tests**, including the grid-edge policy at both one-of-eight and eight-of-eight, the reload path's carry-over of a cell's exclusions, the budget-binding audit, the primary-point designation and the pooled spread's denominator and tie-breaking; backend suite **415 passed, 25 skipped** |
+| `tests/test_federation_isolated.py` | **55 tests**, including the grid-edge policy at both one-of-eight and eight-of-eight, the 2026-11-16 low-edge recording policy, the reload path's carry-over of a cell's exclusions, the budget-binding audit, the primary-point designation and the pooled spread's denominator and tie-breaking; backend suite **460 passed, 25 skipped** |
 | `scripts/run_isolated.py` | the condition on the 1% sample, for development |
 | `scripts/run_phase4_chain.py` | the whole Phase 4 chain on the 1% sample: 4.1 → 4.2 → 4.3a/b → 4.4 → compare-conditions, from scratch. The dry run that has to pass before anything is run on Kaggle |
 | `scripts/make_demo_bundle.py` | exports the live panel's bundle: the offered windows, the ground truth, the account → institution map and the 8 boosters of one `(target, seed)`. Picks the demo campaign by the stated rule and records the audit trail |
 | `scripts/verify_phase4_crosscheck.py` | re-derives **every committed Phase 4 figure in this README** from its source file and prints PASS/FAIL. The one command [`phase4_crosscheck.md`](docs/reference/phase4_crosscheck.md) points at |
+| `scripts/verify_f1_backfill.py` | the evidence that session B's two cells need no re-run: stages a local run's cells with `f1_best_value` stripped, runs the real `backfill-f1-value`, and compares every reconstructed value with the measured curve maximum. **≤2.22e-16** over 32 pairs |
 | `scripts/run_institution_composition.py` | why institution 0 is not like the other seven: bank composition per institution, and campaign accounts owned against campaign accounts visible. The reproducible evidence for [not exchangeable](#the-institutions-are-not-exchangeable-institution-0-holds-the-hub-bank) |
 | `train-isolated` | one booster per institution per `(target, seed)`, saved as it finishes, **resumable per institution** |
-| `evaluate-isolated` | tau, ceilings, the per-institution and union reports, **resumable per `(target, seed)`**; it **never trains**, so a lost evaluation session cannot silently retrain on different boosters; exit 3 on an edge tau after every report is written |
+| `evaluate-isolated` | tau, ceilings, the per-institution and union reports, **resumable per `(target, seed)`**; it **never trains**, so a lost evaluation session cannot silently retrain on different boosters; exit 3 on an edge tau after every report is written. A **low**-edge F1 tau is recorded and flagged, not a stop ([policy, 2026-11-16](#decided-a-low-edge-f1-tau-is-recorded-and-flagged--2026-11-16)); `--stop-on-low-edge-tau` restores the pre-registered behaviour |
+| `backfill-f1-value` | adds `f1_best_value` / `f1_degenerate` to cells written before those columns existed, as `2PR/(P+R)` of each cell's validation `f1` row. **Re-evaluates nothing**, idempotent, and refuses a cell whose files are incomplete |
 
 Eight files come out of a run: `phase4_isolated_outcomes.csv` (per campaign,
 the `evaluate_outcomes.csv` columns plus `condition`, `institution`,
@@ -3308,11 +3317,14 @@ seed 0 institution 3, and seed 1 institution 4 — **both at target 1.0**.
 > campaign and the other seven see almost nothing. Both observed near-floor
 > taus being at target 1.0 is the mechanism, not a coincidence, and it means
 > the remaining risk is concentrated in the target-1.0 cells and decreasing
-> as the target falls. If it does, that is the rule working as designed:
-the cell is **not** recorded, the session exits 3, and it gets reported rather
-than re-run with `--allow-low-edge-tau`, which exists for the thinned sample
-alone. The cells finished before it keep their files, so a resumed session
-picks up from there.
+> as the target falls.
+
+> *Superseded 2026-11-16.* This reading used to end by saying that if a cell
+> did land on the floor the cell is **not** recorded and the session exits 3.
+> That was the pre-registered rule, and it fired on `t100_s2`. It has since
+> been changed, with explicit approval, to record and flag the cell: see
+> [DECIDED: a low-edge F1 tau is recorded and
+> flagged](#decided-a-low-edge-f1-tau-is-recorded-and-flagged--2026-11-16).
 
 #### Session B produced 2 of 6 cells, and what that means — 2026-11-16
 
@@ -3358,6 +3370,25 @@ across all four cells of the sample dry run, where it ranged 1.05-1.11.
 * per-cell **4-6 h** → two cells plus one in flight *is* ~12 h, so B was
   **killed by the limit** and the 25-55 min estimate was 5-10× low.
 
+**SETTLED — it was the low-edge rule.** The derivation was run on B's own
+`*_institutions.csv` files rather than by re-measuring anything: summing
+`eval_seconds` over the eight institutions and scaling by 1.08 gives
+
+| Cell | sum(`eval_seconds`) × 1.08 | |
+|---|---:|---:|
+| `t100_s0` | **2,568.5s** | 46.2 min |
+| `t100_s1` | **2,465.0s** | 44.4 min |
+
+Two finished cells plus one in flight is **~2.3 h**, so the 12 h limit is
+excluded and nothing else on the list fits the evidence. The second branch
+above is therefore wrong on both counts, and the diagnostic session written to
+test it is unnecessary: **the 25-55 min per-cell estimate was right**, not
+5-10× low, and the two measurements are 44-46 min, consistent to within 4%.
+
+That also removes the only reason the replacement plan was capped at three
+cells a session. 46 min a cell means 10 h of headroom is **13 cells**, so the
+ten remaining cells fit in far fewer sessions — see [§5n](backend/scripts/kaggle/run_on_kaggle.md).
+
 #### If it is the low-edge rule: why, when it was supposed to be impossible
 
 The policy said a low-edge F1 tau "should not happen at the full data's 0.102%
@@ -3383,36 +3414,106 @@ session A measured as the outlier at 2.42× spread. Both of B's near-floor taus
 different institutions in each of the two cells. The margin was one step in
 2 of 2 cells, so a third cell reaching the floor is unsurprising.
 
-#### OPEN: what the low-edge policy should be. Proposed, not decided.
+#### DECIDED: a low-edge F1 tau is recorded and flagged — 2026-11-16
 
-**Not changed unilaterally.** Four options, with what each costs:
+**This changes a pre-registered stop condition, with the user's explicit
+approval, and is recorded as such.** The rule was fixed in advance precisely
+so it could not be relaxed after seeing a result, so the change carries its
+date, its reason, and what was rejected.
 
-| | Policy | Keeps `t100_s0/s1`? | Touches a frozen definition? |
-|---|---|---|---|
-| **(a)** | **Record at the floor tau, flagged** `tau_at_low_edge`, and keep the cell in the pooled means — what `--allow-low-edge-tau` already does, as policy rather than an override | **yes** | no |
-| (b) | **Extend `MODEL_TAU_GRID` downward** (0.02, 0.01, …) so the optimum can be found | **no** — they were selected on a 22-point grid, so all 12 cells must be re-run | **yes**, and low taus are the expensive end: clustering scales with edges kept, 9.1s at tau 0.05 against 2.6s above 0.99 |
-| (c) | **Undefined, like a high edge** — excluded from both means, named | yes | no |
-| (d) | Keep stopping | yes | no |
+**The policy.** A chosen F1 tau at the **low** edge of `MODEL_TAU_GRID` is now
+**recorded at the floor tau, flagged, and kept in the pooled means**. It is
+not a stop and not an exclusion. `--stop-on-low-edge-tau` restores the
+pre-registered behaviour for anyone reproducing it; `--allow-low-edge-tau` is
+accepted and ignored, because what it asked for is now the default.
 
-**Recommendation: (a).** It is the conservative reading — it keeps the weakest
-institutions *in* the mean with their weak numbers, where **(c)** would drop
-exactly the starved institutions and flatter the isolated floor, which is the
-arm the whole phase is trying not to flatter. It costs nothing already run, it
-touches no frozen definition, and the flag makes every affected cell
-auditable. The pre-registered reason for stopping was that a low edge "means
-something is wrong with the training data, the weighting or the grid" — a
-suspected bug. The mechanism above is not a bug, so that reason no longer
-applies, and **(d)** would leave the isolated arm simply unmeasurable at target
-1.0.
+**Why recorded rather than excluded.** Excluding it would drop exactly the
+starved institutions that demonstrate what fragmentation costs, which would
+**raise the isolated floor** — the one arm that must not be flattered, since
+every Phase 4 comparison is measured against it. A lone bank at target 1.0
+with a ceiling of 0.139 cannot do that job, and **that weak number is the
+finding, not an error**. The pre-registered reason for stopping was that a low
+edge "means something is wrong with the training data, the weighting or the
+grid" — a suspected bug. [The mechanism](#if-it-is-the-low-edge-rule-why-when-it-was-supposed-to-be-impossible)
+is not a bug, so that reason no longer holds.
 
-**(b) is the rigorous answer to a different question** — *where* the optimum
-actually is — and is worth doing as a follow-up study rather than as the fix
-here, because it re-runs all 12 cells and cannot be compared with anything
-already measured.
+**Rejected, and why:**
 
-Whichever is chosen must be recorded as a change to a pre-registered stop
-condition, with the date and the reason, because it was fixed in advance
-precisely so it could not be relaxed after seeing a result.
+| | Rejected policy | Reason |
+|---|---|---|
+| (b) | extend `MODEL_TAU_GRID` downward | touches a frozen definition, invalidates `t100_s0`/`t100_s1` (selected on the 22-point grid) so all 12 cells re-run, and answers a different question — *where* the optimum is. Worth doing as a follow-up study, not as the fix here |
+| (c) | undefined, like a high edge | drops the starved institutions and flatters the isolated floor, as above |
+| (d) | keep stopping | leaves the isolated arm unmeasurable at target 1.0, which is the cell the phase most needs |
+
+#### The flag the recording policy required: `f1_degenerate`
+
+Recording a floor tau is only honest if the report also says whether the curve
+had a maximum at all. **When campaign F1 is ~0 at every threshold the argmax
+is arbitrary** — it is settled by the deterministic tie-break in
+`evaluation.best_tau`, not by the data — and the floor tau is not an optimum.
+So, added in the same change and **before any cell ran under the new policy**:
+
+| Added | What it is |
+|---|---|
+| `f1_best_value` | the best validation campaign F1 the sweep reached, i.e. the value **at** `tau_f1`. Recorded for every (institution, cell), beside the tau |
+| `f1_degenerate` | true when `f1_best_value <= 0.01` |
+| `f1_degenerate_epsilon` | **0.01**, fixed 2026-11-16 before any cell ran, carried in every row that uses it |
+| `n_f1_degenerate`, `n_cells_with_an_f1_curve`, `f1_degenerate_fraction` | on **every** pooled row, union row and comparison row, exactly as the binding-budget count already travels with every pooled budget number |
+
+**0.01 rather than exactly 0** because a curve flat at 0.004 is in the same
+regime as one flat at 0.0, and demanding an exact zero would let one lucky
+cluster in one window hide it. An institution with no booster has **no curve**,
+which is not the same as a flat one: it is `None`, and out of both the
+numerator and the denominator.
+
+**The flag informs interpretation and must never select the comparison
+point.** `f1` and `total_10` stay primary as designated in stage 4.1 — that
+designation was justified independently, and letting a degeneracy count move
+it would make the choice post hoc. Pinned by
+`test_the_degeneracy_epsilon_is_fixed_and_its_boundary_is_inclusive` and
+`test_degenerate_summary_excludes_cells_with_no_curve`.
+
+#### `t100_s0` and `t100_s1` do not need re-running — the value is backfillable
+
+Both cells were written before `f1_best_value` existed. **They stand as they
+are**, and a decision rather than a discovery at assembly time:
+
+The value is already in each cell's `_summary.csv`, implicitly. The validation
+row at the `f1` operating point was evaluated **at the chosen tau**, so its
+`campaign_precision` and `campaign_recall` are the precision and recall at the
+argmax, and campaign F1 is their harmonic mean, `2PR / (P + R)`.
+`evaluation.select_tau` maximises exactly that quantity over the same
+validation split with the same seed, so the maximum over the curve and the
+value reconstructed from the row are the same number.
+
+**Verified, not assumed:** over all 32 (cell, institution) pairs of the 1%
+sample dry run — the one place both the curve and the summary row are on disk
+— the reconstruction agrees with the measured curve maximum to
+**≤ 2.22e-16**, one unit in the last place. It is not bit-exact, and the
+reason is worth recording: the per-cell CSV stores precision and recall at 16
+significant digits, so `1/26` comes back as `0.0384615384615384` rather than
+`0.038461538461538464`. Against an epsilon of 0.01 and figures reported to
+three decimals that is immaterial, but "exact" would have been the wrong word.
+Only B's two cells carry a reconstruction at all; every cell from here on
+records the measured value directly.
+
+```
+cd backend
+python scripts/kaggle/kaggle_runner.py backfill-f1-value   # re-runs nothing
+```
+
+**What cannot be backfilled, and why it costs nothing:** `t100_s0`
+institution 0's F1 point was **rejected at the top of the grid**, so no
+validation evaluation was ever run at that tau and there is nothing to
+reconstruct from. It gets `None` — never 0 — and it is already excluded from
+every pooled mean by the high-edge policy, so the gap is in a cell that is not
+counted either way. `f1_best_value_source` records which of the three cases
+each row is.
+
+**The assembly session refuses to write a report over cells missing the
+column**, naming them and the command above, because a missing value would be
+counted as not-degenerate and that is a different claim from not knowing.
+
 
 #### The full-data run, session C: proposed, not yet run
 
@@ -3423,19 +3524,31 @@ with the estimates below and no GPU quota consumed:
 | Session | Command | Inputs | Estimate | Status |
 |---|---|---|---:|---|
 | **A** | `train-isolated` — 96 boosters | the IBM dataset | 2.5-4 h | **done, 2.25 h, exit 0** |
-| **B** | `evaluate-isolated --targets 1.0,0.75` — 6 cells | dataset + A | **2.5-5.5 h** | **2 of 6 cells written** (`t100_s0`, `t100_s1`). Exit code and wall time **unknown**; the earlier "exit 3" was inferred, not observed, and is withdrawn |
-| **C** | **superseded.** Its input check asserted six of B's cells and failed in 44s, correctly | — | — | replaced by sessions C0-C5 in [§5n](backend/scripts/kaggle/run_on_kaggle.md) |
+| **B** | `evaluate-isolated --targets 1.0,0.75` — 6 cells | dataset + A | **2.5-5.5 h** | **2 of 6 cells written** (`t100_s0`, `t100_s1`), then **stopped on the low-edge F1 tau rule at `t100_s2`**, derived from its own `eval_seconds`. Its exit code was never observed; the earlier "exit 3" was inferred and is withdrawn |
+| **C** | **superseded.** Its input check asserted six of B's cells and failed in 44s, correctly | — | — | replaced by sessions **C1-C3** in [§5n](backend/scripts/kaggle/run_on_kaggle.md) |
+| **C1** | `evaluate-isolated --targets 1.0 --seeds 2` | dataset + A | **~0.8 h** | next — the cell B stopped on, run alone so the policy change is observed on its own |
+| **C2** | `evaluate-isolated --targets 0.75,0.5` — 6 cells | dataset + A | **~4.6 h** | then |
+| **C3** | `evaluate-isolated` (plain) — 3 cells **and** the report over all twelve | dataset + A + B + C1 + C2 | **~2.5 h** | last |
 
-Session C will exit **3** as well, and that is correct rather than a new
-failure: it assembles its report from B's reloaded cells together with its
-own, so B's excluded cell is part of the report C writes and C reports it.
-That was [a defect until 2026-11-15](#decision-log) — the reload path carried
-the rows but not the exclusions, so the session writing the authoritative
-report would have been the one session not to name them.
+Session **C3** will exit **3** as well, and that is correct rather than a new
+failure: it assembles its report from the nine reloaded cells together with
+its own three, so B's excluded cell is part of the report C3 writes and C3
+reports it. That was [a defect until 2026-11-15](#decision-log) — the reload
+path carried the rows but not the exclusions, so the session writing the
+authoritative report would have been the one session not to name them.
 
-Three rather than one because the total is **7-14 CPU hours** against a
-12-hour session limit: one session would fit the optimistic end and lose
-everything at the pessimistic end. The split falls where the work is already
+**Sizing, now measured rather than estimated.** B's two cells took 46.2 and
+44.4 minutes, so the ten remaining cells are ~7.7 h in total. The split into
+three is not about fitting 12 hours — one session would fit — but about what a
+stop costs: C1 and C2 need only session A's boosters, so neither can be held
+up by the other, and only C3 depends on the rest because only C3 assembles.
+C1 is alone because it is the cell the pre-registered rule stopped and the
+first to run under the changed policy.
+
+The original three-session split was made when the total was estimated at
+**7-14 CPU hours** against a 12-hour session limit: one session would fit the
+optimistic end and lose everything at the pessimistic end. The split falls
+where the work is already
 resumable — `train-isolated` skips a finished booster, `evaluate-isolated`
 resumes past a finished `(target, seed)` — so a session that runs out of time
 costs the cell in flight and nothing else. Each long cell runs through
@@ -3468,7 +3581,11 @@ rather than the run.
 
 | Date | Decision | Reason | Evidence |
 |---|---|---|---|
-| 2026-11-16 | **OPEN, proposed not decided: what the low-edge F1 tau policy should be.** Recommendation **(a)** — record the cell at the floor tau, flagged `tau_at_low_edge`, and keep it in the pooled means | The pre-registered rule stops on a low edge because it "means something is wrong with the training data, the weighting or the grid". The mechanism is now understood and is **not** a bug: campaign F1 needs a cluster to reach 3 of a campaign's accounts, an institution's own ceiling at target 1.0 is 0.139, so at any selective threshold it detects nothing and F1 is ~0 everywhere — leaving the floor as the only place detection happens at all. The policy generalised from the **dataset's** 0.102% prevalence to a **per-institution** detector's optimum, which depends instead on how much of a campaign that detector can see. (a) is conservative: it keeps starved institutions in the mean with their weak numbers, where "undefined" would drop exactly those institutions and flatter the isolated floor. **(b) extending the grid downward re-runs all 12 cells** and is a frozen-definition change, so it is proposed as a follow-up study, not as the fix | §[session B produced 2 of 6 cells](#session-b-produced-2-of-6-cells-and-what-that-means--2026-11-16); B's `t100_s0/s1` taus CSVs |
+| 2026-11-16 | **DECIDED, and it changes a pre-registered stop condition: a low-edge F1 tau is RECORDED at the floor tau, flagged `tau_at_low_edge`, and kept in the pooled means.** Approved explicitly by the user. `--stop-on-low-edge-tau` restores the old behaviour; `--allow-low-edge-tau` is accepted and ignored. Rejected: **(b)** extending `MODEL_TAU_GRID` downward, **(c)** treating it as undefined, **(d)** keeping the stop | The pre-registered rule stopped because a low edge "means something is wrong with the training data, the weighting or the grid" — a suspected **bug**. The mechanism is not one: campaign F1 needs a cluster reaching 3 of a campaign's accounts at 50% purity, an institution's own ceiling at target 1.0 is 0.139, so at any selective threshold it detects nothing, F1 is ~0 across the whole grid, and the floor is the only place detection happens at all. The policy had generalised from the **dataset's** 0.102% prevalence to a **per-institution detector's** optimum, which depends on reach instead. Recorded rather than excluded because **(c) would drop exactly the starved institutions that demonstrate what fragmentation costs, raising the isolated floor** — the one arm that must not be flattered, since every Phase 4 comparison is measured against it. A lone bank with a ceiling of 0.139 cannot do that job, and its weak number is the finding, not an error. **(b)** touches a frozen definition and would re-run all 12 cells, so it is a follow-up study; **(d)** would leave the isolated arm unmeasurable at target 1.0 | §[DECIDED: a low-edge F1 tau is recorded and flagged](#decided-a-low-edge-f1-tau-is-recorded-and-flagged--2026-11-16); `LOW_EDGE_POLICY` in `kaggle_runner.py`; `test_a_low_edge_f1_tau_is_recorded_under_the_2026_11_16_policy` |
+| 2026-11-16 | **Required with the recording policy: `f1_best_value` and `f1_degenerate` on every (institution, cell), with the epsilon fixed at 0.01 before any cell ran.** Every pooled, union and comparison row carries `n_f1_degenerate`. The primary operating points are **unchanged** — `f1` and `total_10` stand as designated | Recording a floor tau is only honest beside the value at it. When campaign F1 is ~0 at every threshold the argmax is settled by the deterministic tie-break in `best_tau`, not by the data, and the floor tau is not an optimum — a reader must be told which cells are in that regime. The epsilon is 0.01 rather than exactly 0 because a curve flat at 0.004 is in the same regime as one flat at 0.0, and it is fixed **in advance** so it can never be chosen after seeing which cells it would catch. The count travels with every pooled figure for the same reason the binding-budget count does: a mean mixing flat-curve cells with real-maximum cells is not one quantity. **The flag must not select the comparison point** — `f1`/`total_10` were justified independently in stage 4.1, and letting a degeneracy count move them would make the choice post hoc | `isolated.F1_DEGENERATE_EPSILON`; `degenerate_summary`; `test_the_degeneracy_epsilon_is_fixed_and_its_boundary_is_inclusive`; `test_f1_best_value_is_the_value_at_the_chosen_tau` |
+| 2026-11-16 | **`t100_s0` and `t100_s1` are BACKFILLED, not re-run**, by `kaggle_runner.py backfill-f1-value`. A decision taken before assembly, not discovered at it | The value is already implicit in each cell's `_summary.csv`: the validation row at the `f1` point was evaluated **at the chosen tau**, so its precision and recall are those at the argmax and campaign F1 is `2PR/(P+R)` of them, which is exactly what `select_tau` maximises. Verified against the measured curves over all 32 (cell, institution) pairs of the 1% sample dry run — the only place both the curve and the row are on disk — agreeing to **≤2.22e-16**, one ULP. Not bit-exact, because the per-cell CSV stores precision and recall at 16 significant digits; immaterial against an epsilon of 0.01 and figures reported to three decimals. A re-run would cost ~1.5 h and change nothing but the 16th digit. The one unrecoverable pair, `t100_s0` institution 0, had its F1 point rejected at the grid top so no validation run exists at that tau — it is `None`, never 0, and was already excluded from every pooled mean | §[`t100_s0` and `t100_s1` do not need re-running](#t100_s0-and-t100_s1-do-not-need-re-running--the-value-is-backfillable); `command_backfill_f1_value`; `test_the_backfill_identity_holds_for_the_f1_point_on_validation` |
+| 2026-11-16 | **`verify_phase4_crosscheck.py` now reads the COMMITTED dry-run payload, not the local development artifact** | The README's dry-run figures are sourced from `docs/reference/phase4_chain_sample.json`, but the verifier read `backend/artifacts/phase4_dev/phase4_chain.json` - a regenerable artifact. So a committed figure could pass or fail because of a later local run, in either direction: four ratios reported FAIL against a re-run whose timings a concurrent test suite had contaminated, and a drifted committed figure could equally have been masked by a fresh local run that happened to agree. Found by re-running the chain after the policy change | §[the chain re-run](#the-chain-re-run-after-the-policy-change--2026-11-16); `dry_run` in `scripts/verify_phase4_crosscheck.py` |
+| 2026-11-16 | **Session B stopped on the low-edge rule, and the 25-55 min per-cell estimate was right.** Derived from B's own `*_institutions.csv` rather than re-measured; the diagnostic session written to settle it was dropped unrun | Summing `eval_seconds` over the eight institutions and scaling by the measured 1.08 cell-wall ratio gives `t100_s0` = 2,568.5s (46.2 min) and `t100_s1` = 2,465.0s (44.4 min). Two cells plus one in flight is ~2.3 h, so the 12 h limit is excluded and no other cause fits a run that left two complete cells and no combined report. The two measurements agree to within 4%, which also lifts the three-cell-per-session cap: at 46 min a cell, 10 h of headroom is 13 cells | §[Session B produced 2 of 6 cells](#session-b-produced-2-of-6-cells-and-what-that-means--2026-11-16); B's `t100_s0`/`t100_s1` institution CSVs |
 | 2026-11-16 | **WITHDRAWN: the claim that session B "exited 3"** | It was **inferred** from the reported high-edge tau — a high edge exits 3 after the reports are written — and then written into a table of measured outcomes as though observed. B's exit code and wall time are unknown. Two signals that B was incomplete (figures for seeds 0 and 1 only; the binding count holding in "both seeds") were in the hand-off and were read as reporting gaps rather than run gaps | §[session B produced 2 of 6 cells](#session-b-produced-2-of-6-cells-and-what-that-means--2026-11-16) |
 | 2026-11-16 | **CORRECTED: the low-edge risk falls as the visibility target falls; it does not rise** | An earlier note said targets 0.50 and 0.25 would push the F1 optimum "lower still" because institutions see more of each campaign. Backwards: seeing more moves the optimum **up**. An institution's own ceiling *rises* as the target falls (0.139 → 0.346 on validation), so the starved regime is target **1.0**. Both observed near-floor taus were at target 1.0, which is the mechanism rather than a coincidence, and it is why the replacement plan runs `t100_s2` alone and first | README Reading 1; B's taus CSVs |
 | 2026-11-15 | **OPEN, stopped for a decision (O1): which model seed(s) the centralized arm of 4.4 uses** | Phase 3's seeds are **model** seeds; Phase 4's are **visibility** seeds, and all 96 Phase 4 boosters are trained at model seed 0. The three readings give 0.696 / 0.780, 0.6845 / 0.7667 and 0.679 / 0.760, and D4 asks for both the 3-seed Phase 4 scope and reproduction of a headline that is a **5-seed mean**. Implemented with no default so it cannot be chosen silently. Recommendation: `matched_seed0`, the only reading where the arms differ only in the condition | §[O1](#o1-which-model-seeds-the-centralized-arm-uses); `federation/centralized.py` `MODEL_SEED_POLICIES`; `docs/reference/evaluate_baseline.csv` |
@@ -3915,6 +4032,55 @@ dominates and is shared** — the raw features of a view do not depend on which
 booster scores next, so they are built once and the eight scalers applied to
 them. That is what makes the full-data plan affordable rather than eight times
 over budget.
+
+#### The chain re-run after the policy change — 2026-11-16
+
+The whole chain was run again from scratch on the sample after the low-edge
+policy change and the `f1_best_value` / `f1_degenerate` addition, to check the
+new columns reach every report rather than only the one they are computed in.
+
+| | |
+|---|---|
+| ceilings agree across all four conditions | **max disagreement 0.0**, 256 ceiling cells each |
+| union ceiling equals centralized ceiling | **0.0**, 32 comparisons |
+| F1 taus at the low edge | **12**, the same as before — expected on the sample |
+| files written | 37, all four conditions plus the comparison |
+| `f1_best_value` present on | institutions, taus, summary, pooled, union **and** comparison rows |
+
+**The sample cannot exercise the degenerate regime, and that is worth saying.**
+Its `f1_best_value` ranges **0.074 – 0.588** across all 32 institution-cells,
+so `f1_degenerate` is false everywhere and every pooled row reads
+`n_f1_degenerate = 0 of 8`. At a ~3.3% positive rate every institution has a
+real maximum to find. So this run checks the **plumbing** and nothing about
+the regime the flag exists for — the first real test of it is session C1, at
+target 1.0 on the full data. The flat-curve path is exercised by a unit test
+instead, on a fixture whose campaign F1 is 0.0 at every tau.
+
+**Its timings are NOT usable, and the committed cost figures stay the
+2026-11-15 run's.** This re-run finished in 1,311s against the first run's
+2,609s, and its within-run ratios came out 1.09 / 1.02 / 1.12 / 1.10 against
+1.21 / 0.85 / 1.06 / 1.46. The reason is mundane and disqualifying: **the
+backend test suite was run twice while this chain was in flight**, so the
+steps that overlapped it were not competing for the machine on equal terms,
+which is the one condition that makes a within-run ratio comparable at all.
+The correctness checks above do not depend on timing and stand; the cost table
+below is the 2026-11-15 measurement, and sessions D-J remain sized from it.
+*A second reading of the same ratios would be worth having — it is the kind of
+figure that should not rest on one run — but it has to be measured on an idle
+machine, and this was not one.*
+
+**And the re-run found a defect worth more than the run cost.** The
+cross-check verifier reported four FAILs — the four cost ratios — against this
+contaminated run, while the committed figures those claims describe were
+untouched. The cause: `verify_phase4_crosscheck.py` read
+`backend/artifacts/phase4_dev/phase4_chain.json`, a **regenerable development
+artifact**, for figures the cross-check document sources from the **committed**
+`docs/reference/phase4_chain_sample.json`. So any later local run could make a
+committed figure pass or fail for reasons that had nothing to do with the
+evidence it rests on — in the other direction, a drifted committed figure
+could have been masked by a fresh local run that happened to agree. It now
+reads the committed payload first and the local artifact only as a fallback,
+and the verifier is back to **77 passed, 0 failed, 10 skipped**.
 
 *These replaced a first set of ratios taken from a single cell — 1.41 / 1.15 /
 0.44 / 4.2 — every one of which was wrong. The one-cell `train-evidence`
@@ -4452,6 +4618,20 @@ project-root/
   `(window, institution)` to record which settings show the mechanism. Writes
   `artifacts/demo_panel/` (gitignored). Without `--taus` the bundle has no
   recorded operating point and the panel needs an explicit `?tau=`.
+- **Add `f1_best_value` to cells written before it existed** (session B's
+  two), and check that the reconstruction matches what a run measured:
+  ```
+  cd backend
+  python scripts/kaggle/kaggle_runner.py backfill-f1-value   # re-runs nothing
+  python scripts/verify_f1_backfill.py                       # the evidence
+  ```
+  The first rewrites each cell's `institutions`, `taus` and `summary` CSVs in
+  place — `compare.py` reads the flag from the summary frame, so all three
+  need it. The second stages a local run's cells with the columns stripped,
+  runs the first against them, and compares every value with the measured
+  curve maximum: **≤2.22e-16** over 32 (cell, institution) pairs, one ULP
+  rather than bit-exact because the CSV stores precision and recall at 16
+  significant digits.
 - **Re-derive every Phase 4 figure in this README from its source:**
   ```
   cd backend
@@ -5698,6 +5878,24 @@ is recorded here rather than in the suite.
   holds fixed and therefore cannot see. This binds the 4.2 − 4.1, 4.3a − 4.1
   and 4.3b − 4.2 contrasts in particular, which are the differences most likely
   to land small.
+- **Some per-institution F1 operating points are chosen out of a flat curve,
+  and `n_f1_degenerate` is how many.** A starved institution's campaign F1 is
+  ~0 at every threshold on the grid — at target 1.0 its own ceiling is 0.139 —
+  so the argmax is settled by the deterministic tie-break in
+  `evaluation.best_tau` rather than by the data, and the tau it operates at is
+  a boundary, not an optimum. Those cells **are** recorded and kept in the
+  pooled means ([policy, 2026-11-16](#decided-a-low-edge-f1-tau-is-recorded-and-flagged--2026-11-16)),
+  because excluding them would drop exactly the institutions that demonstrate
+  what fragmentation costs. The consequence for a reader: **an `f1` row whose
+  `n_f1_degenerate` is a large fraction of `n_cells_with_an_f1_curve` is
+  reporting the floor of a flat curve, not a tuned detector**, and a
+  difference between two arms at that point may be a difference between two
+  arbitrary thresholds. The `total_10` point is not affected — its threshold
+  comes from the alarm budget — which is part of why both are primary. The
+  count is on every pooled, union and comparison row, and the epsilon (0.01)
+  was fixed before any cell ran under the policy. How many of the full data's
+  96 institution-cells are degenerate is **not yet known**: only
+  `t100_s0`/`t100_s1` exist, and the risk is concentrated at target 1.0.
 - **The live panel's numbers are only as real as its bundle.** Built from the
   1% sample it is a development check and says so on the page; built from a
   full-data bundle it is a real detection on one window. Either way the
@@ -5896,6 +6094,79 @@ Tagged points in the repository, newest first. Check one out with
 | `v0.1-data-pipeline` | 2026-10-08 | Phase 2 complete, plus the stage 3.0 Kaggle runner. The research pipeline (campaign ground truth, splits, topology groups, institutions, visibility), the artifact export, the read-only FastAPI server, and the full React frontend — 69 backend tests and 48 frontend tests passing. **No models and no experiment results**: the four conditions are defined and the result schema is fixed, but nothing has been trained or run, and the full-data regression numbers are still unverified (that is what stage 3.0's Kaggle run is for). |
 
 ## Changelog
+
+- **2026-11-16 (the low-edge policy decided, the degeneracy flag, and three
+  sessions instead of five)** — session B's stop is explained, the
+  pre-registered rule it fired is changed with approval, and the ten remaining
+  stage 4.1 cells are re-planned from measured timings.
+
+  *Why B stopped: settled from its own output.* Summing `eval_seconds` over
+  each finished cell's eight institutions and scaling by the measured 1.08
+  cell-wall ratio gives `t100_s0` = 2,568.5s (**46.2 min**) and `t100_s1` =
+  2,465.0s (**44.4 min**). Two cells plus one in flight is ~2.3 h, so the 12 h
+  limit is excluded and the **low-edge F1 tau rule** is the only cause that
+  fits. The **25-55 min per-cell estimate was right**, not 5-10× low as one
+  reading of the evidence had suggested, and the diagnostic session written to
+  settle the question was dropped unrun.
+
+  *The policy, changed with explicit approval.* A low-edge F1 tau is now
+  **recorded at the floor tau, flagged, and kept in the pooled means** — see
+  [DECIDED: a low-edge F1 tau is recorded and
+  flagged](#decided-a-low-edge-f1-tau-is-recorded-and-flagged--2026-11-16).
+  The rule was pre-registered against a suspected bug; the mechanism is not
+  one. Excluding the cell instead would drop exactly the starved institutions
+  that demonstrate what fragmentation costs and would **raise the isolated
+  floor**, the one arm every Phase 4 contrast is measured against. Extending
+  the grid downward was rejected as a frozen-definition change that would
+  re-run all 12 cells, and is recorded as a follow-up study instead.
+  `--stop-on-low-edge-tau` restores the old behaviour; `--allow-low-edge-tau`
+  is accepted and ignored.
+
+  *The flag the policy required.* Every (institution, cell) now records
+  **`f1_best_value`** — the validation campaign F1 **at** the chosen tau — and
+  **`f1_degenerate`**, true when that value is `<= 0.01`, an epsilon fixed
+  before any cell ran under the new policy. Every pooled, union and comparison
+  row carries `n_f1_degenerate` the way it already carries the binding-budget
+  count, because a mean mixing flat-curve cells with real-maximum cells is not
+  one quantity. **`f1` and `total_10` stay primary**: the flag informs
+  interpretation and must not select the comparison point, or the choice
+  becomes post hoc.
+
+  *B's two cells are backfilled, not re-run.* The value is already implicit in
+  their `_summary.csv`, and `backfill-f1-value` reconstructs it as
+  `2PR/(P+R)` of the validation row at the `f1` point, re-evaluating nothing.
+  Verified against the measured curves over all 32 (cell, institution) pairs
+  of the sample dry run: agreement to **≤2.22e-16**, one ULP — not bit-exact,
+  because the per-cell CSV stores precision and recall at 16 significant
+  digits. The assembly session now **refuses** to write a report over cells
+  missing the column, naming them and the command, because a missing value
+  would be counted as not-degenerate.
+
+  *Two findings from checking the work rather than from the work.* The chain
+  was re-run on the sample to confirm the new columns reach every report: both
+  structural checks held exactly (ceilings **0.0** across all four conditions,
+  union = centralized **0.0** over 32 comparisons) and all 37 files carry the
+  new columns. Its **timings were discarded** — the test suite ran twice while
+  it was in flight, so its within-run ratios are not comparable and the
+  committed 2026-11-15 cost figures stand. That re-run then exposed a defect
+  in `verify_phase4_crosscheck.py`: it read the **regenerable** local
+  `phase4_chain.json` for figures the cross-check document sources from the
+  **committed** `phase4_chain_sample.json`, so a later local run could make a
+  committed figure pass or fail either way. It now reads the committed payload
+  first — **77 passed, 0 failed, 10 skipped**. And the sample turns out not to
+  exercise the degenerate regime at all: `f1_best_value` runs 0.074-0.588
+  there, so the flag is false everywhere and its first real test is C1.
+
+  *Three sessions, not five.* At a measured 46 min per cell, 10 h of headroom
+  is 13 cells rather than 3, so §5n is now **C1** (`t100_s2` alone, ~0.8 h, so
+  the policy change is observed on its own), **C2** (0.75 and 0.50, six cells,
+  ~4.6 h) and **C3** (0.25, three cells, **and the complete report over all
+  twelve**, ~2.5 h). C1 and C2 take only session A's boosters, so neither can
+  be held up by the other. C3's merge of evaluation and assembly is safe
+  because `evaluate-isolated` already reloads finished cells, with one
+  condition the input check enforces: the nine staged cells must be **renamed**
+  (D6) and **backfilled** *before* the run, or the concat produces two column
+  sets with NaNs in each.
 
 - **2026-11-15 (O1 decided; the comparison, the Kaggle sessions, the live
   panel and the cross-check)** — Phase 4 is now implemented end to end, with

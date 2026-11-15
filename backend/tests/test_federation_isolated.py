@@ -781,7 +781,7 @@ def test_run_cell_produces_every_report_and_flags_what_it_should(cell):
         assert "n_institutions_in_mean" in row and "n_trained_in_mean" in row
     assert set(cell["flags"]) == {
         "untrained", "thin", "tau_at_grid_edge", "tau_at_high_edge",
-        "tau_at_low_edge", "no_affordable_tau",
+        "tau_at_low_edge", "f1_degenerate", "no_affordable_tau",
     }
 
 
@@ -1308,6 +1308,111 @@ def test_a_reloaded_cell_carries_its_exclusions_into_the_report():
 
     # and a cell with nothing at an edge contributes nothing
     assert _reloaded_cell_edges({"tau_rows": [], "institution_rows": []}) == ([], [])
+
+
+def test_assembly_refuses_cells_written_before_f1_best_value_existed():
+    """NaN is not False, so the gap has to stop the report rather than be
+    counted as "this cell was not degenerate".
+
+    Session B's two cells are exactly this case. The decision was to backfill
+    them, not re-run them - but a backfill that was forgotten must not produce
+    a quietly undercounted `n_f1_degenerate` in a report someone then quotes.
+    An **untrained** institution has no curve at all, which is a real `None`
+    and not a gap.
+    """
+    import sys
+    from pathlib import Path
+
+    sys.path.insert(
+        0, str(Path(__file__).resolve().parent.parent / "scripts" / "kaggle")
+    )
+    from kaggle_runner import cells_without_f1_best_value
+
+    def row(target, seed, institution, trained=True, best=0.4):
+        out = {
+            "visibility_target": target, "seed": seed,
+            "institution": institution, "trained": trained,
+        }
+        if best is not None:
+            out["f1_best_value"] = best
+        return out
+
+    # a complete set: nothing to complain about
+    good = [row(1.0, 0, i) for i in range(3)]
+    assert cells_without_f1_best_value(good) == []
+
+    # the column missing entirely - a cell written before it existed
+    stale = [
+        {k: v for k, v in r.items() if k != "f1_best_value"}
+        for r in [row(1.0, 0, i) for i in range(3)]
+    ]
+    assert cells_without_f1_best_value(stale) == ["t100_s0"]
+
+    # present but NaN on one institution, in one of two cells
+    import math
+    mixed = [row(1.0, 0, i) for i in range(3)] + [row(0.75, 1, i) for i in range(3)]
+    mixed[4]["f1_best_value"] = math.nan
+    assert cells_without_f1_best_value(mixed) == ["t075_s1"]
+
+    # an UNTRAINED institution has no curve: a real None, not a gap
+    untrained = [row(1.0, 0, 0), row(1.0, 0, 1, trained=False, best=None)]
+    assert cells_without_f1_best_value(untrained) == []
+
+    # the CSV round trip again: "False" is a truthy string
+    as_strings = [
+        dict(row(1.0, 0, 0), trained="True"),
+        dict(row(1.0, 0, 1, best=None), trained="False"),
+    ]
+    assert cells_without_f1_best_value(as_strings) == []
+
+    assert cells_without_f1_best_value([]) == []
+
+
+def test_a_low_edge_f1_tau_is_recorded_under_the_2026_11_16_policy():
+    """The policy change, pinned: record and flag, do not stop.
+
+    Session B stopped on this rule at target 1.0 seed 2 and lost nothing but
+    its own cell. The rule was pre-registered against a *suspected bug*; the
+    mechanism turned out to be a starved institution whose campaign F1 is ~0
+    at every threshold, so there is no bug to stop for. Recording is now the
+    policy, and `--stop-on-low-edge-tau` restores the old behaviour.
+
+    Excluding the cell instead was rejected: it would drop exactly the
+    starved institutions that show what fragmentation costs, which would
+    raise the isolated floor - the arm every Phase 4 contrast is measured
+    against.
+    """
+    import sys
+    from pathlib import Path
+
+    sys.path.insert(
+        0, str(Path(__file__).resolve().parent.parent / "scripts" / "kaggle")
+    )
+    import kaggle_runner
+
+    assert kaggle_runner.LOW_EDGE_POLICY == "record_and_flag"
+    assert kaggle_runner.LOW_EDGE_POLICY_DATE == "2026-11-16"
+
+    cell = {
+        "flags": {"tau_at_low_edge": [(3, "f1")], "f1_degenerate": [3]},
+        "tau_rows": [
+            {"institution": 3, "operating_point": "f1", "tau": 0.05},
+        ],
+        "institution_rows": [{"institution": 3, "f1_best_value": 0.0}],
+    }
+
+    class Args:
+        stop_on_low_edge_tau = False
+
+    assert kaggle_runner._low_edge_outcome("t100_s2", cell, Args()) is None
+
+    Args.stop_on_low_edge_tau = True
+    assert kaggle_runner._low_edge_outcome("t100_s2", cell, Args()) == 3
+
+    # and a cell with no low edge is untouched either way
+    quiet = {"flags": {"tau_at_low_edge": []}, "tau_rows": [],
+             "institution_rows": []}
+    assert kaggle_runner._low_edge_outcome("t100_s0", quiet, Args()) is None
 
 
 def test_run_cell_separates_the_two_edges_in_its_flags(monkeypatch, _module_world):

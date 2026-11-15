@@ -318,6 +318,13 @@ def _record_flags(cell, condition, target, seed, edge_taus, high_edge,
         "n_high_edge": len(flags.get("tau_at_high_edge", [])),
         "n_low_edge": len(flags.get("tau_at_low_edge", [])),
         "n_no_affordable_tau": len(flags.get("no_affordable_tau", [])),
+        # institutions whose validation F1 curve was flat at or below
+        # isolated.F1_DEGENERATE_EPSILON. Recorded per cell because a cell
+        # whose threshold was settled by the tie-break is not the same
+        # measurement as one with a real optimum, and the dry run is where
+        # the plumbing for that flag is checked end to end.
+        "f1_degenerate": flags.get("f1_degenerate"),
+        "n_f1_degenerate": len(flags.get("f1_degenerate", [])),
     })
     for institution, point in flags.get("tau_at_high_edge", []):
         high_edge.append({"condition": condition, "visibility_target": target,

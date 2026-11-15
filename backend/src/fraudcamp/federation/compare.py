@@ -141,6 +141,15 @@ def usable(frame: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
+#: Columns carried through a pairing that are **not** metrics and are never
+#: differenced: they describe how each side's number was produced. A paired
+#: difference whose cells were chosen out of flat F1 curves on one side and
+#: real maxima on the other is not the same comparison as one where both were
+#: real, so the count travels with the difference the way the binding-budget
+#: count travels with a pooled budget number.
+CONTEXT_COLUMNS = ("f1_degenerate",)
+
+
 def paired(
     baseline: pd.DataFrame,
     treatment: pd.DataFrame,
@@ -207,6 +216,9 @@ def paired(
     dropped = sorted((left_defined | right_defined) - both)
 
     cols = keys + [m for m in metrics if m in left.columns and m in right.columns]
+    cols += [
+        c for c in CONTEXT_COLUMNS if c in left.columns and c in right.columns
+    ]
     merged = left[cols].merge(
         right[cols], on=keys, suffixes=("_baseline", "_treatment"), how="inner"
     )
@@ -313,6 +325,27 @@ def check_union_ceiling_matches_centralized(
 # ---------------------------------------------------------------------------
 
 
+def _degenerate_counts(chunk: pd.DataFrame) -> dict:
+    """How many rows on each side were flagged `f1_degenerate`.
+
+    ``None`` when the column is absent, which means the arm was produced
+    before the flag existed - it must not be read as zero, so the
+    `compare-conditions` command refuses a frame that is missing it rather
+    than reporting a quietly undercounted figure.
+    """
+    out = {}
+    for side in ("baseline", "treatment"):
+        column = f"f1_degenerate_{side}"
+        if column not in chunk.columns:
+            out[f"n_f1_degenerate_{side}"] = None
+            continue
+        values = chunk[column]
+        out[f"n_f1_degenerate_{side}"] = int(
+            values.map(lambda v: v is True or str(v).strip().lower() == "true").sum()
+        )
+    return out
+
+
 def summarise_difference(
     frame: pd.DataFrame, metric: str, group, unit: str
 ) -> list[dict]:
@@ -347,6 +380,13 @@ def summarise_difference(
             "n_positive": int((values > 0).sum()),
             "n_zero": int((values == 0).sum()),
             "n_negative": int((values < 0).sum()),
+            # how many of THESE pairs had a degenerate F1 curve on each side.
+            # Counted over the same rows the mean is taken over, and reported
+            # for every operating point: at a budget point it describes the
+            # detector rather than the threshold's selection, which the
+            # `degenerate_summary` docstring sets out. It informs
+            # interpretation only - `f1` and `total_10` stay primary.
+            **_degenerate_counts(chunk),
             "baseline_mean": float(
                 pd.to_numeric(chunk[f"{metric}_baseline"], errors="coerce").mean()
             ),

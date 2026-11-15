@@ -246,6 +246,7 @@ def test_a_difference_carries_its_spread_and_sign_counts_not_a_standard_error():
         "median_difference", "min_difference", "max_difference",
         "n_positive", "n_zero", "n_negative", "baseline_mean",
         "treatment_mean", "seed_noise_floor", "below_seed_noise_floor",
+        "n_f1_degenerate_baseline", "n_f1_degenerate_treatment",
     }, (
         "the per-institution summary gained or lost a field. The eight "
         "institutions are not exchangeable, so nothing resembling a standard "
@@ -295,3 +296,54 @@ def test_the_primary_points_sort_first():
     assert primaries == sorted(primaries, reverse=True), (
         "primary points must come first in the report"
     )
+
+
+# ---------------------------------------------------------------------------
+# the degenerate-F1 count travels with the difference
+# ---------------------------------------------------------------------------
+
+
+def test_the_degenerate_f1_count_travels_with_a_paired_difference():
+    """A difference whose cells had flat F1 curves is not the same comparison.
+
+    So the count is carried per side, counted over the pairs the mean is
+    taken over - the same contract as the binding-budget count on a pooled
+    budget number.
+    """
+    base = [row("isolated", 1.0, 0, i, "f1", 0.3, 0.3) for i in range(3)]
+    treat = [row("fedavg", 1.0, 0, i, "f1", 0.4, 0.4) for i in range(3)]
+    for i, flag in enumerate([True, True, False]):
+        base[i]["f1_degenerate"] = flag
+    for i, flag in enumerate([True, False, False]):
+        treat[i]["f1_degenerate"] = flag
+
+    merged, _ = compare_mod.paired(
+        pd.DataFrame(base), pd.DataFrame(treat),
+        compare_mod.PER_INSTITUTION_KEYS, label="t",
+    )
+    out = compare_mod.summarise_difference(
+        merged, "recall_relative_to_ceiling",
+        ("visibility_target", "seed", "operating_point", "eval_split",
+         "test_subset"),
+        "per_institution",
+    )[0]
+    assert out["n_pairs"] == 3
+    assert out["n_f1_degenerate_baseline"] == 2
+    assert out["n_f1_degenerate_treatment"] == 1
+
+
+def test_a_missing_degenerate_column_is_none_and_never_zero():
+    """Absent is not the same claim as "none were degenerate"."""
+    merged, _ = compare_mod.paired(
+        pd.DataFrame([row("isolated", 1.0, 0, 0, "f1", 0.3, 0.3)]),
+        pd.DataFrame([row("fedavg", 1.0, 0, 0, "f1", 0.4, 0.4)]),
+        compare_mod.PER_INSTITUTION_KEYS, label="t",
+    )
+    out = compare_mod.summarise_difference(
+        merged, "recall_relative_to_ceiling",
+        ("visibility_target", "seed", "operating_point", "eval_split",
+         "test_subset"),
+        "per_institution",
+    )[0]
+    assert out["n_f1_degenerate_baseline"] is None
+    assert out["n_f1_degenerate_treatment"] is None
