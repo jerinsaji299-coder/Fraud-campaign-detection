@@ -6,7 +6,8 @@ the things pinned here are the ones that stop that happening.
 
 1. With no bundle installed every endpoint **404s with an explanation**, so the
    frontend shows an empty state. Nothing is defaulted, nothing is zero-filled.
-2. The aggregate figures come from the comparison artifact or are **absent**;
+2. The aggregate figures come from a FULL-SCALE comparison artifact or are
+   **absent**; a development one is refused rather than substituted;
    there is no path that fabricates them.
 3. The panel's purity and coverage are the **frozen matching rule's own**
    numbers - `cluster_match_detail` decides the match and supplies the two
@@ -63,6 +64,9 @@ def test_the_aggregate_reports_its_own_absence_rather_than_erroring(empty_app):
     assert payload["available"] is False
     assert payload["rows"] == []
     assert payload["reason"] and "comparison artifact" in payload["reason"]
+    assert "still running" in payload["reason"], (
+        "the empty state says WHY it is empty, like the Results page does"
+    )
 
 
 def test_a_missing_bundle_is_reported_not_guessed(tmp_path):
@@ -105,7 +109,8 @@ def test_the_aggregate_is_read_or_absent_never_invented(tmp_path):
     missing = demo_service.aggregate_table(tmp_path / "nope.csv")
     assert missing["available"] is False
     assert missing["rows"] == []
-    assert "no comparison artifact" in missing["reason"]
+    assert "comparison artifact" in missing["reason"]
+    assert "still running" in missing["reason"]
 
     import pandas as pd
 
@@ -125,6 +130,74 @@ def test_the_aggregate_is_read_or_absent_never_invented(tmp_path):
     assert present["available"] is True
     assert len(present["rows"]) == 1, "only the test split belongs in the panel"
     assert present["rows"][0]["below_seed_noise_floor"] in (True, "True", 1)
+
+
+def test_a_development_comparison_is_refused_not_displayed(tmp_path):
+    """A `*_dev` artifact is never served, however the server is wired up.
+
+    `phase4_dev/` is built from the 1% sample. Its differences under the
+    panel's "And how often does it hold?" heading would read as an aggregate
+    result, which is the one thing the frontend rule exists to prevent. The
+    check is on the path, so pointing the server back at it cannot leak the
+    numbers - the file here is deliberately real and readable.
+    """
+    import pandas as pd
+
+    development = tmp_path / "phase4_dev"
+    development.mkdir()
+    path = development / "phase4_compare.csv"
+    pd.DataFrame([
+        {"contrast": "fedavg - isolated", "unit": "union",
+         "eval_split": "test", "test_subset": "all",
+         "metric": "recall_relative_to_ceiling", "mean_difference": 0.02,
+         "n_pairs": 1, "below_seed_noise_floor": True},
+    ]).to_csv(path, index=False)
+
+    assert demo_service.is_development_artifact(path) is True
+    out = demo_service.aggregate_table(path)
+    assert out["available"] is False
+    assert out["rows"] == [], "a readable development file must still show nothing"
+    assert "still running" in out["reason"]
+    assert out["development_artifact_ignored"] == str(path)
+
+
+def test_the_app_points_the_aggregate_at_a_full_scale_artifact(tmp_path):
+    """Not at `phase4_dev/`, which is where it used to point."""
+    from app.main import create_app
+
+    app = create_app(tmp_path)
+    configured = str(app.state.demo_compare_csv)
+    assert not demo_service.is_development_artifact(configured), configured
+    assert configured.endswith("phase4_compare.csv")
+
+
+def test_a_nan_in_the_comparison_cannot_500_the_endpoint(tmp_path):
+    """The 2026-11-16 regression, pinned.
+
+    `n_f1_degenerate_*` is null wherever a cell has no F1 curve, and
+    `json.dumps` refuses NaN. The 500 that produced arrives outside
+    `CORSMiddleware`, so the browser calls it a CORS failure and the page
+    says the API is unreachable while it is healthy.
+    """
+    import json
+
+    import pandas as pd
+
+    path = tmp_path / "phase4_compare.csv"
+    pd.DataFrame([
+        {"contrast": "fedavg - isolated", "unit": "union",
+         "eval_split": "test", "test_subset": "all",
+         "metric": "recall_relative_to_ceiling", "mean_difference": 0.02,
+         "n_pairs": 1, "below_seed_noise_floor": True,
+         "n_f1_degenerate_baseline": None, "n_f1_degenerate_treatment": 2},
+    ]).to_csv(path, index=False)
+
+    out = demo_service.aggregate_table(path)
+    assert out["available"] is True
+    assert out["rows"][0]["n_f1_degenerate_baseline"] is None, (
+        "a missing count is null, never 0 - absent is not the same claim"
+    )
+    json.dumps(out)  # the thing that used to raise
 
 
 def test_the_panels_purity_and_coverage_are_the_frozen_rules_own():

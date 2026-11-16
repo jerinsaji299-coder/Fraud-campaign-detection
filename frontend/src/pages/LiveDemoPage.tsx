@@ -432,7 +432,7 @@ export function LiveDemoPage() {
 
       <ChartCard
         title="And how often does it hold?"
-        howToRead="The panel above shows one campaign. These are the aggregate figures from the evaluation runs: each arm's recall relative to its own ceiling, with the number of campaigns behind it."
+        howToRead="The panel above shows one campaign. This is where the aggregate from the full evaluation goes: each arm's recall relative to its own ceiling, with the number of campaigns behind it. Until that run finishes there is nothing here, and a development run is never shown in its place."
       >
         {aggregate.isLoading && <LoadingBlock label="Loading aggregates" />}
         {aggregate.error && (

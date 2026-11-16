@@ -24,6 +24,7 @@ state, which is what the frontend rule requires instead of placeholder data.
 from __future__ import annotations
 
 import json
+import math
 import time
 from collections import OrderedDict
 from pathlib import Path
@@ -34,6 +35,23 @@ import pandas as pd
 from fraudcamp import constants, features, windows
 from fraudcamp.evaluation import clusters as cluster_tools
 from fraudcamp.models import xgb_baseline
+
+#: Artifact directories whose contents are development checks, never
+#: results. The repo's own naming rule - `federation_dev`, `isolated_dev`,
+#: `phase4_dev` are all gitignored output built from the 1% sample - so this
+#: reads an existing convention rather than inventing a new one.
+DEVELOPMENT_DIR_SUFFIX = "_dev"
+
+#: Why the aggregate section is empty. Deliberate, and the same posture as the
+#: Results page: the full sweep has not produced this number yet, and the
+#: development run that HAS produced one is not a stand-in for it.
+NO_FULL_SCALE_AGGREGATE = (
+    "The full-scale comparison has not been measured yet - the Phase 4 sweep "
+    "is still running. There is no full-data comparison artifact to read, and "
+    "a development one is never shown in its place: the panel above "
+    "demonstrates the mechanism on a single window, and only a completed "
+    "sweep can say how often it holds."
+)
 
 MANIFEST = "demo_manifest.json"
 WINDOWS = "demo_windows.parquet"
@@ -361,23 +379,67 @@ def load_bundle(directory: str | Path) -> DemoBundle:
     return DemoBundle(directory).load()
 
 
+def is_development_artifact(path: str | Path) -> bool:
+    """True for anything inside a `*_dev` artifact directory.
+
+    A development comparison is built from the 1% sample. Putting its
+    differences under the panel's "And how often does it hold?" heading would
+    read as an aggregate result, which is the one thing the frontend rule
+    exists to prevent - so the check is on the path, and it holds however the
+    server is wired up.
+    """
+    return any(
+        part.endswith(DEVELOPMENT_DIR_SUFFIX) for part in Path(path).parts
+    )
+
+
+def _json_safe(records: list[dict]) -> list[dict]:
+    """NaN and inf are not JSON, and a 500 here reads as a dead backend.
+
+    `to_dict("records")` passes numpy NaN straight through and `json.dumps`
+    refuses it. Because an unhandled exception is rendered *outside*
+    `CORSMiddleware`, the 500 arrives with no `Access-Control-Allow-Origin`
+    header and the browser reports it as a CORS failure - so the panel said
+    "Could not reach the API. Is the backend running?" while the backend was
+    perfectly healthy. Measured 2026-11-16: `n_f1_degenerate_baseline` and
+    `n_f1_degenerate_treatment` are null on 252 of 392 served rows, because a
+    cell with no F1 curve is `None` rather than 0.
+    """
+    return [
+        {
+            key: (
+                None
+                if isinstance(value, float) and not math.isfinite(value)
+                else value
+            )
+            for key, value in record.items()
+        }
+        for record in records
+    ]
+
+
 def aggregate_table(compare_csv: str | Path) -> dict:
     """The aggregate figures that must sit beside the panel.
 
-    Read from the Phase 4 comparison artifact rather than recomputed. Returns
-    an explicit empty state when the file is absent, because an invented
-    aggregate next to a live panel is exactly the thing the frontend rule
-    forbids.
+    Read from a **full-scale** Phase 4 comparison artifact, never recomputed
+    and never substituted. Returns an explicit empty state when that artifact
+    is absent - or when the path points into a development directory - because
+    an invented or development-scale aggregate next to a live panel is exactly
+    the thing the frontend rule forbids.
     """
     path = Path(compare_csv)
+    if is_development_artifact(path):
+        return {
+            "available": False,
+            "reason": NO_FULL_SCALE_AGGREGATE,
+            "rows": [],
+            "source": None,
+            "development_artifact_ignored": str(path),
+        }
     if not path.exists():
         return {
             "available": False,
-            "reason": (
-                f"no comparison artifact at {path}. The panel shows the "
-                "mechanism on one campaign; the aggregate says how often it "
-                "holds, and it must come from an evaluation run."
-            ),
+            "reason": NO_FULL_SCALE_AGGREGATE,
             "rows": [],
         }
     frame = pd.read_csv(path)
@@ -389,17 +451,20 @@ def aggregate_table(compare_csv: str | Path) -> dict:
     return {
         "available": bool(len(keep)),
         "reason": None if len(keep) else "the comparison artifact has no test rows",
-        "rows": keep.to_dict("records") if len(keep) else [],
+        "rows": _json_safe(keep.to_dict("records")) if len(keep) else [],
         "source": str(path),
     }
 
 
 __all__ = [
+    "DEVELOPMENT_DIR_SUFFIX",
     "MAX_CACHED_VIEWS",
     "MODES",
     "MODE_AVERAGED",
     "MODE_OWN",
+    "NO_FULL_SCALE_AGGREGATE",
     "DemoBundle",
     "aggregate_table",
+    "is_development_artifact",
     "load_bundle",
 ]

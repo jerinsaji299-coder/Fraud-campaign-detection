@@ -174,7 +174,7 @@ feature set only, three seeds, one lookback**. See
 | Stage | Description | Status |
 |---|---|---|
 | 4.0 | Institution-split data: per-institution views of every window, and the account features each institution can compute from its own view alone | **done** — `federation/views.py`, 31 tests, per-institution training loads measured on the sample, visibility cross-check exact on all 370 campaigns |
-| 4.1 | **The `isolated` condition**: each institution trained and scoring on its own view alone, with its **own** oracle ceiling per target, and the two pooled numbers (per-institution mean, and the union over institutions) | **built and tested** — `federation/isolated.py`, 55 tests, backend 460 passed / 25 skipped; `train-isolated` and `evaluate-isolated` runner subcommands, resumable. Full-data **session A done 2026-11-15** (96 boosters, exit 0) and **session B 2 of 12 cells**: B wrote `t100_s0` and `t100_s1` — one cell excluded at the grid top — then **stopped on the low-edge F1 tau rule at `t100_s2`**, a pre-registered stop condition now [changed to record and flag](#decided-a-low-edge-f1-tau-is-recorded-and-flagged--2026-11-16). **B's result: the union's ceiling equals the centralized ceiling exactly, and the union still recovers 0.16-0.26 less of it — the deficit is scoring, not visibility** ([session B](#the-full-data-run-session-b-the-ceiling-holds-the-recall-does-not--done-2026-11-15)). Sessions **C1-C3**, the ten remaining cells and the complete report, are next. §[stage 4.1](#stage-41-the-isolated-condition--approved-and-implemented-2026-11-14) |
+| 4.1 | **The `isolated` condition**: each institution trained and scoring on its own view alone, with its **own** oracle ceiling per target, and the two pooled numbers (per-institution mean, and the union over institutions) | **built and tested** — `federation/isolated.py`, 55 tests, backend 463 passed / 25 skipped; `train-isolated` and `evaluate-isolated` runner subcommands, resumable. Full-data **session A done 2026-11-15** (96 boosters, exit 0) and **session B 2 of 12 cells**: B wrote `t100_s0` and `t100_s1` — one cell excluded at the grid top — then **stopped on the low-edge F1 tau rule at `t100_s2`**, a pre-registered stop condition now [changed to record and flag](#decided-a-low-edge-f1-tau-is-recorded-and-flagged--2026-11-16). **B's result: the union's ceiling equals the centralized ceiling exactly, and the union still recovers 0.16-0.26 less of it — the deficit is scoring, not visibility** ([session B](#the-full-data-run-session-b-the-ceiling-holds-the-recall-does-not--done-2026-11-15)). Sessions **C1-C3**, the ten remaining cells and the complete report, are next. §[stage 4.1](#stage-41-the-isolated-condition--approved-and-implemented-2026-11-14) |
 | 4.2 | **The `fedavg` condition**: the FedAvg analogue for a tree ensemble is **score averaging** — each institution scores its own view with all K boosters, equal weights, nothing retrained | **built and tested** 2026-11-15 — `federation/fedavg.py`; the design question that moved here from 4.1 is answered in [stage 4.2](#stage-42-the-fedavg-analogue-for-a-tree-ensemble--implemented-2026-11-15). No numbers yet |
 | 4.3 | **The `evidence` and `fedavg_evidence` conditions**: boundary accounts receive the window node features computed across the views that hold them; boosters retrained on augmented views; evaluated with own-model scoring (4.3a) and score averaging (4.3b) | **built and tested** 2026-11-15 — `federation/evidence.py`. Under this definition the ceiling cannot move, which is what keeps every comparison paired; see [stage 4.3](#stage-43-boundary-account-evidence--implemented-2026-11-15). No numbers yet |
 | 4.4 | **The `centralized` arm re-reported in the Phase 4 cell grid**, as the `K = 1` case of a per-institution condition | **built and tested** 2026-11-15 — `federation/centralized.py`. **One open decision blocks its number**: which model seed(s) it uses. See [O1](#o1-which-model-seeds-the-centralized-arm-uses) |
@@ -2673,7 +2673,7 @@ is beyond what can be resolved, so the operating point was not found.
 |---|---|
 | `federation/isolated.py` | the condition: the masking scorer, per-institution training, the per-institution oracle ceiling, the union (outcomes, and the deduplicating cluster pass), the two pooled means, the seven operating points, and `run_cell`, which both runners call so the local and Kaggle reports come from one code path |
 | `constants.PHASE4_SEEDS`, `constants.PHASE4_LOOKBACK_H` | the frozen scope **in code** — `[0, 1, 2]` and `48` — so a runner cannot drift from this README. `evaluate-isolated` refuses more than one lookback outright |
-| `tests/test_federation_isolated.py` | **55 tests**, including the grid-edge policy at both one-of-eight and eight-of-eight, the 2026-11-16 low-edge recording policy, the reload path's carry-over of a cell's exclusions, the budget-binding audit, the primary-point designation and the pooled spread's denominator and tie-breaking; backend suite **460 passed, 25 skipped** |
+| `tests/test_federation_isolated.py` | **55 tests**, including the grid-edge policy at both one-of-eight and eight-of-eight, the 2026-11-16 low-edge recording policy, the reload path's carry-over of a cell's exclusions, the budget-binding audit, the primary-point designation and the pooled spread's denominator and tie-breaking; backend suite **463 passed, 25 skipped** |
 | `scripts/run_isolated.py` | the condition on the 1% sample, for development |
 | `scripts/run_phase4_chain.py` | the whole Phase 4 chain on the 1% sample: 4.1 → 4.2 → 4.3a/b → 4.4 → compare-conditions, from scratch. The dry run that has to pass before anything is run on Kaggle |
 | `scripts/make_demo_bundle.py` | exports the live panel's bundle: the offered windows, the ground truth, the account → institution map and the 8 boosters of one `(target, seed)`. Picks the demo campaign by the stated rule and records the audit trail |
@@ -3612,7 +3612,8 @@ rather than the run.
 | Date | Decision | Reason | Evidence |
 |---|---|---|---|
 | 2026-11-16 | **The demo failure of 2026-11-15 was a stale backend, not a code defect — and four demo-readiness fixes were applied, all of them unable to change a number** | A `uvicorn --reload` worker started 2026-11-13 still held `127.0.0.1:8000`: 24 MB resident and ~36 CPU-hours burnt, accepting connections and answering none. `fetch` had no deadline, so the status chip sat on "Checking API" forever with no error to render. Killing it and starting a clean backend restored everything; `/api/health` then answered in 90 ms with `core_artifacts_available: true`. Fixed with it: a 20 s request deadline (verified against a listener that accepts and never answers — the chip now reaches "API unreachable" in 21.6 s instead of never), the page `<title>` (was `frontend`), 270 Cytoscape `institutionLabel` warnings (scoped the mapper to `node[institutionLabel]`, which is what the warning itself recommends), and the blank panel on `/campaigns/abc`. Each is an error path or a label; none can change a displayed figure | §[Testing](#testing) 2026-11-16 walk; `docs/demo_checklist.html`; `frontend/src/api/client.ts` `REQUEST_TIMEOUT_MS` |
-| 2026-11-16 | **NOT fixed before the demo, deliberately: the `/api/demo/aggregate` 500, and the CYCLE ring layout** | Both are real defects, and both change **what the demo shows** rather than whether it runs. Repairing the 500 would make a table of **1% sample** differences appear under the heading "And how often does it hold?" beside a live panel — inventing the appearance of an aggregate result is precisely what the frontend rule forbids, and the empty state it currently falls back to is the honest display. Re-laying out the cycle would invalidate the "say this, not that" guidance the run sheet is built around, the night before it is used. Both are recorded with their repair, and both are the user's call | §[Known limitations](#known-limitations-and-open-questions) |
+| 2026-11-16 | **The aggregate card becomes a deliberate empty state, and the endpoint will not serve a development artifact at all.** Chosen by the user over both the status quo and repairing the 500 as-is. `demo_compare_csv` now points at `artifacts/phase4/phase4_compare.csv`, which the finished sweep will write; `aggregate_table` refuses any `*_dev` path whatever it is pointed at; non-finite floats serialise as `null` so the endpoint cannot 500 again | A card reading "Could not reach the API. Is the backend running?" beside a healthy backend is the worst thing that can be on screen during a talk, and repairing the 500 as-is would have put **1%-sample** differences under the heading "And how often does it hold?" next to a live panel — the exact confusion this project exists to avoid. An empty state that says *why* it is empty is the same posture the Results page already takes, and it is true: the sweep is still running. The refusal is on the path rather than on the data so that re-wiring the server cannot leak the sample numbers, and it reads the repo's own `*_dev` naming rule rather than inventing a provenance marker | §[Artifacts](#artifacts); `demo_service.is_development_artifact`; `test_a_development_comparison_is_refused_not_displayed`; `test_a_nan_in_the_comparison_cannot_500_the_endpoint` |
+| 2026-11-16 | **NOT fixed before the demo, deliberately: the CYCLE ring layout** (the `/api/demo/aggregate` 500 in this row was superseded the same day by the decision above) | Both are real defects, and both change **what the demo shows** rather than whether it runs. Repairing the 500 would make a table of **1% sample** differences appear under the heading "And how often does it hold?" beside a live panel — inventing the appearance of an aggregate result is precisely what the frontend rule forbids, and the empty state it currently falls back to is the honest display. Re-laying out the cycle would invalidate the "say this, not that" guidance the run sheet is built around, the night before it is used. Both are recorded with their repair, and both are the user's call | §[Known limitations](#known-limitations-and-open-questions) |
 | 2026-11-16 | **DECIDED, and it changes a pre-registered stop condition: a low-edge F1 tau is RECORDED at the floor tau, flagged `tau_at_low_edge`, and kept in the pooled means.** Approved explicitly by the user. `--stop-on-low-edge-tau` restores the old behaviour; `--allow-low-edge-tau` is accepted and ignored. Rejected: **(b)** extending `MODEL_TAU_GRID` downward, **(c)** treating it as undefined, **(d)** keeping the stop | The pre-registered rule stopped because a low edge "means something is wrong with the training data, the weighting or the grid" — a suspected **bug**. The mechanism is not one: campaign F1 needs a cluster reaching 3 of a campaign's accounts at 50% purity, an institution's own ceiling at target 1.0 is 0.139, so at any selective threshold it detects nothing, F1 is ~0 across the whole grid, and the floor is the only place detection happens at all. The policy had generalised from the **dataset's** 0.102% prevalence to a **per-institution detector's** optimum, which depends on reach instead. Recorded rather than excluded because **(c) would drop exactly the starved institutions that demonstrate what fragmentation costs, raising the isolated floor** — the one arm that must not be flattered, since every Phase 4 comparison is measured against it. A lone bank with a ceiling of 0.139 cannot do that job, and its weak number is the finding, not an error. **(b)** touches a frozen definition and would re-run all 12 cells, so it is a follow-up study; **(d)** would leave the isolated arm unmeasurable at target 1.0 | §[DECIDED: a low-edge F1 tau is recorded and flagged](#decided-a-low-edge-f1-tau-is-recorded-and-flagged--2026-11-16); `LOW_EDGE_POLICY` in `kaggle_runner.py`; `test_a_low_edge_f1_tau_is_recorded_under_the_2026_11_16_policy` |
 | 2026-11-16 | **Required with the recording policy: `f1_best_value` and `f1_degenerate` on every (institution, cell), with the epsilon fixed at 0.01 before any cell ran.** Every pooled, union and comparison row carries `n_f1_degenerate`. The primary operating points are **unchanged** — `f1` and `total_10` stand as designated | Recording a floor tau is only honest beside the value at it. When campaign F1 is ~0 at every threshold the argmax is settled by the deterministic tie-break in `best_tau`, not by the data, and the floor tau is not an optimum — a reader must be told which cells are in that regime. The epsilon is 0.01 rather than exactly 0 because a curve flat at 0.004 is in the same regime as one flat at 0.0, and it is fixed **in advance** so it can never be chosen after seeing which cells it would catch. The count travels with every pooled figure for the same reason the binding-budget count does: a mean mixing flat-curve cells with real-maximum cells is not one quantity. **The flag must not select the comparison point** — `f1`/`total_10` were justified independently in stage 4.1, and letting a degeneracy count move them would make the choice post hoc | `isolated.F1_DEGENERATE_EPSILON`; `degenerate_summary`; `test_the_degeneracy_epsilon_is_fixed_and_its_boundary_is_inclusive`; `test_f1_best_value_is_the_value_at_the_chosen_tau` |
 | 2026-11-16 | **`t100_s0` and `t100_s1` are BACKFILLED, not re-run**, by `kaggle_runner.py backfill-f1-value`. A decision taken before assembly, not discovered at it | The value is already implicit in each cell's `_summary.csv`: the validation row at the `f1` point was evaluated **at the chosen tau**, so its precision and recall are those at the argmax and campaign F1 is `2PR/(P+R)` of them, which is exactly what `select_tau` maximises. Verified against the measured curves over all 32 (cell, institution) pairs of the 1% sample dry run — the only place both the curve and the row are on disk — agreeing to **≤2.22e-16**, one ULP. Not bit-exact, because the per-cell CSV stores precision and recall at 16 significant digits; immaterial against an epsilon of 0.01 and figures reported to three decimals. A re-run would cost ~1.5 h and change nothing but the 16th digit. The one unrecoverable pair, `t100_s0` institution 0, had its F1 point rejected at the grid top so no validation run exists at that tau — it is `None`, never 0, and was already excluded from every pooled mean | §[`t100_s0` and `t100_s1` do not need re-running](#t100_s0-and-t100_s1-do-not-need-re-running--the-value-is-backfillable); `command_backfill_f1_value`; `test_the_backfill_identity_holds_for_the_f1_point_on_validation` |
@@ -5113,7 +5114,8 @@ committed.
   schemas, so an artifact change that is not reflected here fails the API
   tests.
 - **`routers/`** — one module per endpoint group (`meta`, `campaigns`,
-  `visibility`, `results`).
+  `visibility`, `results`, and `demo`, the live panel — the only one that
+  computes rather than serves).
 
 ## Artifacts
 
@@ -5121,6 +5123,17 @@ The full transaction data is too large to serve directly, so `export.py`
 writes these small derived files to the config's `artifacts_dir`
 (`backend/artifacts/` by default). Write them with
 `python scripts/run_pipeline.py --config <cfg> --export`.
+
+> **The `*_dev` suffix is load-bearing, not decoration.**
+> `artifacts/federation_dev/`, `artifacts/isolated_dev/` and
+> `artifacts/phase4_dev/` hold development checks built from the 1% sample.
+> Nothing under a `*_dev` directory is a result, and since 2026-11-16 that is
+> enforced rather than merely documented: `demo_service.aggregate_table`
+> refuses to serve any file whose path contains such a directory. The
+> **full-scale** Phase 4 comparison belongs at
+> `artifacts/phase4/phase4_compare.csv` — unpack it there from the completed
+> sweep's output, and the live panel's aggregate card fills itself in. Until
+> then that card is a deliberate empty state.
 
 **`summary.json`** — everything the Dataset page needs without touching
 the raw data:
@@ -5278,24 +5291,31 @@ dataset: it reads the bundle `scripts/make_demo_bundle.py` wrote.
   returns the flagged edges, purity, coverage, lead time, the alert count and
   a `latency_ms` breakdown. Recomputed on every call. `mode=averaged` applies
   all K boosters and averages, which is the stage 4.2 rule.
-* `aggregate` — the comparison artifact's test rows, or an explicit
-  `available: false` with a reason. Deliberately **not** a 404: the absence of
-  an aggregate is a state to report, because the panel's aggregate section
-  ships whether or not the numbers exist.
+* `aggregate` — the **full-scale** comparison artifact's test rows, or an
+  explicit `available: false` with a reason. Deliberately **not** a 404: the
+  absence of an aggregate is a state to report, because the panel's aggregate
+  section ships whether or not the numbers exist.
 
-> **`aggregate` currently returns 500, and that is recorded rather than
-> fixed — 2026-11-16.** `phase4_compare.csv` carries NaN in some columns,
-> `to_dict("records")` passes them through, and `json.dumps` refuses them:
-> `ValueError: Out of range float values are not JSON compliant: nan`. The
-> error response is produced *outside* `CORSMiddleware`, so it carries no
-> `Access-Control-Allow-Origin` header and the browser reports it as a CORS
-> failure, which makes the page say "Could not reach the API" while the
-> backend is perfectly healthy. The panel degrades to its empty state, so
-> nothing false is displayed. It is left alone deliberately until after the
-> faculty demo: the only comparison artifact on disk is the **1% sample** dry
-> run, so repairing the endpoint would put development numbers under a
-> heading that reads "And how often does it hold?". See
-> §[Known limitations](#known-limitations-and-open-questions).
+> **`aggregate` serves a full-scale artifact only, and says so when there
+> isn't one — decided 2026-11-16.** It reads
+> `artifacts/phase4/phase4_compare.csv`, which does not exist until the Phase
+> 4 sweep finishes, and `aggregate_table` additionally **refuses any path
+> inside a `*_dev` directory** — so wiring the server back at `phase4_dev/`
+> cannot leak 1%-sample differences onto a card headed "And how often does it
+> hold?". Until the sweep lands, the panel renders a deliberate empty state:
+> *"The full-scale comparison has not been measured yet - the Phase 4 sweep
+> is still running."* Same posture as the Results page.
+>
+> Non-finite floats are also stripped to `null` on the way out
+> (`_json_safe`). Before 2026-11-16 they were not, and the endpoint **500ed**
+> on `ValueError: Out of range float values are not JSON compliant: nan` —
+> `n_f1_degenerate_baseline` and `n_f1_degenerate_treatment`, added that same
+> day, are null on 252 of the 392 rows the filter keeps, because a cell with
+> no F1 curve is `None` rather than `0`. Since an unhandled exception is
+> rendered *outside* `CORSMiddleware`, that 500 reached the browser with no
+> `Access-Control-Allow-Origin` header and the page reported it as *"Could
+> not reach the API. Is the backend running?"* with the backend healthy.
+> Pinned by `test_a_nan_in_the_comparison_cannot_500_the_endpoint`.
 
 `manifest` and `run` 404 with the command to build the bundle when it is
 absent, so the page shows an empty state rather than placeholder numbers.
@@ -5343,7 +5363,7 @@ degree), and `breadthfirst` for chains, bipartite and random patterns.
 | Campaign Explorer | `/campaigns` | Searchable, filterable, sortable, paginated table with removable filter chips and a live result count; rows open a campaign | done |
 | Campaign Detail | `/campaigns/:id` | The demo centrepiece. Interactive Cytoscape graph (accounts as nodes labelled by institution, transactions as directed arrows, hover for amount/time, drag/zoom/pan, click a node for its details); time replay with play/pause and deadline + cutoff marks; visibility controls (seed, and either the natural bank split or a target) with the achieved-visibility and bin badge; bank's-eye-view tabs that fade everything the selected bank cannot see and report "this bank sees X of Y"; a detection panel that is an explicit empty state until Phase 5; and a metadata sidebar explaining every flag in plain language | done |
 | Visibility Lab | `/visibility` | A sandbox where accounts of a fan-out and a cycle are dragged (or clicked) between three bank zones while visibility updates live, then the real achieved-visibility histogram per target, bins per group, and the unfragmentable count | done |
-| Live panel | `/live` | The demo centrepiece for the mechanism. One detection window scored on the spot: pick a window, an institution and an operating point, then flip **own model** / **all 8 models averaged** and watch the flagged edges, clusters, purity, coverage, lead time and alert count recompute. Carries its own "chosen to illustrate, not representative" disclaimer, the selection rule verbatim, and the four-way count over every offered setting so it cannot be read as "averaging always helps" | done; **every number on it is from the 1% sample** |
+| Live panel | `/live` | The demo centrepiece for the mechanism. One detection window scored on the spot: pick a window, an institution and an operating point, then flip **own model** / **all 8 models averaged** and watch the flagged edges, clusters, purity, coverage, lead time and alert count recompute. Carries its own "chosen to illustrate, not representative" disclaimer, the selection rule verbatim, and the four-way count over every offered setting so it cannot be read as "averaging always helps" | done; **every number on it is from the 1% sample**, and its aggregate card is a deliberate empty state until the full sweep lands |
 | Results | `/results` | Empty state plus labelled outlines of all five planned figures, each with a "how to read this" note and no numbers at all; the condition legend with its fixed colours and dash patterns | done |
 | Methodology | `/methodology` | `/api/methodology` rendered as cards: each definition, the reason for it, and its machine-readable values | done |
 
@@ -5792,9 +5812,9 @@ campaign_id)`:
     note). Cytoscape needs a real canvas, so the graph component itself is
     stubbed in these tests.
 
-**Current pass status (2026-10-17):**
-- Backend: `python -m pytest tests/` from `backend/` → 331 passed, 25
-  skipped, 0 failed. The skips are the full-data suite, which needs the
+**Current pass status (2026-11-16):**
+- Backend: `python -m pytest tests/` from `backend/` → **463 passed, 25
+  skipped**, 0 failed. The skips are the full-data suite, which needs the
   dataset that only exists on Kaggle; all 24 of its numbers passed there on
   2026-10-08/09.
 - Frontend: `npm run test` from `frontend/` → **52 passed**, 0 failed.
@@ -6125,22 +6145,15 @@ is recorded here rather than in the suite.
   be read as "investigate", not automatically "the search broke". The
   `unfragmentable` count and the achieved-visibility values are the
   environment-independent things to compare.
-- **`/api/demo/aggregate` returns 500, and the browser reports it as a CORS
-  failure.** Found 2026-11-16. `aggregate_table` reads
-  `phase4_dev/phase4_compare.csv`, whose records carry NaN, and
-  `json.dumps` rejects them: *Out of range float values are not JSON
-  compliant: nan*. Because an unhandled exception is rendered outside
-  `CORSMiddleware`, the 500 arrives without `Access-Control-Allow-Origin`, so
-  the console says *"has been blocked by CORS policy"* and the page says
-  *"Could not reach the API at http://localhost:8000. Is the backend
-  running?"* — with the backend healthy and every other endpoint answering.
-  The panel degrades to its empty state, so no false number is shown.
-  **Not fixed, deliberately:** the only comparison artifact on disk is the 1%
-  sample dry run, and making the table appear would put development numbers
-  under the heading "And how often does it hold?", next to a live panel, which
-  is the one thing the frontend rule exists to prevent. The repair, when the
-  full run exists, is two parts — serialise NaN as `null`, and label the card
-  with the artifact's provenance.
+- **The live panel's aggregate card is empty, and will stay empty until the
+  Phase 4 sweep finishes.** This is a limitation of the *evidence*, not of the
+  code: there is no full-scale comparison yet, so the panel can show the
+  mechanism on one window and cannot say how often it holds. The card states
+  that in those words. The development comparison that does exist
+  (`phase4_dev/`, 1% sample) is deliberately never substituted — see
+  §[Artifacts](#artifacts) for the rule and `artifacts/phase4/` for where the
+  real one goes. Until it lands, **no aggregate claim can be made from this
+  app**, on screen or in a talk.
 - **A CYCLE does not read as a ring, so the topology rationale for Cytoscape
   is only half met.** Measured 2026-11-14 on the real artifacts: `circle`
   layout orders nodes by collection order — `[...accounts].sort()`, i.e.
@@ -6215,6 +6228,50 @@ Tagged points in the repository, newest first. Check one out with
 | `v0.1-data-pipeline` | 2026-10-08 | Phase 2 complete, plus the stage 3.0 Kaggle runner. The research pipeline (campaign ground truth, splits, topology groups, institutions, visibility), the artifact export, the read-only FastAPI server, and the full React frontend — 69 backend tests and 48 frontend tests passing. **No models and no experiment results**: the four conditions are defined and the result schema is fixed, but nothing has been trained or run, and the full-data regression numbers are still unverified (that is what stage 3.0's Kaggle run is for). |
 
 ## Changelog
+
+- **2026-11-16 (the aggregate card becomes a deliberate empty state)** —
+  decided by the user against both alternatives: leaving a card that reads
+  "Could not reach the API. Is the backend running?" beside a healthy
+  backend, and repairing the 500 so that **1%-sample** differences appear
+  under the heading "And how often does it hold?".
+
+  `app.state.demo_compare_csv` now points at
+  `artifacts/phase4/phase4_compare.csv` — the **full-scale** comparison the
+  finished Phase 4 sweep will write, which does not exist yet — so the
+  existing absent-artifact branch renders the empty state, with a reason that
+  says why: *"The full-scale comparison has not been measured yet - the Phase
+  4 sweep is still running."* Same posture as the Results page.
+
+  Two guards make that stick. `aggregate_table` **refuses any path inside a
+  `*_dev` directory** regardless of what it is handed, so pointing the server
+  back at `phase4_dev/` cannot leak the sample numbers; the check reads the
+  repo's own naming rule rather than inventing a provenance marker, and the
+  rule is now stated in §[Artifacts](#artifacts). And `_json_safe` strips
+  non-finite floats to `null`, so the endpoint cannot 500 again — the
+  original fault was `n_f1_degenerate_baseline`/`_treatment`, added that same
+  day, being null on 252 of the 392 rows the filter keeps.
+
+  Verified in the browser: the card reads its empty state, renders **no
+  table**, and `/live` now produces **zero console errors, zero failed
+  requests and zero responses ≥ 400**. The caption above it was changed in
+  the same step — it used to say "These are the aggregate figures from the
+  evaluation runs" directly above "there are none", which undercut the
+  deliberateness the empty state is for.
+
+  *Run sheet:* the live-panel step now opens with a **STOP box** — the default
+  window `2022-09-06 18:00:00` misses in both modes and must not be demoed,
+  with the click path to `2022-09-08 06:00:00, I4` spelled out — and carries
+  the line to **say aloud**: across the 64 settings neither mode finds the
+  campaign in 58, both in 4, averaging alone in 2, the own model alone in 0,
+  so the two differ in two settings and the own model never wins; a single
+  window at a time, with the aggregate left to the sweep that is still
+  running.
+
+  *Decided unchanged:* the CYCLE layout. It alters what is displayed and the
+  run sheet's wording already handles it.
+
+  Backend **463 passed, 25 skipped**; frontend 52 passed, lint and build
+  clean.
 
 - **2026-11-16 (demo readiness: the failure diagnosed, four fixes, and the
   run sheet re-verified)** — unrelated to Phase 4; nothing under stage 4.1 was

@@ -53,7 +53,12 @@ def create_app(artifacts_dir: str | Path | None = None) -> FastAPI:
     # explanation and the panel shows an empty state, which is what the
     # frontend rule requires instead of placeholder numbers.
     app.state.demo = load_bundle(root / "demo_panel")
-    app.state.demo_compare_csv = root / "phase4_dev" / "phase4_compare.csv"
+    # The FULL-SCALE comparison, which does not exist until the Phase 4 sweep
+    # finishes. It deliberately does not point at `phase4_dev/`: that artifact
+    # is built from the 1% sample, and `aggregate_table` refuses any `*_dev`
+    # path anyway, so the panel's aggregate section shows a deliberate empty
+    # state rather than development numbers.
+    app.state.demo_compare_csv = root / "phase4" / "phase4_compare.csv"
 
     app.include_router(meta.router, prefix="/api")
     app.include_router(campaigns.router, prefix="/api")

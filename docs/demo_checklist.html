@@ -257,28 +257,51 @@ step itself, not the talking. Tick state is saved in this browser, so hit
 
   <li><input type="checkbox" class="tick" aria-label="step done">
     <div class="do"><span class="route">/live</span> &mdash; the live panel <span class="pill">~90 s</span></div>
-    <p class="expect">The page loads in about a second. Under <b>Settings where the toggle
-    changes the answer</b>, click <b>2022-09-08 06:00:00, I4</b> &mdash; do not demo the default
-    window, which misses in both modes and shows nothing.
+
+    <div class="panel badbox" style="margin:0 0 10px">
+      <p style="margin:0 0 6px;font-size:1.02rem"><strong>STOP &mdash; do not demo the window the
+      page opens on.</strong></p>
+      <p style="margin:0 0 6px">The default is <code>2022-09-06 18:00:00</code>, where the campaign
+      is <b>missed in both modes</b>: flipping the toggle there changes nothing anyone can see, and
+      the whole point of the panel is lost.</p>
+      <p style="margin:0"><strong>The click path, every time:</strong> scroll to
+      <b>&ldquo;Settings where the toggle changes the answer&rdquo;</b> in the <b>Input</b> card
+      &rarr; click the first link, <b><code>2022-09-08 06:00:00, I4</code></b> &rarr; wait for
+      <b>Output</b> to re-score (&lt;1 s) &rarr; <em>then</em> flip the toggle. That one click sets
+      the window, the institution and the mode together.</p>
+    </div>
+
+    <p class="expect">The page loads in about a second.
     <br>With <b>This institution alone</b>: 138 flagged edges, <b>17</b> alerts,
     demo campaign <b class="bad">missed</b>, purity <b>0%</b>.
     <br>Click <b>All 8 models, scores averaged</b>: 158 flagged, <b>20</b> alerts,
     demo campaign <b class="ok">found</b>, purity <b>100%</b>, coverage <b>14%</b>,
     and a lead time of <b>66.0 h before the deadline</b>. Measured end to end at
     <b>~530 ms</b>; the page prints its own recompute time underneath.
-    <br><em>Then read the honesty line yourself before anyone asks: over all 64 settings
-    offered, both modes find it in 4, averaging only in 2, own model only in 0,
-    <b>neither in 58</b>.</em></p>
+    </p>
+
+    <div class="panel" style="border-left:3px solid var(--ok)">
+      <p style="margin:0 0 6px"><strong>Say this aloud, before anyone asks it.</strong></p>
+      <p class="say" style="margin:0">&ldquo;Across the 64 settings this panel offers, neither mode
+      finds the campaign in <b>58</b>. Both find it in <b>4</b>. Averaging alone finds it in
+      <b>2</b>, and the bank&rsquo;s own model alone in <b>0</b> &mdash; so the two modes differ in
+      two settings, and the own model never wins. This is a single window at a time; the aggregate
+      is what the full sweep measures, and that sweep is still running.&rdquo;</p>
+      <p class="expect" style="margin:6px 0 0">The counts are on screen, under the suggested
+      settings. Reading them out first is what stops the panel being heard as
+      &ldquo;averaging always helps&rdquo;.</p>
+    </div>
     <div class="panel warnbox" style="margin-top:8px">
       <b>Two things to say out loud on this page.</b>
       (1) Every number here is computed from a bundle built on the <b>1% sample</b>, so it is a
       <b>development check, not a result</b> &mdash; the page says so at the top, but it says
       &ldquo;if&rdquo;, and the answer is yes.
-      (2) The <b>&ldquo;And how often does it hold?&rdquo;</b> card at the bottom shows an empty
-      state reading <em>&ldquo;Could not reach the API&rdquo;</em>. The backend is fine; that
-      endpoint returns a 500 on a NaN. <b>Known, unfixed by choice</b> &mdash; fixing it would put
-      1%-sample numbers under a heading that reads like a result. Scroll past it, or say
-      &ldquo;the aggregate comes from the full run, which has not finished&rdquo;.
+      (2) The <b>&ldquo;And how often does it hold?&rdquo;</b> card at the bottom is a
+      <b>deliberate empty state</b>, fixed 2026-11-16: it reads <em>&ldquo;The full-scale
+      comparison has not been measured yet &mdash; the Phase 4 sweep is still running.&rdquo;</em>
+      That is the honest answer and it is safe to read out. It is the same posture as the Results
+      page. The development comparison that does exist is <b>deliberately never shown here</b>,
+      because 1%-sample differences under that heading would read as a result.
     </div>
   </li>
 
@@ -320,8 +343,9 @@ step itself, not the talking. Tick state is saved in this browser, so hit
   computes itself, and only for the scenario the viewer just invented.</p>
   <p class="dont" style="margin:0"><b>Every number on <code>/live</code> is from the 1% sample</b>
   &mdash; 53,960 transactions, not 5 million. Say &ldquo;development check&rdquo;, never
-  &ldquo;result&rdquo;. The Results page is deliberately empty because the full Phase 4 run is not
-  finished; nothing on screen is a Phase 4 result.</p>
+  &ldquo;result&rdquo;. The Results page and the live panel&rsquo;s aggregate card are both
+  deliberately empty because the full Phase 4 sweep has not finished; <b>nothing on screen is a
+  Phase 4 result</b>, and no sample-derived aggregate is displayed anywhere.</p>
 </div>
 
 <h2>If something goes wrong</h2>
@@ -344,9 +368,12 @@ step itself, not the talking. Tick state is saved in this browser, so hit
         <td>You typed <code>127.0.0.1:5173</code>. Vite listens on the IPv6 loopback only.
         Use <code>http://localhost:5173</code>.</td></tr>
     <tr><td>Live panel: <b>&ldquo;No aggregate figures yet&rdquo;</b> at the bottom</td>
-        <td>Expected. <code>/api/demo/aggregate</code> returns 500 on a NaN and the error carries no
-        CORS header, so the browser reports it as unreachable. Everything above it on the page is
-        live and correct. <span class="pill">known, left alone deliberately</span></td></tr>
+        <td><b>Expected and deliberate.</b> The card explains itself: the full-scale comparison has
+        not been measured yet. Everything above it on the page is live and correct.
+        <span class="pill">by design</span></td></tr>
+    <tr><td>Live panel: the toggle changes <b>nothing visible</b></td>
+        <td>You are on the default window. Click <b>2022-09-08 06:00:00, I4</b> under &ldquo;Settings
+        where the toggle changes the answer&rdquo; first.</td></tr>
     <tr><td>A campaign URL with a <b>non-numeric id</b>, e.g. <code>/campaigns/abc</code></td>
         <td>Now says &ldquo;Not a campaign id&rdquo; with a link back to the list.
         <span class="pill">fixed 2026-11-16</span></td></tr>
@@ -362,7 +389,9 @@ step itself, not the talking. Tick state is saved in this browser, so hit
   every path, including the three campaign graphs (270 Cytoscape warnings were fixed that day).
   &ldquo;This bank sees X of Y&rdquo; was compared against the API&rsquo;s <code>n_visible</code>
   for all 8 banks of all 3 campaigns at target 25%: <b>23 of 23 agree</b>. The live panel toggle
-  was measured at ~530&nbsp;ms. Expected values come from <code>backend/artifacts/</code> and
+  was measured at ~530&nbsp;ms, and the aggregate card was re-checked after it became a
+  deliberate empty state: <b>zero console errors and zero failed requests on
+  <code>/live</code></b>. Expected values come from <code>backend/artifacts/</code> and
   <code>docs/reference/oracle_diagnose.csv</code>, not from this page.
 </footer>
 
