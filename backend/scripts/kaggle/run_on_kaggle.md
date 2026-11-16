@@ -2342,9 +2342,10 @@ against the 12 h limit:
 
 **Why C1 is alone.** It is the cell the pre-registered rule stopped, and the
 first cell to run under the changed policy. Keeping it in its own ~50-minute
-session means the policy change is observed on its own: if its log does *not*
-print the `LOW-EDGE F1 TAU` line, the stop came from somewhere else and that
-is worth knowing before 9 more cells are spent.
+session buys a checkpoint on a policy that has never executed on real data;
+losing that checkpoint to save 45 minutes would be a bad trade. Its three
+possible outcomes are **pre-registered below**, and two of the three say
+**stop**.
 
 **Why the sessions are decoupled.** C1 and C2 take only session A's boosters —
 neither needs the other's cells, and neither needs B's. Each writes its own
@@ -2525,6 +2526,119 @@ if t.exists():
           "says - and why f1 and total_10 stay primary regardless.")
 else:
     print("t100_s2 was NOT recorded - read the exit message above.")
+```
+
+### C1's three outcomes — PRE-REGISTERED 2026-11-16, before the run
+
+C1 is the first cell ever evaluated under the recording policy, and that
+policy rests on a diagnosis — a flat ~0 campaign-F1 objective whose argmax is
+settled by the tie-break — which has never been checked against full data. So
+the three things the run can say are written down **before** it says one of
+them, and `C1g` classifies the result mechanically rather than by reading the
+log afterwards.
+
+| | What the run shows | What it means | What happens next |
+|---|---|---|---|
+| **(a)** | `LOW-EDGE F1 TAU` appears **and** `f1_degenerate` is **true** for those institutions | the mechanism is as diagnosed: a flat ~0 objective, an arbitrary argmax, the floor picked by the tie-break. The policy is doing what it was designed for | **proceed to C2** |
+| **(b)** | `LOW-EDGE F1 TAU` appears but `f1_degenerate` is **false** | the floor is a **genuine optimum**, not a flat-curve artefact. The event is real; the explanation written into the README is **wrong** | **STOP.** Correct the write-up before nine more cells are evaluated under an explanation that does not hold. `C1g` prints `f1_best_value` and the full validation curve for those institutions |
+| **(c)** | no `LOW-EDGE` line at all | session B stopped for a reason that has not been found | **STOP and investigate.** C2 does not run on the assumption that the cause is understood |
+
+**(b) is the one this is written down for.** A low-edge tau with a real
+maximum behind it would be a finding about the detector rather than about a
+flat objective, and the recording policy would still be right — but for a
+different reason, and the README would be asserting the wrong one. An
+explanation adopted after seeing which way it fell is not worth having.
+
+A **mixed** result — some low-edge institutions degenerate, some not — counts
+as **(b)**. The diagnosis is either the explanation for the event or it is
+not; a partial one has to be narrowed before anything is built on it.
+
+`C1g` prints the validation campaign-F1 curve for every low-edge institution
+in all three branches, so the classification carries its own evidence rather
+than resting on a boolean. The curve comes from
+`/kaggle/working/phase4_isolated.json`, which C1 writes: its per-cell
+`tau_curves` hold all 22 points per institution. (That JSON is worth keeping
+even though the one-cell `phase4_isolated_*.csv` beside it is **not** the
+report — C3 writes the report over all twelve.)
+
+The classifier was exercised against fabricated cells covering all four cases
+before this runbook shipped — a flat curve at the floor, a real maximum at the
+floor, a **mixed** cell with one of each, and no low-edge tau at all — and
+reached (a), (b), (b) and (c) respectively, plus the not-recorded case. It is
+71 lines and decides nothing a reader cannot check by reading it.
+
+```python
+# C1g - classify the run against the three outcomes pre-registered BEFORE it.
+#       Mechanical on purpose: the branch is decided by the cell's own rows,
+#       not by reading the log, and the curve is printed either way so the
+#       verdict carries its evidence.
+import json, pathlib
+import pandas as pd
+
+working = pathlib.Path("/kaggle/working")
+taus_path = working / "isolated_cells" / "t100_s2_taus.csv"
+
+
+def curves_for(institutions):
+    """The validation campaign-F1 curve per institution, from C1's JSON."""
+    report = working / "phase4_isolated.json"
+    if not report.exists():
+        print("  (no phase4_isolated.json beside the cell - cannot show the "
+              "curve; send the cell directory back)")
+        return
+    payload = json.loads(report.read_text(encoding="utf-8"))
+    for cell in payload.get("cells", []):
+        for key, curve in (cell.get("tau_curves") or {}).items():
+            if int(key) not in institutions or not curve:
+                continue
+            values = [(row["tau"], row["campaign_f1"]) for row in curve]
+            best = max(v for _, v in values)
+            spread = best - min(v for _, v in values)
+            print(f"\n  institution {key}: best {best:.6f}, "
+                  f"range over the 22 points {spread:.6f}")
+            print("    " + "  ".join(f"{t:g}:{v:.4f}" for t, v in values))
+
+
+if not taus_path.exists():
+    print("OUTCOME: the cell was not recorded at all.")
+    print("Neither (a), (b) nor (c) - read C1e's exit message. STOP.")
+else:
+    taus = pd.read_csv(taus_path)
+    f1 = taus[taus.operating_point == "f1"].copy()
+    f1["is_low"] = f1["tau_edge"].astype(str).str.lower().eq("low")
+    f1["is_degenerate"] = f1["f1_degenerate"].astype(str).str.lower().eq("true")
+    low = f1[f1.is_low]
+
+    print(f"{len(low)} of {len(f1)} institution(s) chose an F1 tau at the LOW "
+          f"edge: {sorted(low.institution)}")
+    if len(low):
+        print(low[["institution", "tau", "f1_best_value",
+                   "f1_degenerate"]].to_string(index=False))
+
+    if not len(low):
+        print("\nOUTCOME (c): no low-edge F1 tau in t100_s2.")
+        print("Session B stopped for a reason that has not been found.")
+        print("STOP and investigate. Do NOT run C2.")
+        print("\nFor contrast, the curves of the three lowest taus chosen:")
+        curves_for(set(f1.nsmallest(3, "tau").institution))
+    elif low.is_degenerate.all():
+        epsilon = f1.f1_degenerate_epsilon.iloc[0]
+        print(f"\nOUTCOME (a): every low-edge institution is f1_degenerate "
+              f"(best validation campaign F1 <= {epsilon}).")
+        print("The mechanism is as diagnosed: a flat ~0 objective, an "
+              "arbitrary argmax, the floor selected by the tie-break.")
+        print("The policy is doing what it was designed for. Proceed to C2.")
+        print("\nThe curves behind that verdict:")
+        curves_for(set(low.institution))
+    else:
+        real = low[~low.is_degenerate]
+        print("\nOUTCOME (b): a low-edge F1 tau with a REAL maximum behind it.")
+        print(real[["institution", "tau", "f1_best_value"]].to_string(index=False))
+        print("\nThe floor is a genuine optimum for these cells, not a "
+              "flat-curve artefact, so the explanation in the README does not "
+              "hold for them.")
+        print("STOP. Do NOT run C2. Send these curves back:")
+        curves_for(set(real.institution))
 ```
 
 ### C2 — targets 0.75 and 0.50, six cells. CPU, commit mode. ~4.6 h.

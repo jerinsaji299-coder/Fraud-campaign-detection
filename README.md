@@ -3473,6 +3473,36 @@ it would make the choice post hoc. Pinned by
 `test_the_degeneracy_epsilon_is_fixed_and_its_boundary_is_inclusive` and
 `test_degenerate_summary_excludes_cells_with_no_curve`.
 
+#### C1's three outcomes, pre-registered before the run — 2026-11-16
+
+Session C1 evaluates `t100_s2`, the cell session B stopped on, and it is the
+**first cell ever evaluated under the recording policy**. That policy rests on
+a diagnosis — a flat ~0 campaign-F1 objective whose argmax is settled by the
+tie-break — which has not been checked against full data. So the three things
+the run can say are written here **before** it says one of them. `C1g` in
+[§5n](backend/scripts/kaggle/run_on_kaggle.md) classifies the result
+mechanically from the cell's own rows, and prints the validation curve behind
+the verdict in every branch.
+
+| | What the run shows | What it means | What happens next |
+|---|---|---|---|
+| **(a)** | `LOW-EDGE F1 TAU` appears **and** `f1_degenerate` is **true** for those institutions | the mechanism is as diagnosed: flat ~0 objective, arbitrary argmax, the floor selected by the tie-break. The policy is doing what it was designed for | **proceed to C2** |
+| **(b)** | `LOW-EDGE F1 TAU` appears but `f1_degenerate` is **false** | the floor is a **genuine optimum**, not a flat-curve artefact. The low-edge event is real, but the explanation in this README is **wrong** | **STOP.** The write-up is corrected before nine more cells are evaluated under an explanation that does not hold. `f1_best_value` and the full curve for those cells are reported |
+| **(c)** | no `LOW-EDGE` line at all | session B stopped for a reason that has not been found | **STOP and investigate.** C2 does not run on the assumption that the cause is understood |
+
+**Two of the three say stop**, which is the point of writing them down. **(b)**
+is the one this exists for: a low-edge tau with a real maximum behind it would
+be a finding about the detector rather than about a flat objective, and the
+recording policy would still be right — for a different reason, with this
+README asserting the wrong one. An explanation adopted after seeing which way
+it fell would not be worth having. A **mixed** result counts as **(b)**: a
+diagnosis that explains some of the event and not the rest has to be narrowed
+before anything is built on it.
+
+Why C1 runs alone rather than folded into C2: ~45 minutes buys a checkpoint on
+a policy that has never executed on real data, and losing that checkpoint to
+save the 45 minutes would be a bad trade.
+
 #### `t100_s0` and `t100_s1` do not need re-running — the value is backfillable
 
 Both cells were written before `f1_best_value` existed. **They stand as they
@@ -3584,6 +3614,7 @@ rather than the run.
 | 2026-11-16 | **DECIDED, and it changes a pre-registered stop condition: a low-edge F1 tau is RECORDED at the floor tau, flagged `tau_at_low_edge`, and kept in the pooled means.** Approved explicitly by the user. `--stop-on-low-edge-tau` restores the old behaviour; `--allow-low-edge-tau` is accepted and ignored. Rejected: **(b)** extending `MODEL_TAU_GRID` downward, **(c)** treating it as undefined, **(d)** keeping the stop | The pre-registered rule stopped because a low edge "means something is wrong with the training data, the weighting or the grid" — a suspected **bug**. The mechanism is not one: campaign F1 needs a cluster reaching 3 of a campaign's accounts at 50% purity, an institution's own ceiling at target 1.0 is 0.139, so at any selective threshold it detects nothing, F1 is ~0 across the whole grid, and the floor is the only place detection happens at all. The policy had generalised from the **dataset's** 0.102% prevalence to a **per-institution detector's** optimum, which depends on reach instead. Recorded rather than excluded because **(c) would drop exactly the starved institutions that demonstrate what fragmentation costs, raising the isolated floor** — the one arm that must not be flattered, since every Phase 4 comparison is measured against it. A lone bank with a ceiling of 0.139 cannot do that job, and its weak number is the finding, not an error. **(b)** touches a frozen definition and would re-run all 12 cells, so it is a follow-up study; **(d)** would leave the isolated arm unmeasurable at target 1.0 | §[DECIDED: a low-edge F1 tau is recorded and flagged](#decided-a-low-edge-f1-tau-is-recorded-and-flagged--2026-11-16); `LOW_EDGE_POLICY` in `kaggle_runner.py`; `test_a_low_edge_f1_tau_is_recorded_under_the_2026_11_16_policy` |
 | 2026-11-16 | **Required with the recording policy: `f1_best_value` and `f1_degenerate` on every (institution, cell), with the epsilon fixed at 0.01 before any cell ran.** Every pooled, union and comparison row carries `n_f1_degenerate`. The primary operating points are **unchanged** — `f1` and `total_10` stand as designated | Recording a floor tau is only honest beside the value at it. When campaign F1 is ~0 at every threshold the argmax is settled by the deterministic tie-break in `best_tau`, not by the data, and the floor tau is not an optimum — a reader must be told which cells are in that regime. The epsilon is 0.01 rather than exactly 0 because a curve flat at 0.004 is in the same regime as one flat at 0.0, and it is fixed **in advance** so it can never be chosen after seeing which cells it would catch. The count travels with every pooled figure for the same reason the binding-budget count does: a mean mixing flat-curve cells with real-maximum cells is not one quantity. **The flag must not select the comparison point** — `f1`/`total_10` were justified independently in stage 4.1, and letting a degeneracy count move them would make the choice post hoc | `isolated.F1_DEGENERATE_EPSILON`; `degenerate_summary`; `test_the_degeneracy_epsilon_is_fixed_and_its_boundary_is_inclusive`; `test_f1_best_value_is_the_value_at_the_chosen_tau` |
 | 2026-11-16 | **`t100_s0` and `t100_s1` are BACKFILLED, not re-run**, by `kaggle_runner.py backfill-f1-value`. A decision taken before assembly, not discovered at it | The value is already implicit in each cell's `_summary.csv`: the validation row at the `f1` point was evaluated **at the chosen tau**, so its precision and recall are those at the argmax and campaign F1 is `2PR/(P+R)` of them, which is exactly what `select_tau` maximises. Verified against the measured curves over all 32 (cell, institution) pairs of the 1% sample dry run — the only place both the curve and the row are on disk — agreeing to **≤2.22e-16**, one ULP. Not bit-exact, because the per-cell CSV stores precision and recall at 16 significant digits; immaterial against an epsilon of 0.01 and figures reported to three decimals. A re-run would cost ~1.5 h and change nothing but the 16th digit. The one unrecoverable pair, `t100_s0` institution 0, had its F1 point rejected at the grid top so no validation run exists at that tau — it is `None`, never 0, and was already excluded from every pooled mean | §[`t100_s0` and `t100_s1` do not need re-running](#t100_s0-and-t100_s1-do-not-need-re-running--the-value-is-backfillable); `command_backfill_f1_value`; `test_the_backfill_identity_holds_for_the_f1_point_on_validation` |
+| 2026-11-16 | **PRE-REGISTERED before session C1 runs: its three possible outcomes, and which of them stop the plan.** (a) a low-edge tau with `f1_degenerate` true -> the diagnosis holds, proceed to C2; (b) a low-edge tau with `f1_degenerate` **false** -> the floor is a genuine optimum and this README's explanation is wrong, **stop** and correct it; (c) no low-edge tau at all -> session B stopped for an unknown reason, **stop** and investigate. A mixed result counts as (b) | C1 is the first cell ever evaluated under the recording policy, and that policy rests on a mechanism never checked against full data. Writing the branches down in advance is what stops the result being explained after the fact: under (b) the policy would still be right, but for a different reason, and an explanation adopted once the answer is known is not evidence. `C1g` decides the branch from the cell's own rows and prints the validation curve behind the verdict in all three, so the classification carries its evidence rather than resting on a boolean | §[C1's three outcomes](#c1s-three-outcomes-pre-registered-before-the-run--2026-11-16); `C1g` in [§5n](backend/scripts/kaggle/run_on_kaggle.md) |
 | 2026-11-16 | **`verify_phase4_crosscheck.py` now reads the COMMITTED dry-run payload, not the local development artifact** | The README's dry-run figures are sourced from `docs/reference/phase4_chain_sample.json`, but the verifier read `backend/artifacts/phase4_dev/phase4_chain.json` - a regenerable artifact. So a committed figure could pass or fail because of a later local run, in either direction: four ratios reported FAIL against a re-run whose timings a concurrent test suite had contaminated, and a drifted committed figure could equally have been masked by a fresh local run that happened to agree. Found by re-running the chain after the policy change | §[the chain re-run](#the-chain-re-run-after-the-policy-change--2026-11-16); `dry_run` in `scripts/verify_phase4_crosscheck.py` |
 | 2026-11-16 | **Session B stopped on the low-edge rule, and the 25-55 min per-cell estimate was right.** Derived from B's own `*_institutions.csv` rather than re-measured; the diagnostic session written to settle it was dropped unrun | Summing `eval_seconds` over the eight institutions and scaling by the measured 1.08 cell-wall ratio gives `t100_s0` = 2,568.5s (46.2 min) and `t100_s1` = 2,465.0s (44.4 min). Two cells plus one in flight is ~2.3 h, so the 12 h limit is excluded and no other cause fits a run that left two complete cells and no combined report. The two measurements agree to within 4%, which also lifts the three-cell-per-session cap: at 46 min a cell, 10 h of headroom is 13 cells | §[Session B produced 2 of 6 cells](#session-b-produced-2-of-6-cells-and-what-that-means--2026-11-16); B's `t100_s0`/`t100_s1` institution CSVs |
 | 2026-11-16 | **WITHDRAWN: the claim that session B "exited 3"** | It was **inferred** from the reported high-edge tau — a high edge exits 3 after the reports are written — and then written into a table of measured outcomes as though observed. B's exit code and wall time are unknown. Two signals that B was incomplete (figures for seeds 0 and 1 only; the binding count holding in "both seeds") were in the hand-off and were read as reporting gaps rather than run gaps | §[session B produced 2 of 6 cells](#session-b-produced-2-of-6-cells-and-what-that-means--2026-11-16) |
@@ -6094,6 +6125,21 @@ Tagged points in the repository, newest first. Check one out with
 | `v0.1-data-pipeline` | 2026-10-08 | Phase 2 complete, plus the stage 3.0 Kaggle runner. The research pipeline (campaign ground truth, splits, topology groups, institutions, visibility), the artifact export, the read-only FastAPI server, and the full React frontend — 69 backend tests and 48 frontend tests passing. **No models and no experiment results**: the four conditions are defined and the result schema is fixed, but nothing has been trained or run, and the full-data regression numbers are still unverified (that is what stage 3.0's Kaggle run is for). |
 
 ## Changelog
+
+- **2026-11-16 (C1's outcomes pre-registered, before it runs)** — session C1
+  is approved to run. Before it does, its three possible outcomes are
+  [written down](#c1s-three-outcomes-pre-registered-before-the-run--2026-11-16)
+  and two of the three say **stop**: (a) a low-edge tau with `f1_degenerate`
+  true means the diagnosis holds and C2 follows; (b) a low-edge tau with
+  `f1_degenerate` **false** means the floor is a genuine optimum and this
+  README's explanation is wrong, so the write-up is corrected before nine more
+  cells are spent under it; (c) no low-edge tau at all means session B stopped
+  for a reason not yet found. A mixed result counts as (b). The `C1g` cell
+  decides the branch from the cell's own rows and prints the validation curve
+  behind the verdict in every branch, so the classification carries its
+  evidence rather than resting on a boolean — it was exercised against
+  fabricated cells for all four cases first. C1 runs alone because ~45 minutes
+  buys a checkpoint on a policy that has never executed on real data.
 
 - **2026-11-16 (the low-edge policy decided, the degeneracy flag, and three
   sessions instead of five)** — session B's stop is explained, the
