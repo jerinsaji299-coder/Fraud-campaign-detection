@@ -3612,6 +3612,7 @@ rather than the run.
 | Date | Decision | Reason | Evidence |
 |---|---|---|---|
 | 2026-11-16 | **The demo failure of 2026-11-15 was a stale backend, not a code defect — and four demo-readiness fixes were applied, all of them unable to change a number** | A `uvicorn --reload` worker started 2026-11-13 still held `127.0.0.1:8000`: 24 MB resident and ~36 CPU-hours burnt, accepting connections and answering none. `fetch` had no deadline, so the status chip sat on "Checking API" forever with no error to render. Killing it and starting a clean backend restored everything; `/api/health` then answered in 90 ms with `core_artifacts_available: true`. Fixed with it: a 20 s request deadline (verified against a listener that accepts and never answers — the chip now reaches "API unreachable" in 21.6 s instead of never), the page `<title>` (was `frontend`), 270 Cytoscape `institutionLabel` warnings (scoped the mapper to `node[institutionLabel]`, which is what the warning itself recommends), and the blank panel on `/campaigns/abc`. Each is an error path or a label; none can change a displayed figure | §[Testing](#testing) 2026-11-16 walk; `docs/demo_checklist.html`; `frontend/src/api/client.ts` `REQUEST_TIMEOUT_MS` |
+| 2026-11-16 | **The live panel's presentation is rebuilt in four steps, each committed separately: it opens where the two modes differ, shows both at once, collapses its apparatus, and leads its cluster tables with the match** | The panel was not demonstrable. It opened on `2022-09-06 18:00:00` / I0 — one campaign edge in the window, missed by both modes — so a viewer's first impression was *missed / 0% / 0% / no lead time*, and the comparison the panel exists to make required flipping a control and remembering the previous number. The opening setting is taken from the bundle's own `suggested_settings` rather than hard-coded, so it survives a rebuilt bundle, and a bundle with no such setting is reported on the page instead of silently shown. Nothing that qualifies a claim was collapsed — only the derivations — and the cluster tables truncate presentation without dropping a row. Committed as four separate changes so the work could be stopped after any of them | §[the live detection panel](#the-live-detection-panel--implemented-2026-11-15); `openingSetting` and `Comparison` in `LiveDemoPage.tsx`; three new tests in `liveDemo.render.test.tsx` |
 | 2026-11-16 | **The aggregate card becomes a deliberate empty state, and the endpoint will not serve a development artifact at all.** Chosen by the user over both the status quo and repairing the 500 as-is. `demo_compare_csv` now points at `artifacts/phase4/phase4_compare.csv`, which the finished sweep will write; `aggregate_table` refuses any `*_dev` path whatever it is pointed at; non-finite floats serialise as `null` so the endpoint cannot 500 again | A card reading "Could not reach the API. Is the backend running?" beside a healthy backend is the worst thing that can be on screen during a talk, and repairing the 500 as-is would have put **1%-sample** differences under the heading "And how often does it hold?" next to a live panel — the exact confusion this project exists to avoid. An empty state that says *why* it is empty is the same posture the Results page already takes, and it is true: the sweep is still running. The refusal is on the path rather than on the data so that re-wiring the server cannot leak the sample numbers, and it reads the repo's own `*_dev` naming rule rather than inventing a provenance marker | §[Artifacts](#artifacts); `demo_service.is_development_artifact`; `test_a_development_comparison_is_refused_not_displayed`; `test_a_nan_in_the_comparison_cannot_500_the_endpoint` |
 | 2026-11-16 | **NOT fixed before the demo, deliberately: the CYCLE ring layout** (the `/api/demo/aggregate` 500 in this row was superseded the same day by the decision above) | Both are real defects, and both change **what the demo shows** rather than whether it runs. Repairing the 500 would make a table of **1% sample** differences appear under the heading "And how often does it hold?" beside a live panel — inventing the appearance of an aggregate result is precisely what the frontend rule forbids, and the empty state it currently falls back to is the honest display. Re-laying out the cycle would invalidate the "say this, not that" guidance the run sheet is built around, the night before it is used. Both are recorded with their repair, and both are the user's call | §[Known limitations](#known-limitations-and-open-questions) |
 | 2026-11-16 | **DECIDED, and it changes a pre-registered stop condition: a low-edge F1 tau is RECORDED at the floor tau, flagged `tau_at_low_edge`, and kept in the pooled means.** Approved explicitly by the user. `--stop-on-low-edge-tau` restores the old behaviour; `--allow-low-edge-tau` is accepted and ignored. Rejected: **(b)** extending `MODEL_TAU_GRID` downward, **(c)** treating it as undefined, **(d)** keeping the stop | The pre-registered rule stopped because a low edge "means something is wrong with the training data, the weighting or the grid" — a suspected **bug**. The mechanism is not one: campaign F1 needs a cluster reaching 3 of a campaign's accounts at 50% purity, an institution's own ceiling at target 1.0 is 0.139, so at any selective threshold it detects nothing, F1 is ~0 across the whole grid, and the floor is the only place detection happens at all. The policy had generalised from the **dataset's** 0.102% prevalence to a **per-institution detector's** optimum, which depends on reach instead. Recorded rather than excluded because **(c) would drop exactly the starved institutions that demonstrate what fragmentation costs, raising the isolated floor** — the one arm that must not be flattered, since every Phase 4 comparison is measured against it. A lone bank with a ceiling of 0.139 cannot do that job, and its weak number is the finding, not an error. **(b)** touches a frozen definition and would re-run all 12 cells, so it is a follow-up study; **(d)** would leave the isolated arm unmeasurable at target 1.0 | §[DECIDED: a low-edge F1 tau is recorded and flagged](#decided-a-low-edge-f1-tau-is-recorded-and-flagged--2026-11-16); `LOW_EDGE_POLICY` in `kaggle_runner.py`; `test_a_low_edge_f1_tau_is_recorded_under_the_2026_11_16_policy` |
@@ -4129,20 +4130,53 @@ runbook says to act on that instead.*
 ### The live detection panel — implemented 2026-11-15
 
 A presentation panel at `/live` in the frontend: one detection window, scored
-**on the spot**. Input → output, with one toggle.
+**on the spot**, **both ways at once**.
 
 **What it does.** The viewer picks a detection window (directly, or via the
 demo campaign, which offers the windows its own transactions fall in) and an
-institution, then flips:
+institution. That one view is then scored twice, in parallel, and both results
+are displayed together:
 
 * **`own`** — that institution's own stage 4.1 booster, alone;
 * **`averaged`** — the same view scored by all K boosters with their scores
   averaged, which is the stage 4.2 rule from D2.
 
-On every flip the backend recomputes the flagged edges, extracts the clusters,
-classifies each one, and reports whether a cluster matches the demo campaign,
-its **purity** and **coverage**, the **lead time** against the campaign's
-deadline, and the **alert count**.
+On every change the backend recomputes, for each mode, the flagged edges, the
+clusters, each cluster's classification, whether one matches the demo
+campaign, its **purity** and **coverage**, the **lead time** against the
+campaign's deadline, and the **alert count**. A six-row comparison table puts
+the two modes in adjacent columns and marks every row where they disagree.
+
+> **Presentation rebuilt 2026-11-16, after the panel proved undemonstrable.**
+> It opened on window 0 / institution 0 — `2022-09-06 18:00:00`, I0, a window
+> holding **one** campaign edge, which both modes miss — so the first thing on
+> screen was *missed / 0% / 0% / no lead time*, and the page led with its own
+> audit trail rather than with the thing it demonstrates. Four changes, all
+> presentation and none touching a quantity:
+>
+> 1. **It opens where the modes differ.** The default is the first entry of
+>    the bundle's own `suggested_settings`, resolved to a window index at
+>    render time — no timestamp is hard-coded, so rebuilding the bundle moves
+>    the default with it. On the current bundle that is
+>    `2022-09-08 06:00:00`, I4. When a bundle offers no such setting the page
+>    says so in the Input card instead of opening silently on a dead window.
+> 2. **Both modes at once**, replacing the toggle: six rows (flagged edges,
+>    alerts, demo campaign, best purity, best coverage, lead time) across two
+>    labelled columns, differing rows marked `differs`, "found" coloured as a
+>    hit. Nobody has to flip anything or remember a previous number.
+> 3. **The apparatus is collapsed, not deleted** — the selection rule, the
+>    rank-of-candidates provenance and the how-to-read notes moved into
+>    `<details>`. What *qualifies* a claim stays visible: the 1%-sample
+>    development warning, the "not a representative result" heading and
+>    disclaimer, and the four-way outcome count.
+> 4. **The cluster tables lead with the match** — matched clusters first,
+>    then at most three others, then "Show all N" behind a disclosure. At the
+>    demo setting that is 37 rows reduced to 7, with every one of them still
+>    reachable.
+>
+> At the opening setting the two columns read: flagged 138 vs 158, alerts 17
+> vs 20, demo campaign **missed vs found**, purity 0% vs 100%, coverage 0% vs
+> 14%, lead time *not detected* vs **66.0 h before the deadline**.
 
 **It is the research path, not a second implementation.** Clusters come from
 `evaluation.clusters.extract_clusters`, the classification from
@@ -4305,10 +4339,10 @@ project-root/
     demo_checklist.html           standalone run sheet for a live demo: cold-start commands
                                     with the output each one prints, an 11-step browser
                                     checklist with the expected value and a rough duration at
-                                    each step, the live-panel click path, where every number
-                                    on screen comes from, and an 8-row "if something goes
-                                    wrong" table. No dependencies, no network, opens from the
-                                    filesystem
+                                    each step, the live panel's expected two-column output,
+                                    where every number on screen comes from, and a 10-row "if
+                                    something goes wrong" table. No dependencies, no network,
+                                    opens from the filesystem
     reference/
       01_data_verification.ipynb   read-only: verified Kaggle exploration behind every definition above
       verify_report.md             stage 3.0 Kaggle run: all 24 regression numbers
@@ -5363,7 +5397,7 @@ degree), and `breadthfirst` for chains, bipartite and random patterns.
 | Campaign Explorer | `/campaigns` | Searchable, filterable, sortable, paginated table with removable filter chips and a live result count; rows open a campaign | done |
 | Campaign Detail | `/campaigns/:id` | The demo centrepiece. Interactive Cytoscape graph (accounts as nodes labelled by institution, transactions as directed arrows, hover for amount/time, drag/zoom/pan, click a node for its details); time replay with play/pause and deadline + cutoff marks; visibility controls (seed, and either the natural bank split or a target) with the achieved-visibility and bin badge; bank's-eye-view tabs that fade everything the selected bank cannot see and report "this bank sees X of Y"; a detection panel that is an explicit empty state until Phase 5; and a metadata sidebar explaining every flag in plain language | done |
 | Visibility Lab | `/visibility` | A sandbox where accounts of a fan-out and a cycle are dragged (or clicked) between three bank zones while visibility updates live, then the real achieved-visibility histogram per target, bins per group, and the unfragmentable count | done |
-| Live panel | `/live` | The demo centrepiece for the mechanism. One detection window scored on the spot: pick a window, an institution and an operating point, then flip **own model** / **all 8 models averaged** and watch the flagged edges, clusters, purity, coverage, lead time and alert count recompute. Carries its own "chosen to illustrate, not representative" disclaimer, the selection rule verbatim, and the four-way count over every offered setting so it cannot be read as "averaging always helps" | done; **every number on it is from the 1% sample**, and its aggregate card is a deliberate empty state until the full sweep lands |
+| Live panel | `/live` | The demo centrepiece for the mechanism. One detection window scored on the spot **both ways at once** — own model and all 8 models averaged, side by side, with the rows that differ marked. Opens on the first setting where the two modes disagree, so the mechanism is visible without touching a control. Carries its own "chosen to illustrate, not representative" disclaimer and the four-way count over every offered setting so it cannot be read as "averaging always helps"; the selection rule and the how-to-read notes sit behind disclosures | done; **every number on it is from the 1% sample**, and its aggregate card is a deliberate empty state until the full sweep lands |
 | Results | `/results` | Empty state plus labelled outlines of all five planned figures, each with a "how to read this" note and no numbers at all; the condition legend with its fixed colours and dash patterns | done |
 | Methodology | `/methodology` | `/api/methodology` rendered as cards: each definition, the reason for it, and its machine-readable values | done |
 
@@ -5817,9 +5851,13 @@ campaign_id)`:
   skipped**, 0 failed. The skips are the full-data suite, which needs the
   dataset that only exists on Kaggle; all 24 of its numbers passed there on
   2026-10-08/09.
-- Frontend: `npm run test` from `frontend/` → **52 passed**, 0 failed.
+- Frontend: `npm run test` from `frontend/` → **55 passed**, 0 failed.
   `npm run build` (tsc + bundle) and `npm run lint` both clean
-  (re-checked 2026-11-16, after the demo-readiness fixes).
+  (re-checked 2026-11-16, after the demo-readiness fixes and the live
+  panel's presentation rebuild). Three of those tests are new that day: the
+  panel opens on the setting where the two modes differ, both modes are shown
+  at once with the differing rows marked, and the cluster table leads with the
+  matched cluster while keeping the rest behind its disclosure.
 
 **Browser verification (2026-11-14).** The pages have now been opened in a
 real browser — headless Chrome driven over the DevTools protocol, which needs
@@ -6228,6 +6266,54 @@ Tagged points in the repository, newest first. Check one out with
 | `v0.1-data-pipeline` | 2026-10-08 | Phase 2 complete, plus the stage 3.0 Kaggle runner. The research pipeline (campaign ground truth, splits, topology groups, institutions, visibility), the artifact export, the read-only FastAPI server, and the full React frontend — 69 backend tests and 48 frontend tests passing. **No models and no experiment results**: the four conditions are defined and the result schema is fixed, but nothing has been trained or run, and the full-data regression numbers are still unverified (that is what stage 3.0's Kaggle run is for). |
 
 ## Changelog
+
+- **2026-11-16 (the live panel made demonstrable: four presentation changes,
+  four commits)** — the panel was not usable in front of an audience. It
+  opened on `2022-09-06 18:00:00` / I0, a window holding **one** campaign edge
+  that both modes miss, so the first thing on screen was *missed / 0% / 0% /
+  no lead time*; and it led with its selection rule and provenance rather than
+  with the comparison it exists to make.
+
+  **P1 — it opens where the modes differ.** The default window and institution
+  come from the first entry of the bundle's own `suggested_settings`, resolved
+  to a window index at render time. No timestamp is hard-coded, so a rebuilt
+  bundle moves the default with it; on the current bundle that is
+  `2022-09-08 06:00:00`, I4. A bundle offering no such setting is reported in
+  the Input card rather than opened on silently.
+
+  **P2 — both modes at once.** The toggle is replaced by a six-row comparison
+  across two labelled columns, both computed on every change, with the
+  disagreeing rows marked `differs` and "found" coloured as a hit. At the
+  opening setting: flagged 138 vs 158, alerts 17 vs 20, demo campaign
+  **missed vs found**, purity 0% vs 100%, coverage 0% vs 14%, lead time *not
+  detected* vs **66.0 h before the deadline**.
+
+  **P3 — the apparatus is collapsed, not deleted.** The selection rule, the
+  rank-0-of-56 provenance and the how-to-read notes moved behind `<details>`;
+  they are still in the DOM, which the pre-existing test asserting the rule is
+  on the page now also proves. Everything that *qualifies* a claim stays
+  visible: the 1%-sample development warning, the "not a representative
+  result" heading and disclaimer, and the four-way outcome count. The
+  aggregate card was left exactly as it was.
+
+  **P4 — the cluster tables lead with the match.** Matched clusters first,
+  then at most three others, then "Show all N clusters (M more)" behind a
+  disclosure. At the demo setting that is 17 and 20 rows shown as 3 and 4,
+  with every row still rendered and reachable. The test builds a run whose
+  match is *last* in the payload, so leading with it proves the ordering is
+  the page's and not the backend's.
+
+  Presentation only throughout: both columns call the same `/api/demo/run`
+  the toggle already called, and no number, threshold, matching rule or
+  computation changed. Verified in headless Chrome after each step — opens on
+  the right setting, both columns compute in ~1.2 s, zero console errors,
+  zero failed requests, zero responses ≥ 400. Frontend **55 passed**, lint and
+  build clean.
+
+  *Run sheet:* the STOP box about the default window is **removed** — P1 made
+  it false — and the live-panel step now reads "nothing to click", with the
+  expected two-column table, where the collapsed apparatus went, and two
+  replacement troubleshooting rows.
 
 - **2026-11-16 (the aggregate card becomes a deliberate empty state)** —
   decided by the user against both alternatives: leaving a card that reads

@@ -258,27 +258,34 @@ step itself, not the talking. Tick state is saved in this browser, so hit
   <li><input type="checkbox" class="tick" aria-label="step done">
     <div class="do"><span class="route">/live</span> &mdash; the live panel <span class="pill">~90 s</span></div>
 
-    <div class="panel badbox" style="margin:0 0 10px">
-      <p style="margin:0 0 6px;font-size:1.02rem"><strong>STOP &mdash; do not demo the window the
-      page opens on.</strong></p>
-      <p style="margin:0 0 6px">The default is <code>2022-09-06 18:00:00</code>, where the campaign
-      is <b>missed in both modes</b>: flipping the toggle there changes nothing anyone can see, and
-      the whole point of the panel is lost.</p>
-      <p style="margin:0"><strong>The click path, every time:</strong> scroll to
-      <b>&ldquo;Settings where the toggle changes the answer&rdquo;</b> in the <b>Input</b> card
-      &rarr; click the first link, <b><code>2022-09-08 06:00:00, I4</code></b> &rarr; wait for
-      <b>Output</b> to re-score (&lt;1 s) &rarr; <em>then</em> flip the toggle. That one click sets
-      the window, the institution and the mode together.</p>
-    </div>
+    <p class="expect"><b>Nothing to click.</b> The panel opens on
+    <code>2022-09-08 06:00:00</code> / <b>I4</b> &mdash; the first setting where the two modes
+    disagree, picked from the bundle itself &mdash; and scores it <b>both ways at once</b>. Ready
+    in about a second. Check the two dropdowns read that before you start talking.</p>
 
-    <p class="expect">The page loads in about a second.
-    <br>With <b>This institution alone</b>: 138 flagged edges, <b>17</b> alerts,
-    demo campaign <b class="bad">missed</b>, purity <b>0%</b>.
-    <br>Click <b>All 8 models, scores averaged</b>: 158 flagged, <b>20</b> alerts,
-    demo campaign <b class="ok">found</b>, purity <b>100%</b>, coverage <b>14%</b>,
-    and a lead time of <b>66.0 h before the deadline</b>. Measured end to end at
-    <b>~530 ms</b>; the page prints its own recompute time underneath.
-    </p>
+    <p class="expect">Scroll to <b>&ldquo;The same view, scored both ways&rdquo;</b>. Six rows, two
+    columns, every row marked <b>differs</b>:</p>
+
+    <table>
+      <thead><tr><th>&nbsp;</th><th>This institution alone</th><th>All 8 models, averaged</th></tr></thead>
+      <tbody>
+        <tr><td>Flagged edges</td><td class="n">138</td><td class="n">158</td></tr>
+        <tr><td>Alerts raised</td><td class="n">17</td><td class="n">20</td></tr>
+        <tr><td><b>Demo campaign</b></td><td class="n bad">missed</td><td class="n ok">found</td></tr>
+        <tr><td>Best purity</td><td class="n">0%</td><td class="n">100%</td></tr>
+        <tr><td>Best coverage</td><td class="n">0%</td><td class="n">14%</td></tr>
+        <tr><td><b>Lead time</b></td><td class="n">not detected</td><td class="n ok">66.0 h before the deadline</td></tr>
+      </tbody>
+    </table>
+
+    <p class="expect"><b>missed &rarr; found is the whole demo.</b> Point at that row. Below the
+    table each column lists its own clusters, matched one first, with the rest behind
+    &ldquo;Show all N clusters&rdquo;; each prints its own recompute time, around
+    <b>150&ndash;350 ms</b>.
+    <br>If you want to show it live rather than on open, change the <b>Detection window</b>
+    dropdown and watch both columns re-score, or click the second entry under
+    <b>&ldquo;Settings where the two modes differ&rdquo;</b>
+    (<code>2022-09-08 12:00:00, I4</code>).</p>
 
     <div class="panel" style="border-left:3px solid var(--ok)">
       <p style="margin:0 0 6px"><strong>Say this aloud, before anyone asks it.</strong></p>
@@ -287,15 +294,20 @@ step itself, not the talking. Tick state is saved in this browser, so hit
       <b>2</b>, and the bank&rsquo;s own model alone in <b>0</b> &mdash; so the two modes differ in
       two settings, and the own model never wins. This is a single window at a time; the aggregate
       is what the full sweep measures, and that sweep is still running.&rdquo;</p>
-      <p class="expect" style="margin:6px 0 0">The counts are on screen, under the suggested
-      settings. Reading them out first is what stops the panel being heard as
-      &ldquo;averaging always helps&rdquo;.</p>
+      <p class="expect" style="margin:6px 0 0">The counts are on screen, in the <b>Input</b>
+      card under &ldquo;Settings where the two modes differ&rdquo;. Reading them out first is what
+      stops the panel being heard as &ldquo;averaging always helps&rdquo;.</p>
     </div>
     <div class="panel warnbox" style="margin-top:8px">
       <b>Two things to say out loud on this page.</b>
       (1) Every number here is computed from a bundle built on the <b>1% sample</b>, so it is a
       <b>development check, not a result</b> &mdash; the page says so at the top, but it says
       &ldquo;if&rdquo;, and the answer is yes.
+      (1b) The selection rule, the rank-0-of-56 provenance and the &ldquo;how to read this&rdquo;
+      notes are all still on the page, folded into the grey
+      <b>&ldquo;How this campaign was selected&rdquo;</b> and <b>&ldquo;How to read this&rdquo;</b>
+      disclosures. Open one if a faculty member asks how the campaign was picked &mdash; the
+      answer is there, not lost.
       (2) The <b>&ldquo;And how often does it hold?&rdquo;</b> card at the bottom is a
       <b>deliberate empty state</b>, fixed 2026-11-16: it reads <em>&ldquo;The full-scale
       comparison has not been measured yet &mdash; the Phase 4 sweep is still running.&rdquo;</em>
@@ -371,9 +383,13 @@ step itself, not the talking. Tick state is saved in this browser, so hit
         <td><b>Expected and deliberate.</b> The card explains itself: the full-scale comparison has
         not been measured yet. Everything above it on the page is live and correct.
         <span class="pill">by design</span></td></tr>
-    <tr><td>Live panel: the toggle changes <b>nothing visible</b></td>
-        <td>You are on the default window. Click <b>2022-09-08 06:00:00, I4</b> under &ldquo;Settings
-        where the toggle changes the answer&rdquo; first.</td></tr>
+    <tr><td>Live panel: the two columns read the <b>same</b></td>
+        <td>You have moved off the opening setting. Re-select
+        <b>2022-09-08 06:00:00, I4</b> under &ldquo;Settings where the two modes differ&rdquo;, or
+        reload <span class="route">/live</span> &mdash; it opens on that setting by itself.</td></tr>
+    <tr><td>Live panel: a column says <b>&ldquo;Scoring...&rdquo;</b> for more than a few seconds</td>
+        <td>Both modes are scored on every change, so the first load does two runs. If it does not
+        settle, the backend is wedged: step 0.</td></tr>
     <tr><td>A campaign URL with a <b>non-numeric id</b>, e.g. <code>/campaigns/abc</code></td>
         <td>Now says &ldquo;Not a campaign id&rdquo; with a link back to the list.
         <span class="pill">fixed 2026-11-16</span></td></tr>
@@ -389,9 +405,10 @@ step itself, not the talking. Tick state is saved in this browser, so hit
   every path, including the three campaign graphs (270 Cytoscape warnings were fixed that day).
   &ldquo;This bank sees X of Y&rdquo; was compared against the API&rsquo;s <code>n_visible</code>
   for all 8 banks of all 3 campaigns at target 25%: <b>23 of 23 agree</b>. The live panel toggle
-  was measured at ~530&nbsp;ms, and the aggregate card was re-checked after it became a
-  deliberate empty state: <b>zero console errors and zero failed requests on
-  <code>/live</code></b>. Expected values come from <code>backend/artifacts/</code> and
+  was measured at ~530&nbsp;ms. The panel was then rebuilt to open on
+  <code>2022-09-08 06:00:00</code>/<b>I4</b> and score both modes at once, and re-verified after
+  each step: it opens on that setting, both columns compute in about a second, and
+  <code>/live</code> produces <b>zero console errors and zero failed requests</b>. Expected values come from <code>backend/artifacts/</code> and
   <code>docs/reference/oracle_diagnose.csv</code>, not from this page.
 </footer>
 
