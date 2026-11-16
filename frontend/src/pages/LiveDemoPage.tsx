@@ -304,6 +304,49 @@ function Comparison({ own, averaged }: { own?: DemoRun; averaged?: DemoRun }) {
   )
 }
 
+/**
+ * Said when the viewer has moved off a listed setting and the two modes
+ * agree. Which way they agree is read from the runs on screen, not assumed
+ * from the list, so the note cannot contradict the table under it.
+ */
+function AgreementNote({
+  outcomes,
+  detected,
+  onBack,
+  canGoBack,
+}: {
+  outcomes: Record<string, number> | undefined
+  detected: boolean
+  onBack: () => void
+  canGoBack: boolean
+}) {
+  const counts = outcomes ?? {}
+  const total = Object.values(counts).reduce((a, b) => a + b, 0)
+  const same = detected ? counts.both : counts.neither
+  return (
+    <p className="mb-3 rounded-md border border-grid bg-plane p-2 text-xs text-ink2">
+      <strong>
+        At this setting the two modes agree on the outcome —{' '}
+        {detected ? 'both find' : 'neither finds'} the campaign.
+      </strong>{' '}
+      {total > 0 && typeof same === 'number' && (
+        <>
+          That is the common case: {detected ? 'both do' : 'neither does'} in{' '}
+          <strong>
+            {same} of {total}
+          </strong>{' '}
+          settings offered here.{' '}
+        </>
+      )}
+      {canGoBack && (
+        <button type="button" className="underline" onClick={onBack}>
+          Back to the setting where they differ
+        </button>
+      )}
+    </p>
+  )
+}
+
 /** One mode's own detail: the window it saw, its clusters, its latency. */
 function ModeColumn({
   mode,
@@ -359,6 +402,19 @@ function openingSetting(
   return null
 }
 
+/** Is this (window, institution) one of the settings the bundle lists? */
+function isListedSetting(
+  manifest: DemoManifest | undefined,
+  detectionTime: string,
+  institution: number,
+): boolean {
+  return (manifest?.suggested_settings ?? []).some(
+    (setting) =>
+      setting.detection_time === detectionTime &&
+      setting.institution === institution,
+  )
+}
+
 /** Whose view to score when neither the viewer nor the bundle has said. */
 function fallbackInstitution(manifest: DemoManifest | undefined): number {
   const holding = manifest?.demo_campaign?.institutions_holding ?? []
@@ -412,6 +468,15 @@ export function LiveDemoPage() {
 
   const m = manifest.data!
   const windowMeta = m.windows?.[effectiveWindow]
+
+  // Shown only when both runs are in and they agree, so the note is never
+  // at odds with the `differs` markers in the table beneath it.
+  const bothIn = Boolean(ownRun.data && averagedRun.data)
+  const detected = Boolean(ownRun.data?.demo_campaign_detected)
+  const theyAgree =
+    bothIn && detected === Boolean(averagedRun.data?.demo_campaign_detected)
+  const offTheList =
+    !isListedSetting(m, detectionTime, chosenInstitution) && theyAgree
 
   return (
     <div className="space-y-6">
@@ -601,6 +666,18 @@ export function LiveDemoPage() {
         )}
         {ownRun.error && <ErrorState error={ownRun.error} />}
         {averagedRun.error && <ErrorState error={averagedRun.error} />}
+        {offTheList && (
+          <AgreementNote
+            outcomes={m.setting_outcomes}
+            detected={detected}
+            canGoBack={opening !== null}
+            onBack={() => {
+              if (!opening) return
+              setWindowIndex(opening.windowIndex)
+              setInstitution(opening.institution)
+            }}
+          />
+        )}
         {(ownRun.data || averagedRun.data) && (
           <Comparison own={ownRun.data} averaged={averagedRun.data} />
         )}

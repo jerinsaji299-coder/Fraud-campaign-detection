@@ -287,6 +287,13 @@ step itself, not the talking. Tick state is saved in this browser, so hit
     <b>&ldquo;Settings where the two modes differ&rdquo;</b>
     (<code>2022-09-08 12:00:00, I4</code>).</p>
 
+    <p class="expect"><b>Wandering off is safe.</b> On any setting the bundle does not list, a
+    note appears above the comparison &mdash; &ldquo;at this setting the two modes agree on the
+    outcome &mdash; neither finds the campaign. That is the common case: neither does in
+    <b>58 of 64</b> settings offered here&rdquo; &mdash; with a one-click <b>Back to the setting
+    where they differ</b>. That note is a good thing to land on deliberately: it is the honest
+    frame for the whole panel.</p>
+
     <div class="panel" style="border-left:3px solid var(--ok)">
       <p style="margin:0 0 6px"><strong>Say this aloud, before anyone asks it.</strong></p>
       <p class="say" style="margin:0">&ldquo;Across the 64 settings this panel offers, neither mode
@@ -384,9 +391,10 @@ step itself, not the talking. Tick state is saved in this browser, so hit
         not been measured yet. Everything above it on the page is live and correct.
         <span class="pill">by design</span></td></tr>
     <tr><td>Live panel: the two columns read the <b>same</b></td>
-        <td>You have moved off the opening setting. Re-select
-        <b>2022-09-08 06:00:00, I4</b> under &ldquo;Settings where the two modes differ&rdquo;, or
-        reload <span class="route">/live</span> &mdash; it opens on that setting by itself.</td></tr>
+        <td>You have moved off the opening setting, and the page says so: a note above the
+        comparison reads &ldquo;at this setting the two modes agree on the outcome&rdquo; with the
+        count behind it, and carries a one-click <b>Back to the setting where they differ</b>.
+        Reloading <span class="route">/live</span> also returns to it.</td></tr>
     <tr><td>Live panel: a column says <b>&ldquo;Scoring...&rdquo;</b> for more than a few seconds</td>
         <td>Both modes are scored on every change, so the first load does two runs. If it does not
         settle, the backend is wedged: step 0.</td></tr>

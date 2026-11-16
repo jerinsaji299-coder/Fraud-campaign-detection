@@ -14,7 +14,13 @@
  */
 
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { render, screen, within } from '@testing-library/react'
+import {
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
@@ -359,6 +365,47 @@ describe('LiveDemoPage', () => {
       name: /The remaining clusters . This institution alone/i,
     })
     expect(within(remaining[0]).getAllByRole('row').slice(1)).toHaveLength(3)
+  })
+
+  it('says when a setting is one where the two modes agree, and offers the way back', async () => {
+    // the same body for both modes, so they agree wherever the viewer goes
+    stub({
+      '/api/demo/manifest': { status: 200, body: MANIFEST },
+      '/api/demo/run': { status: 200, body: RUN },
+      '/api/demo/aggregate': {
+        status: 200,
+        body: { available: false, reason: 'none', rows: [] },
+      },
+    })
+    renderPage()
+    await screen.findByText(/Alerts raised/i)
+
+    // the opening setting IS one the bundle lists, so nothing is said
+    expect(screen.queryByText(/the two modes agree/i)).not.toBeInTheDocument()
+
+    // move to a window the bundle does not list
+    fireEvent.change(screen.getByLabelText(/Detection window/i), {
+      target: { value: '0' },
+    })
+    expect(
+      await screen.findByText(
+        /the two modes agree on the outcome . both find the campaign/i,
+      ),
+    ).toBeInTheDocument()
+    // the count comes from the manifest, not from this page
+    expect(screen.getByText('4 of 64')).toBeInTheDocument()
+
+    // and one click goes back to where they differ
+    fireEvent.click(
+      screen.getByRole('button', { name: /Back to the setting where they differ/i }),
+    )
+    await waitFor(() => {
+      const select = screen.getByLabelText(
+        /Detection window/i,
+      ) as HTMLSelectElement
+      expect(select.value).toBe('1')
+    })
+    expect(screen.queryByText(/the two modes agree/i)).not.toBeInTheDocument()
   })
 
   it('shows both modes at once and marks the rows that differ', async () => {

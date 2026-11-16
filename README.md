@@ -4177,6 +4177,16 @@ the two modes in adjacent columns and marks every row where they disagree.
 > At the opening setting the two columns read: flagged 138 vs 158, alerts 17
 > vs 20, demo campaign **missed vs found**, purity 0% vs 100%, coverage 0% vs
 > 14%, lead time *not detected* vs **66.0 h before the deadline**.
+>
+> **And when the viewer moves off a listed setting**, an inline note above the
+> comparison says so: *"At this setting the two modes agree on the outcome —
+> neither finds the campaign. That is the common case: neither does in 58 of
+> 64 settings offered here,"* with a one-click link back. The note is
+> triggered by list membership but **worded from the two runs on screen** — it
+> reports which way they agree and only appears when they do, so it can never
+> contradict the `differs` markers in the table beneath it, which may still be
+> set on the edge and alert counts. Its counts come from the manifest's
+> `setting_outcomes`, not from the page.
 
 **It is the research path, not a second implementation.** Clusters come from
 `evaluation.clusters.extract_clusters`, the classification from
@@ -5851,13 +5861,16 @@ campaign_id)`:
   skipped**, 0 failed. The skips are the full-data suite, which needs the
   dataset that only exists on Kaggle; all 24 of its numbers passed there on
   2026-10-08/09.
-- Frontend: `npm run test` from `frontend/` → **55 passed**, 0 failed.
+- Frontend: `npm run test` from `frontend/` → **56 passed**, 0 failed.
   `npm run build` (tsc + bundle) and `npm run lint` both clean
   (re-checked 2026-11-16, after the demo-readiness fixes and the live
   panel's presentation rebuild). Three of those tests are new that day: the
   panel opens on the setting where the two modes differ, both modes are shown
   at once with the differing rows marked, and the cluster table leads with the
-  matched cluster while keeping the rest behind its disclosure.
+  matched cluster while keeping the rest behind its disclosure. A fourth
+  checks the agreement note: absent on a listed setting, present with the
+  manifest's own counts off one, and one click returns to the opening
+  setting.
 
 **Browser verification (2026-11-14).** The pages have now been opened in a
 real browser — headless Chrome driven over the DevTools protocol, which needs
@@ -6266,6 +6279,25 @@ Tagged points in the repository, newest first. Check one out with
 | `v0.1-data-pipeline` | 2026-10-08 | Phase 2 complete, plus the stage 3.0 Kaggle runner. The research pipeline (campaign ground truth, splits, topology groups, institutions, visibility), the artifact export, the read-only FastAPI server, and the full React frontend — 69 backend tests and 48 frontend tests passing. **No models and no experiment results**: the four conditions are defined and the result schema is fixed, but nothing has been trained or run, and the full-data regression numbers are still unverified (that is what stage 3.0's Kaggle run is for). |
 
 ## Changelog
+
+- **2026-11-17 (the live panel says when a setting is an agreeing one)** — a
+  small addition to yesterday's rebuild. When the viewer moves off one of the
+  settings the bundle lists, an inline note above the comparison reads *"At
+  this setting the two modes agree on the outcome — neither finds the
+  campaign. That is the common case: neither does in 58 of 64 settings offered
+  here,"* and offers a one-click link back to the opening setting.
+
+  It is triggered by list membership but **worded from the two runs already on
+  screen**: it names which way they agree, and it only renders when they
+  actually do, so it cannot contradict the `differs` markers underneath —
+  which at window 0 are still set on the edge and alert counts even though the
+  campaign outcome matches. "Agree **on the outcome**" rather than "agree" for
+  the same reason. The counts come from the manifest's `setting_outcomes`.
+
+  Presentation only; no computation changed. Verified in the browser: absent
+  on open, present after moving to window 0, gone again after the one click,
+  with zero console errors and zero failed requests. Frontend **56 passed**,
+  lint and build clean.
 
 - **2026-11-16 (the live panel made demonstrable: four presentation changes,
   four commits)** — the panel was not usable in front of an audience. It
