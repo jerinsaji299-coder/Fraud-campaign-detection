@@ -7,6 +7,10 @@
  *    illustrate the mechanism** and is not a representative result - and it
  *    still shows the aggregate section, because the panel must not ship
  *    without it.
+ * 3. It opens on a setting where the two modes **differ**, and shows both of
+ *    them at once. A panel that opens on a window where nothing happens, or
+ *    that needs a control flipped before anything can be compared, does not
+ *    demonstrate what it exists to demonstrate.
  */
 
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
@@ -57,8 +61,28 @@ const MANIFEST = {
       n_laundering_edges: 5,
       n_campaign_edges: 3,
     },
+    {
+      detection_time: '2022-09-08 06:00:00',
+      n_edges: 120,
+      n_accounts: 44,
+      n_laundering_edges: 6,
+      n_campaign_edges: 2,
+    },
   ],
-  detection_times: ['2022-09-07 00:00:00'],
+  detection_times: ['2022-09-07 00:00:00', '2022-09-08 06:00:00'],
+  // deliberately NOT the first window, and NOT the first institution, so a
+  // panel that merely defaults to index 0 fails this
+  suggested_settings: [
+    {
+      detection_time: '2022-09-08 06:00:00',
+      institution: 2,
+      own_clusters: 1,
+      averaged_clusters: 2,
+      coverage: 0.75,
+      hours_before_deadline: 66,
+    },
+  ],
+  setting_outcomes: { own_only: 0, both: 4, neither: 58, averaged_only: 2 },
   primary_points: ['f1', 'total_10'],
   taus: { total_10: { '0': 0.5 } },
   match_rule: { min_account_fraction: 0.5, min_accounts: 3 },
@@ -113,6 +137,48 @@ const RUN = {
     beat_the_deadline: true,
   },
   latency_ms: { featurise: 120, predict: 30, clusters: 5, total: 160 },
+}
+
+/** The same view scored the other way: it finds the campaign, `own` does not. */
+const RUN_AVERAGED = {
+  ...RUN,
+  mode: 'averaged',
+  models_used: [0, 1, 2],
+  n_models_used: 3,
+  // deliberately the SAME edge count as the own run, so one row agrees and
+  // the "differs" marking is shown to be computed rather than painted on
+  n_flagged_edges: 6,
+  demo_campaign_detected: true,
+  best_purity_vs_demo_campaign: 1,
+  best_coverage_vs_demo_campaign: 0.75,
+  lead_time: {
+    detected: true,
+    deadline: '2022-09-08 00:00:00',
+    campaign_end: '2022-09-09 00:00:00',
+    hours_before_deadline: 66,
+    hours_before_end: 130,
+    beat_the_deadline: true,
+  },
+  latency_ms: { featurise: 0, predict: 90, clusters: 3, total: 95 },
+}
+
+/** The own-model run at a setting where it MISSES. */
+const RUN_OWN_MISSES = {
+  ...RUN,
+  clusters: [],
+  n_clusters: 0,
+  alert_count: 0,
+  demo_campaign_detected: false,
+  best_purity_vs_demo_campaign: 0,
+  best_coverage_vs_demo_campaign: 0,
+  lead_time: {
+    detected: false,
+    deadline: '2022-09-08 00:00:00',
+    campaign_end: '2022-09-09 00:00:00',
+    hours_before_deadline: null,
+    hours_before_end: null,
+    beat_the_deadline: null,
+  },
 }
 
 function stub(routes: Record<string, { status: number; body: unknown }>) {
@@ -195,7 +261,7 @@ describe('LiveDemoPage', () => {
     expect(screen.getByText(/no comparison artifact yet/i)).toBeInTheDocument()
   })
 
-  it('shows the live output and its latency', async () => {
+  it('shows the live output and its latency, once per mode', async () => {
     stub({
       '/api/demo/manifest': { status: 200, body: MANIFEST },
       '/api/demo/run': { status: 200, body: RUN },
@@ -206,13 +272,87 @@ describe('LiveDemoPage', () => {
     })
     renderPage()
     expect(await screen.findByText(/Alerts raised/i)).toBeInTheDocument()
-    expect(screen.getByText(/Recomputed in/i)).toBeInTheDocument()
-    expect(screen.getByText(/160 ms/i)).toBeInTheDocument()
+    // one per column, because both modes are computed and shown
+    expect(await screen.findAllByText(/Recomputed in/i)).toHaveLength(2)
+    expect(screen.getAllByText(/160 ms/i).length).toBeGreaterThan(0)
     // purity and coverage are shown, from the frozen rule's own numbers
-    const table = screen.getByRole('table', {
-      name: /Clusters extracted at this setting/i,
+    const table = await screen.findByRole('table', {
+      name: /Clusters extracted at this setting . This institution alone/i,
     })
     expect(within(table).getByText('100%')).toBeInTheDocument()
     expect(within(table).getByText('3/4')).toBeInTheDocument()
+  })
+
+  it('opens on the first setting where the two modes differ', async () => {
+    stub({
+      '/api/demo/manifest': { status: 200, body: MANIFEST },
+      'mode=averaged': { status: 200, body: RUN_AVERAGED },
+      'mode=own': { status: 200, body: RUN_OWN_MISSES },
+      '/api/demo/aggregate': {
+        status: 200,
+        body: { available: false, reason: 'none', rows: [] },
+      },
+    })
+    renderPage()
+    await screen.findByText(/Alerts raised/i)
+
+    // the controls show it, and neither value is the index-0 default
+    const window_ = screen.getByLabelText(/Detection window/i) as HTMLSelectElement
+    const institution = screen.getByLabelText(/Institution/i) as HTMLSelectElement
+    expect(window_.value).toBe('1')
+    expect(institution.value).toBe('2')
+
+    // and the request actually asked for that window, not just the label
+    const asked = vi
+      .mocked(fetch)
+      .mock.calls.map((call) =>
+        decodeURIComponent(String(call[0]).replace(/\+/g, ' ')),
+      )
+      .filter((url) => url.includes('/api/demo/run'))
+    expect(asked.length).toBeGreaterThan(0)
+    for (const url of asked) {
+      expect(url).toContain('detection_time=2022-09-08 06:00:00')
+      expect(url).toContain('institution=2')
+    }
+  })
+
+  it('shows both modes at once and marks the rows that differ', async () => {
+    stub({
+      '/api/demo/manifest': { status: 200, body: MANIFEST },
+      'mode=averaged': { status: 200, body: RUN_AVERAGED },
+      'mode=own': { status: 200, body: RUN_OWN_MISSES },
+      '/api/demo/aggregate': {
+        status: 200,
+        body: { available: false, reason: 'none', rows: [] },
+      },
+    })
+    renderPage()
+
+    const comparison = await screen.findByRole('table', {
+      name: /scored both ways/i,
+    })
+    // both outcomes visible together - no toggle, nothing to remember
+    expect(within(comparison).getByText('missed')).toBeInTheDocument()
+    expect(within(comparison).getByText('found')).toBeInTheDocument()
+    expect(
+      within(comparison).getByText(/66.0 h before the deadline/i),
+    ).toBeInTheDocument()
+    expect(within(comparison).getByText(/not detected/i)).toBeInTheDocument()
+
+    // the rows that disagree are marked, and the ones that agree are not
+    const marked = within(comparison)
+      .getAllByText('differs')
+      .map((node) => node.closest('tr')?.querySelector('th')?.textContent ?? '')
+    expect(marked.join(' ')).toMatch(/Demo campaign/i)
+    expect(marked.join(' ')).toMatch(/Lead time/i)
+    expect(marked.join(' ')).not.toMatch(/Flagged edges/i)
+
+    // and both columns are named, so neither is read as the other
+    expect(
+      screen.getAllByText(/This institution alone/i).length,
+    ).toBeGreaterThan(0)
+    expect(
+      screen.getAllByText(/All 8 models, scores averaged/i).length,
+    ).toBeGreaterThan(0)
   })
 })

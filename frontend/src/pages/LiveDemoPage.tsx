@@ -2,11 +2,20 @@
  * The live demo panel, for a faculty presentation.
  *
  * Input -> output, computed on the spot. The viewer picks a detection window
- * (directly, or via the demo campaign which selects its own windows) and an
- * institution, then flips one toggle:
+ * and an institution, and the panel scores that one view **both ways at
+ * once**:
  *
  *   own      - that institution's own model, alone (stage 4.1)
  *   averaged - all K models applied to that same view, scores averaged (4.2)
+ *
+ * Both are computed and shown side by side, with the rows that differ marked,
+ * so the difference is visible without anyone flipping a control or
+ * remembering a previous number.
+ *
+ * The panel opens on the first setting where the two modes **differ**, chosen
+ * from the bundle's own `suggested_settings` rather than from a hard-coded
+ * timestamp. If the bundle offers no such setting the panel says so rather
+ * than opening on a window where nothing happens.
  *
  * Every number on this page is computed by the backend from `fraudcamp`'s own
  * functions on each request. This component formats; it does not compute a
@@ -14,13 +23,13 @@
  * shows an empty state rather than placeholder numbers.
  */
 
-import { useMemo, useState } from 'react'
+import { useState } from 'react'
 
-import { ChartCard, InstitutionBadge, Pill, StatCard } from '../components/cards'
+import { ChartCard, InstitutionBadge, Pill } from '../components/cards'
 import { EmptyState, ErrorState, LoadingBlock } from '../components/states'
 import { useDemoAggregate, useDemoManifest, useDemoRun } from '../api/hooks'
 import { ApiError } from '../api/client'
-import type { DemoCluster, DemoRun } from '../api/types'
+import type { DemoCluster, DemoManifest, DemoRun } from '../api/types'
 
 const MODE_LABEL: Record<string, string> = {
   own: 'This institution alone',
@@ -67,7 +76,11 @@ function LatencyNote({ run }: { run: DemoRun }) {
 function ClusterRow({ cluster }: { cluster: DemoCluster }) {
   const match = cluster.vs_demo_campaign
   return (
-    <tr className="border-t border-grid">
+    <tr
+      className={`border-t border-grid ${
+        cluster.matches_demo_campaign ? 'bg-grid/40' : ''
+      }`}
+    >
       <td className="py-1 pr-3">
         {cluster.matches_demo_campaign ? (
           <Pill tone="good">demo campaign</Pill>
@@ -95,123 +108,241 @@ function ClusterRow({ cluster }: { cluster: DemoCluster }) {
   )
 }
 
-function Output({ run }: { run: DemoRun }) {
-  if (run.empty_reason) {
-    return (
-      <EmptyState
-        title="Nothing to score"
-        description={run.empty_reason}
-      />
-    )
-  }
-  const lead = run.lead_time
+function ClusterHead() {
   return (
-    <div className="space-y-4">
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
-        <StatCard
-          label="Flagged edges"
-          value={run.n_flagged_edges.toLocaleString()}
-          hint={`of ${run.n_edges_in_view.toLocaleString()} in this view`}
-        />
-        <StatCard
-          label="Alerts raised"
-          value={run.alert_count.toLocaleString()}
-          hint="clusters an analyst would see"
-        />
-        <StatCard
-          label="Demo campaign"
-          value={run.demo_campaign_detected ? 'found' : 'missed'}
-          emphasis={run.demo_campaign_detected}
-          hint={`campaign ${run.demo_campaign_id ?? '—'}`}
-        />
-        <StatCard
-          label="Best purity"
-          value={pct(run.best_purity_vs_demo_campaign)}
-          hint="of a cluster, against the demo campaign"
-        />
-        <StatCard
-          label="Best coverage"
-          value={pct(run.best_coverage_vs_demo_campaign)}
-          hint="of the demo campaign's accounts"
-        />
-      </div>
+    <thead>
+      <tr className="text-left text-xs uppercase tracking-wide text-muted">
+        <th className="pb-1 pr-3">Cluster</th>
+        <th className="pb-1 pr-3 text-right">Accounts</th>
+        <th className="pb-1 pr-3 text-right">Purity</th>
+        <th className="pb-1 pr-3 text-right">Coverage</th>
+        <th className="pb-1 pr-3">Institutions</th>
+      </tr>
+    </thead>
+  )
+}
 
-      <div className="rounded-lg border border-grid p-3">
-        <h4 className="mb-1 text-sm font-semibold">Lead time</h4>
-        {lead?.detected ? (
-          <p className="text-sm">
-            Detected <strong>{num(lead.hours_before_deadline, 1)} h</strong>{' '}
-            before the deadline
-            {lead.hours_before_end !== null && (
-              <> and {num(lead.hours_before_end, 1)} h before the campaign ends</>
-            )}
-            .{' '}
-            {lead.beat_the_deadline === false && (
-              <span className="text-critical">
-                After the deadline, so it does not count as a detection.
-              </span>
-            )}
-          </p>
-        ) : (
-          <p className="text-sm text-muted">
-            Not detected at this detection time, so there is no lead time.
-          </p>
-        )}
-      </div>
-
-      <div className="overflow-x-auto">
-        <table className="w-full text-sm">
-          <caption className="sr-only">Clusters extracted at this setting</caption>
-          <thead>
-            <tr className="text-left text-xs uppercase tracking-wide text-muted">
-              <th className="pb-1 pr-3">Cluster</th>
-              <th className="pb-1 pr-3 text-right">Accounts</th>
-              <th className="pb-1 pr-3 text-right">Purity</th>
-              <th className="pb-1 pr-3 text-right">Coverage</th>
-              <th className="pb-1 pr-3">Institutions</th>
+/** Every cluster the backend returned, in the order it returned them. */
+function ClusterTable({ run, label }: { run: DemoRun; label: string }) {
+  return (
+    <div className="overflow-x-auto">
+      <table className="w-full text-sm">
+        <caption className="sr-only">{`Clusters extracted at this setting — ${label}`}</caption>
+        <ClusterHead />
+        <tbody>
+          {run.clusters.length === 0 && (
+            <tr>
+              <td colSpan={5} className="py-2 text-muted">
+                No cluster passed the threshold: no alert at all here.
+              </td>
             </tr>
-          </thead>
-          <tbody>
-            {run.clusters.length === 0 && (
-              <tr>
-                <td colSpan={5} className="py-2 text-muted">
-                  No cluster passed the threshold: no alert at all here.
-                </td>
-              </tr>
-            )}
-            {run.clusters.map((cluster, index) => (
-              <ClusterRow key={index} cluster={cluster} />
-            ))}
-          </tbody>
-        </table>
-      </div>
-      <LatencyNote run={run} />
+          )}
+          {run.clusters.map((cluster, index) => (
+            <ClusterRow key={index} cluster={cluster} />
+          ))}
+        </tbody>
+      </table>
     </div>
   )
+}
+
+function leadLabel(run: DemoRun | undefined): string {
+  const lead = run?.lead_time
+  if (!run) return '—'
+  if (!lead?.detected || lead.hours_before_deadline === null) return 'not detected'
+  return `${num(lead.hours_before_deadline, 1)} h before the deadline`
+}
+
+interface Line {
+  label: string
+  own: string
+  averaged: string
+  /** Rendered in the colour of a hit when the mode found the campaign. */
+  emphasise?: boolean
+}
+
+/** The two modes on one grid, with the rows that differ marked. */
+function Comparison({ own, averaged }: { own?: DemoRun; averaged?: DemoRun }) {
+  const lines: Line[] = [
+    {
+      label: 'Flagged edges',
+      own: own ? own.n_flagged_edges.toLocaleString() : '—',
+      averaged: averaged ? averaged.n_flagged_edges.toLocaleString() : '—',
+    },
+    {
+      label: 'Alerts raised',
+      own: own ? own.alert_count.toLocaleString() : '—',
+      averaged: averaged ? averaged.alert_count.toLocaleString() : '—',
+    },
+    {
+      label: 'Demo campaign',
+      own: own ? (own.demo_campaign_detected ? 'found' : 'missed') : '—',
+      averaged: averaged
+        ? averaged.demo_campaign_detected
+          ? 'found'
+          : 'missed'
+        : '—',
+      emphasise: true,
+    },
+    {
+      label: 'Best purity',
+      own: pct(own?.best_purity_vs_demo_campaign),
+      averaged: pct(averaged?.best_purity_vs_demo_campaign),
+    },
+    {
+      label: 'Best coverage',
+      own: pct(own?.best_coverage_vs_demo_campaign),
+      averaged: pct(averaged?.best_coverage_vs_demo_campaign),
+    },
+    {
+      label: 'Lead time',
+      own: leadLabel(own),
+      averaged: leadLabel(averaged),
+      emphasise: true,
+    },
+  ]
+
+  return (
+    <table className="w-full text-sm">
+      <caption className="sr-only">
+        The same view scored both ways, with the differing rows marked
+      </caption>
+      <thead>
+        <tr className="text-left text-xs uppercase tracking-wide text-muted">
+          <th className="pb-2 pr-3"> </th>
+          <th className="pb-2 pr-3">{MODE_LABEL.own}</th>
+          <th className="pb-2 pr-3">{MODE_LABEL.averaged}</th>
+        </tr>
+      </thead>
+      <tbody>
+        {lines.map((line) => {
+          const differs = line.own !== line.averaged
+          const cell = (value: string) =>
+            `py-2 pr-3 text-lg font-semibold tabular-nums ${
+              line.emphasise && value === 'found'
+                ? 'text-good'
+                : differs
+                  ? 'text-ink'
+                  : 'text-ink2'
+            }`
+          return (
+            <tr
+              key={line.label}
+              className={`border-t border-grid ${
+                differs ? 'border-l-2 border-l-axis bg-grid/30' : ''
+              }`}
+            >
+              <th
+                scope="row"
+                className="py-2 pl-2 pr-3 text-left align-middle text-xs font-medium uppercase tracking-wide text-muted"
+              >
+                {line.label}
+                {differs && (
+                  <span className="ml-2 normal-case">
+                    <Pill>differs</Pill>
+                  </span>
+                )}
+              </th>
+              <td className={cell(line.own)}>{line.own}</td>
+              <td className={cell(line.averaged)}>{line.averaged}</td>
+            </tr>
+          )
+        })}
+      </tbody>
+    </table>
+  )
+}
+
+/** One mode's own detail: the window it saw, its clusters, its latency. */
+function ModeColumn({
+  mode,
+  query,
+}: {
+  mode: 'own' | 'averaged'
+  query: ReturnType<typeof useDemoRun>
+}) {
+  return (
+    <div className="rounded-lg border border-grid p-3">
+      <h4 className="mb-2 text-sm font-semibold text-ink">{MODE_LABEL[mode]}</h4>
+      {query.isLoading && <LoadingBlock label="Scoring" />}
+      {query.error && <ErrorState error={query.error} />}
+      {query.data && query.data.empty_reason && (
+        <EmptyState title="Nothing to score" description={query.data.empty_reason} />
+      )}
+      {query.data && !query.data.empty_reason && (
+        <>
+          <p className="mb-2 text-xs text-muted">
+            {query.data.n_flagged_edges.toLocaleString()} of{' '}
+            {query.data.n_edges_in_view.toLocaleString()} edges in this view
+            flagged
+            {typeof query.data.n_models_used === 'number' &&
+              ` · ${query.data.n_models_used} model(s)`}
+          </p>
+          <ClusterTable run={query.data} label={MODE_LABEL[mode]} />
+          <div className="mt-2">
+            <LatencyNote run={query.data} />
+          </div>
+        </>
+      )}
+    </div>
+  )
+}
+
+/**
+ * The setting the panel opens on: the first one the bundle lists where the
+ * two modes disagree. Picked by that rule, never by a hard-coded timestamp,
+ * so a rebuilt bundle moves the default with it. `null` when the bundle
+ * offers no such setting - which the page then states outright.
+ */
+function openingSetting(
+  manifest: DemoManifest | undefined,
+): { windowIndex: number; institution: number } | null {
+  const settings = manifest?.suggested_settings ?? []
+  const times = manifest?.detection_times ?? []
+  for (const setting of settings) {
+    const index = times.indexOf(setting.detection_time)
+    if (index >= 0) {
+      return { windowIndex: index, institution: setting.institution }
+    }
+  }
+  return null
+}
+
+/** Whose view to score when neither the viewer nor the bundle has said. */
+function fallbackInstitution(manifest: DemoManifest | undefined): number {
+  const holding = manifest?.demo_campaign?.institutions_holding ?? []
+  const withModel = manifest?.institutions_with_a_model ?? []
+  return holding.find((i) => withModel.includes(i)) ?? withModel[0] ?? 0
 }
 
 export function LiveDemoPage() {
   const manifest = useDemoManifest()
   const aggregate = useDemoAggregate()
-  const [windowIndex, setWindowIndex] = useState(0)
+  /** `null` means "not chosen by the viewer yet", so the opening setting wins. */
+  const [windowIndex, setWindowIndex] = useState<number | null>(null)
   const [institution, setInstitution] = useState<number | null>(null)
-  const [mode, setMode] = useState<'own' | 'averaged'>('own')
   const [point, setPoint] = useState('total_10')
 
-  const detectionTime = manifest.data?.detection_times?.[windowIndex] ?? ''
-  const chosenInstitution = useMemo(() => {
-    if (institution !== null) return institution
-    const holding = manifest.data?.demo_campaign?.institutions_holding ?? []
-    const withModel = manifest.data?.institutions_with_a_model ?? []
-    return holding.find((i) => withModel.includes(i)) ?? withModel[0] ?? 0
-  }, [institution, manifest.data])
+  const opening = openingSetting(manifest.data)
+  const effectiveWindow = windowIndex ?? opening?.windowIndex ?? 0
+  const detectionTime = manifest.data?.detection_times?.[effectiveWindow] ?? ''
+  const chosenInstitution =
+    institution ?? opening?.institution ?? fallbackInstitution(manifest.data)
 
-  const run = useDemoRun({
+  const enabled = Boolean(detectionTime) && manifest.isSuccess
+  const ownRun = useDemoRun({
     detection_time: detectionTime,
     institution: chosenInstitution,
-    mode,
+    mode: 'own',
     operating_point: point,
-    enabled: Boolean(detectionTime) && manifest.isSuccess,
+    enabled,
+  })
+  const averagedRun = useDemoRun({
+    detection_time: detectionTime,
+    institution: chosenInstitution,
+    mode: 'averaged',
+    operating_point: point,
+    enabled,
   })
 
   if (manifest.isLoading) return <LoadingBlock label="Loading the demo bundle" />
@@ -229,18 +360,19 @@ export function LiveDemoPage() {
   }
 
   const m = manifest.data!
-  const windowMeta = m.windows?.[windowIndex]
+  const windowMeta = m.windows?.[effectiveWindow]
 
   return (
     <div className="space-y-6">
       <header className="space-y-2">
         <h1 className="text-2xl font-bold">Live detection panel</h1>
         <p className="max-w-3xl text-sm text-ink2">
-          One detection window, scored on the spot. The toggle switches between
-          an institution scoring with <strong>its own model</strong> and the
-          same view scored by <strong>all {m.k_institutions} models with their
-          scores averaged</strong>. Clusters, matches, purity, coverage, lead
-          time and the alert count are recomputed on every flip.
+          One detection window, scored on the spot — <strong>both ways at
+          once</strong>. The left column is an institution scoring with its{' '}
+          <strong>own model</strong>; the right is the same view scored by{' '}
+          <strong>all {m.k_institutions} models with their scores averaged</strong>.
+          Clusters, matches, purity, coverage, lead time and the alert count are
+          recomputed on every change, and the rows that differ are marked.
         </p>
         {m.development_only && (
           <p className="rounded-md border border-warning/50 p-2 text-xs text-ink2">
@@ -282,8 +414,17 @@ export function LiveDemoPage() {
 
       <ChartCard
         title="Input"
-        howToRead="Pick a window and an institution, then flip the toggle. Everything below is recomputed by the backend on each change."
+        howToRead="Pick a window and an institution. Both scoring modes are recomputed by the backend on every change and shown together below, so the comparison never depends on remembering a previous number."
       >
+        {!opening && (
+          <p className="mb-3 rounded-md border border-warning/50 p-2 text-xs text-ink2">
+            <strong>No setting in this bundle shows the two modes
+            disagreeing.</strong> The panel has opened on the first window
+            instead, so the two columns below may well be identical — that is
+            the bundle, not a failure of the page. Rebuild it with{' '}
+            <code>scripts/make_demo_bundle.py</code> to look for one.
+          </p>
+        )}
         <div className="flex flex-wrap items-end gap-4">
           <label className="text-sm">
             <span className="block text-xs font-semibold uppercase tracking-wide text-muted">
@@ -291,7 +432,7 @@ export function LiveDemoPage() {
             </span>
             <select
               className="mt-1 rounded-md border border-grid bg-surface p-1"
-              value={windowIndex}
+              value={effectiveWindow}
               onChange={(event) => setWindowIndex(Number(event.target.value))}
             >
               {m.detection_times.map((t, index) => (
@@ -343,38 +484,14 @@ export function LiveDemoPage() {
               )}
             </select>
           </label>
-
-          <fieldset className="text-sm">
-            <legend className="block text-xs font-semibold uppercase tracking-wide text-muted">
-              Models
-            </legend>
-            <div
-              className="mt-1 inline-flex rounded-md border border-grid"
-              role="group"
-              aria-label="Scoring mode"
-            >
-              {(['own', 'averaged'] as const).map((value) => (
-                <button
-                  key={value}
-                  type="button"
-                  aria-pressed={mode === value}
-                  onClick={() => setMode(value)}
-                  className={`px-3 py-1 text-sm first:rounded-l-md last:rounded-r-md ${
-                    mode === value
-                      ? 'bg-ink text-surface'
-                      : 'bg-surface text-ink2'
-                  }`}
-                >
-                  {MODE_LABEL[value]}
-                </button>
-              ))}
-            </div>
-          </fieldset>
         </div>
         {m.suggested_settings?.length > 0 && (
           <div className="mt-3 rounded-md border border-grid p-2">
             <p className="text-xs font-semibold">
-              Settings where the toggle changes the answer
+              Settings where the two modes differ
+              <span className="ml-2 font-normal text-muted">
+                (the panel opens on the first)
+              </span>
             </p>
             <ul className="mt-1 space-y-0.5 text-xs text-ink2">
               {m.suggested_settings.map((hint) => (
@@ -386,7 +503,6 @@ export function LiveDemoPage() {
                       const index = m.detection_times.indexOf(hint.detection_time)
                       if (index >= 0) setWindowIndex(index)
                       setInstitution(hint.institution)
-                      setMode('own')
                     }}
                   >
                     {hint.detection_time}, I{hint.institution}
@@ -422,12 +538,21 @@ export function LiveDemoPage() {
       </ChartCard>
 
       <ChartCard
-        title={`Output — ${MODE_LABEL[mode]}`}
-        howToRead="Purity is the share of a cluster's accounts that belong to the demo campaign; coverage is how many of the campaign's accounts the cluster contains. Both come from the frozen matching rule, so they are the same quantities the research results use."
+        title="The same view, scored both ways"
+        howToRead="Purity is the share of a cluster's accounts that belong to the demo campaign; coverage is how many of the campaign's accounts the cluster contains. Both come from the frozen matching rule, so they are the same quantities the research results use. A row is marked 'differs' when the two modes do not agree on it."
       >
-        {run.isLoading && <LoadingBlock label="Scoring" />}
-        {run.error && <ErrorState error={run.error} />}
-        {run.data && <Output run={run.data} />}
+        {(ownRun.isLoading || averagedRun.isLoading) && (
+          <LoadingBlock label="Scoring both ways" />
+        )}
+        {ownRun.error && <ErrorState error={ownRun.error} />}
+        {averagedRun.error && <ErrorState error={averagedRun.error} />}
+        {(ownRun.data || averagedRun.data) && (
+          <Comparison own={ownRun.data} averaged={averagedRun.data} />
+        )}
+        <div className="mt-4 grid gap-4 lg:grid-cols-2">
+          <ModeColumn mode="own" query={ownRun} />
+          <ModeColumn mode="averaged" query={averagedRun} />
+        </div>
       </ChartCard>
 
       <ChartCard
