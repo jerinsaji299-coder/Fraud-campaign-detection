@@ -23,7 +23,7 @@
  * shows an empty state rather than placeholder numbers.
  */
 
-import { useState } from 'react'
+import { useState, type ReactNode } from 'react'
 
 import { ChartCard, InstitutionBadge, Pill } from '../components/cards'
 import { EmptyState, ErrorState, LoadingBlock } from '../components/states'
@@ -41,6 +41,24 @@ const KIND_LABEL: Record<string, string> = {
   other_split_hit: 'matches a campaign from another split',
   ambiguous: 'touches unassigned laundering',
   false_alarm: 'false alarm',
+}
+
+/**
+ * A disclosure for apparatus: how a number was derived, never what it says.
+ *
+ * Qualifications - the development-check warning, "not a representative
+ * result", the disclaimer, the four-way outcome count - are never put in one
+ * of these. Only the derivation is.
+ */
+function Details({ summary, children }: { summary: string; children: ReactNode }) {
+  return (
+    <details className="mt-3 border-t border-grid pt-2">
+      <summary className="cursor-pointer text-xs font-semibold text-muted">
+        {summary}
+      </summary>
+      <div className="mt-2 text-xs leading-relaxed text-muted">{children}</div>
+    </details>
+  )
 }
 
 function pct(value: number | null | undefined): string {
@@ -381,10 +399,7 @@ export function LiveDemoPage() {
         )}
       </header>
 
-      <ChartCard
-        title="Chosen to illustrate the mechanism — not a representative result"
-        howToRead="The campaign below was selected by a fixed rule, stated here in full. It shows what the mechanism does on one campaign. How often it holds is the aggregate table at the bottom of this page, and only that table speaks to typicality."
-      >
+      <ChartCard title="Chosen to illustrate the mechanism — not a representative result">
         <div className="space-y-2 text-sm">
           <p>
             Campaign <strong>{m.demo_campaign.campaign_id}</strong>:{' '}
@@ -395,27 +410,32 @@ export function LiveDemoPage() {
             )}
             .
           </p>
-          <ol className="list-decimal space-y-1 pl-5 text-xs text-ink2">
-            {m.selection_rule.map((step) => (
-              <li key={step}>{step}</li>
-            ))}
-          </ol>
-          <p className="text-xs text-ink2">
-            Chosen at rank {m.selection_audit.rank_chosen ?? '—'} of{' '}
-            {m.selection_audit.n_candidates ?? '—'} candidates,{' '}
-            {m.selection_audit.n_skipped} skipped as unreachable by the
-            centralized oracle.
-          </p>
           {m.selection_disclaimer && (
             <p className="text-xs font-semibold">{m.selection_disclaimer}</p>
           )}
+          <Details summary="How this campaign was selected, and from what">
+            <p className="mb-1">
+              It was selected by a fixed rule, stated here in full. It shows
+              what the mechanism does on one campaign; how often it holds is
+              the aggregate at the bottom of this page, and only that speaks
+              to typicality.
+            </p>
+            <ol className="list-decimal space-y-1 pl-5">
+              {m.selection_rule.map((step) => (
+                <li key={step}>{step}</li>
+              ))}
+            </ol>
+            <p className="mt-2">
+              Chosen at rank {m.selection_audit.rank_chosen ?? '—'} of{' '}
+              {m.selection_audit.n_candidates ?? '—'} candidates,{' '}
+              {m.selection_audit.n_skipped} skipped as unreachable by the
+              centralized oracle.
+            </p>
+          </Details>
         </div>
       </ChartCard>
 
-      <ChartCard
-        title="Input"
-        howToRead="Pick a window and an institution. Both scoring modes are recomputed by the backend on every change and shown together below, so the comparison never depends on remembering a previous number."
-      >
+      <ChartCard title="Input">
         {!opening && (
           <p className="mb-3 rounded-md border border-warning/50 p-2 text-xs text-ink2">
             <strong>No setting in this bundle shows the two modes
@@ -535,12 +555,14 @@ export function LiveDemoPage() {
             {windowMeta.n_campaign_edges} belong to the demo campaign.
           </p>
         )}
+        <Details summary="How to read this">
+          Pick a window and an institution. Both scoring modes are recomputed
+          by the backend on every change and shown together below, so the
+          comparison never depends on remembering a previous number.
+        </Details>
       </ChartCard>
 
-      <ChartCard
-        title="The same view, scored both ways"
-        howToRead="Purity is the share of a cluster's accounts that belong to the demo campaign; coverage is how many of the campaign's accounts the cluster contains. Both come from the frozen matching rule, so they are the same quantities the research results use. A row is marked 'differs' when the two modes do not agree on it."
-      >
+      <ChartCard title="The same view, scored both ways">
         {(ownRun.isLoading || averagedRun.isLoading) && (
           <LoadingBlock label="Scoring both ways" />
         )}
@@ -553,6 +575,13 @@ export function LiveDemoPage() {
           <ModeColumn mode="own" query={ownRun} />
           <ModeColumn mode="averaged" query={averagedRun} />
         </div>
+        <Details summary="How to read this">
+          Purity is the share of a cluster's accounts that belong to the demo
+          campaign; coverage is how many of the campaign's accounts the cluster
+          contains. Both come from the frozen matching rule, so they are the
+          same quantities the research results use. A row is marked{' '}
+          <em>differs</em> when the two modes do not agree on it.
+        </Details>
       </ChartCard>
 
       <ChartCard
