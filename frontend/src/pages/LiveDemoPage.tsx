@@ -36,6 +36,9 @@ const MODE_LABEL: Record<string, string> = {
   averaged: 'All 8 models, scores averaged',
 }
 
+/** How many non-matching clusters to show before the disclosure. */
+const OTHER_CLUSTERS_SHOWN = 3
+
 const KIND_LABEL: Record<string, string> = {
   hit: 'matches a campaign',
   other_split_hit: 'matches a campaign from another split',
@@ -140,8 +143,20 @@ function ClusterHead() {
   )
 }
 
-/** Every cluster the backend returned, in the order it returned them. */
+/**
+ * The clusters, matched ones first.
+ *
+ * Ordering and truncation only - every cluster the backend returned is still
+ * reachable behind the disclosure, and nothing is recomputed here. Twelve
+ * rows of 0% is noise on a projector, and the row that matters is the one
+ * that matched the demo campaign.
+ */
 function ClusterTable({ run, label }: { run: DemoRun; label: string }) {
+  const matched = run.clusters.filter((c) => c.matches_demo_campaign)
+  const others = run.clusters.filter((c) => !c.matches_demo_campaign)
+  const shown = [...matched, ...others.slice(0, OTHER_CLUSTERS_SHOWN)]
+  const hidden = others.slice(OTHER_CLUSTERS_SHOWN)
+
   return (
     <div className="overflow-x-auto">
       <table className="w-full text-sm">
@@ -155,11 +170,29 @@ function ClusterTable({ run, label }: { run: DemoRun; label: string }) {
               </td>
             </tr>
           )}
-          {run.clusters.map((cluster, index) => (
+          {shown.map((cluster, index) => (
             <ClusterRow key={index} cluster={cluster} />
           ))}
         </tbody>
       </table>
+      {hidden.length > 0 && (
+        <details className="mt-2">
+          <summary className="cursor-pointer text-xs font-semibold text-muted">
+            Show all {run.clusters.length} clusters ({hidden.length} more)
+          </summary>
+          <table className="mt-2 w-full text-sm">
+            <caption className="sr-only">
+              {`The remaining clusters — ${label}`}
+            </caption>
+            <ClusterHead />
+            <tbody>
+              {hidden.map((cluster, index) => (
+                <ClusterRow key={index} cluster={cluster} />
+              ))}
+            </tbody>
+          </table>
+        </details>
+      )}
     </div>
   )
 }

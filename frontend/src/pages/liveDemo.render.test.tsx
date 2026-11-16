@@ -316,6 +316,51 @@ describe('LiveDemoPage', () => {
     }
   })
 
+  it('leads with the matched cluster and puts the noise behind a disclosure', async () => {
+    const noise = Array.from({ length: 6 }, (_, i) => ({
+      accounts: [`x${i}`, `y${i}`],
+      n_accounts: 2,
+      kind: 'false_alarm',
+      hit_campaigns: [],
+      matches_demo_campaign: false,
+      vs_demo_campaign: null,
+      institutions: [0],
+    }))
+    const crowded = {
+      ...RUN,
+      // the match is LAST in the backend's order, so leading with it proves
+      // the ordering is the page's doing and not the payload's
+      clusters: [...noise, ...RUN.clusters],
+      n_clusters: 7,
+      alert_count: 7,
+    }
+    stub({
+      '/api/demo/manifest': { status: 200, body: MANIFEST },
+      '/api/demo/run': { status: 200, body: crowded },
+      '/api/demo/aggregate': {
+        status: 200,
+        body: { available: false, reason: 'none', rows: [] },
+      },
+    })
+    renderPage()
+
+    const table = await screen.findByRole('table', {
+      name: /Clusters extracted at this setting . This institution alone/i,
+    })
+    const rows = within(table).getAllByRole('row').slice(1) // drop the header
+    expect(rows).toHaveLength(4) // the match, then three others
+    expect(within(rows[0]).getByText(/demo campaign/i)).toBeInTheDocument()
+
+    // the rest are reachable, not discarded
+    expect(
+      screen.getAllByText(/Show all 7 clusters \(3 more\)/i).length,
+    ).toBeGreaterThan(0)
+    const remaining = screen.getAllByRole('table', {
+      name: /The remaining clusters . This institution alone/i,
+    })
+    expect(within(remaining[0]).getAllByRole('row').slice(1)).toHaveLength(3)
+  })
+
   it('shows both modes at once and marks the rows that differ', async () => {
     stub({
       '/api/demo/manifest': { status: 200, body: MANIFEST },
