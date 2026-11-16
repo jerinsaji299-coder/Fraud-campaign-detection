@@ -155,6 +155,30 @@ export function CampaignDetailPage() {
       ? focusInstitution
       : null
 
+  // `Number('abc')` is NaN, so the query above is disabled and never
+  // resolves: without this the main panel renders empty, with no message.
+  if (!Number.isFinite(id)) {
+    return (
+      <EmptyState
+        title="Not a campaign id"
+        description={
+          <>
+            <span className="font-mono">{campaignId}</span> is not a number.
+            Campaign ids are whole numbers &mdash; open one from the list.
+          </>
+        }
+        action={
+          <Link
+            to="/campaigns"
+            className="text-sm font-medium text-ink underline underline-offset-2"
+          >
+            All campaigns
+          </Link>
+        }
+      />
+    )
+  }
+
   if (detail.isLoading) return <LoadingBlock label="Loading campaign" />
   if (detail.error) return <ErrorState error={detail.error} />
   if (!detail.data) return null

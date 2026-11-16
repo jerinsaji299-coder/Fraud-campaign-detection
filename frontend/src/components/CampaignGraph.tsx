@@ -101,7 +101,6 @@ export function CampaignGraph({
           style: {
             width: 30,
             height: 30,
-            label: 'data(institutionLabel)',
             'font-size': 10,
             'font-weight': 600,
             'text-valign': 'center',
@@ -110,6 +109,16 @@ export function CampaignGraph({
             'text-outline-width': 2,
             'border-width': 2,
           },
+        },
+        {
+          // Scoped on purpose. `institutionLabel` is written by the colour
+          // effect below, which runs after construction, and an unscoped
+          // `label: data(institutionLabel)` makes cytoscape warn once per
+          // node in the gap - 208 warnings on campaign 241 alone. Scoping the
+          // mapper to elements that have the field is what cytoscape's own
+          // warning recommends, and the labels appear exactly as before.
+          selector: 'node[institutionLabel]',
+          style: { label: 'data(institutionLabel)' },
         },
         {
           selector: 'node:selected',

@@ -25,6 +25,22 @@ export class ApiError extends Error {
   }
 }
 
+/** How long a request may hang before it counts as unreachable.
+ *
+ * A backend that accepts the connection and then never answers - a wedged
+ * worker left over from an earlier session, for instance - leaves `fetch`
+ * pending forever, so the status chip sits on "Checking API" and no page ever
+ * gets an error to show. A deadline turns that silence into the same honest
+ * failure a refused connection already produces. */
+export const REQUEST_TIMEOUT_MS = 20_000
+
+function timeoutSignal(ms: number): AbortSignal | undefined {
+  return typeof AbortSignal !== 'undefined' &&
+    typeof AbortSignal.timeout === 'function'
+    ? AbortSignal.timeout(ms)
+    : undefined
+}
+
 export function buildQuery(params: Record<string, unknown> | undefined): string {
   if (!params) return ''
   const search = new URLSearchParams()
@@ -42,7 +58,9 @@ export async function apiGet<T>(
 ): Promise<T> {
   let response: Response
   try {
-    response = await fetch(`${API_BASE}${path}${buildQuery(params)}`)
+    response = await fetch(`${API_BASE}${path}${buildQuery(params)}`, {
+      signal: timeoutSignal(REQUEST_TIMEOUT_MS),
+    })
   } catch {
     throw new ApiError(
       0,

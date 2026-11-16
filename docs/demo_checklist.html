@@ -89,7 +89,7 @@
 
 <header>
   <h1>Faculty demo &mdash; run sheet</h1>
-  <p class="sub">Fraud campaign discovery from fragmented cross-institution evidence &middot; ~10 minutes &middot; campaigns <strong>211</strong>, <strong>241</strong>, <strong>219</strong></p>
+  <p class="sub">Fraud campaign discovery from fragmented cross-institution evidence &middot; ~12 minutes &middot; campaigns <strong>211</strong>, <strong>241</strong>, <strong>219</strong></p>
   <div class="bar">
     <button onclick="document.documentElement.dataset.theme=(document.documentElement.dataset.theme==='dark'?'light':'dark')">Toggle theme</button>
     <button onclick="document.querySelectorAll('.tick').forEach(t=>{t.checked=false;t.dispatchEvent(new Event('change'))})">Reset ticks</button>
@@ -99,28 +99,60 @@
 
 <h2>Start both servers</h2>
 
-<div class="panel warnbox">
-  <strong>First, kill any backend left running from an earlier session.</strong>
-  Artifacts are read <em>once at startup</em> and cached, and <code>--reload</code> restarts on code
-  changes only &mdash; never on data. A stale process serves whatever it loaded whenever it started.
+<div class="panel badbox">
+  <strong>This is what went wrong on 2026-11-15, so do step 0 even if you think nothing is running.</strong>
+  A <code>uvicorn --reload</code> worker from three days earlier still held port 8000. It
+  <em>accepted</em> connections and never answered them, so the browser got no error at all:
+  the chip sat on &ldquo;Checking API&rdquo; forever and every page stayed on its loading state.
+  Killing it and starting a fresh backend fixed it completely &mdash; nothing else was wrong.
+  <br><br>
+  The frontend now gives up on a silent backend after <b>20 s</b> and shows
+  <b>&ldquo;API unreachable&rdquo;</b> instead of hanging, so the same failure is at least visible.
+  Step 0 still prevents it.
 </div>
 
-<pre><span class="c"># 0. clear port 8000</span>
-netstat -ano | findstr ":8000"      <span class="c"># note the PID in the last column</span>
-taskkill /PID &lt;pid&gt; /F</pre>
+<pre><span class="c"># 0. clear port 8000 — run this every time  (~10 s)</span>
+netstat -ano | findstr "LISTENING" | findstr ":8000"
+<span class="c"># → prints a line ending in a PID, or nothing at all (nothing = good, skip the kill)</span>
+taskkill /PID &lt;pid&gt; /T /F
+<span class="c"># → "SUCCESS: The process with PID &lt;pid&gt; ... has been terminated."</span>
+<span class="c">#   /T matters: --reload runs a parent and a child, and the child holds the socket.</span></pre>
 
-<pre><span class="c"># Terminal 1 — backend</span>
+<pre><span class="c"># Terminal 1 — backend  (~15 s to "Application startup complete")</span>
 cd "C:\Users\ASUS\Downloads\FRAUD CAMPAIGN DETECTION PROJECT\backend"
-python -m uvicorn app.main:app --reload --port 8000</pre>
-
-<pre><span class="c"># Terminal 2 — frontend</span>
-cd "C:\Users\ASUS\Downloads\FRAUD CAMPAIGN DETECTION PROJECT\frontend"
-npm run dev</pre>
+python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
+<span class="c"># → INFO:     Started server process [nnnnn]</span>
+<span class="c"># → INFO:     Waiting for application startup.</span>
+<span class="c"># → INFO:     Application startup complete.</span>
+<span class="c"># → INFO:     Uvicorn running on http://127.0.0.1:8000 (Press CTRL+C to quit)</span></pre>
 
 <p class="expect">
-  The frontend hard-defaults to <code>http://localhost:8000</code>, so the backend
-  <b>must</b> be on port 8000. No <code>.env</code> is needed. App opens at
-  <code>http://localhost:5173</code>.
+  <b>No <code>--reload</code> for the demo.</b> It reloads on code changes, which will not happen
+  during the talk, and the reloader is what wedged on the 15th. Plain uvicorn has nothing to wedge.
+</p>
+
+<pre><span class="c"># Terminal 2 — frontend  (~5 s to "ready in")</span>
+cd "C:\Users\ASUS\Downloads\FRAUD CAMPAIGN DETECTION PROJECT\frontend"
+npm run dev
+<span class="c"># →   VITE v8.3.3  ready in nnnn ms</span>
+<span class="c"># →   ➜  Local:   http://localhost:5173/</span></pre>
+
+<pre><span class="c"># 3. confirm the backend answers BEFORE opening the browser  (~5 s)</span>
+curl -s -m 5 http://127.0.0.1:8000/api/health
+<span class="c"># → {"status":"ok", ... "core_artifacts_available":true, ... "nested_artifacts_dir":null, "hint":null}</span>
+<span class="c">#   If this hangs instead of printing, the backend is wedged: go back to step 0.</span></pre>
+
+<p class="expect">
+  <b>Open <code>http://localhost:5173</code>, not <code>http://127.0.0.1:5173</code>.</b>
+  Vite binds the IPv6 loopback only, so the 127.0.0.1 spelling refuses the connection and you get
+  a blank browser error page with both servers running perfectly. (Use
+  <code>npm run dev -- --host 127.0.0.1</code> if you want that spelling to work.)
+  The frontend hard-defaults to <code>http://localhost:8000</code> for the API, so the backend
+  <b>must</b> be on port 8000. No <code>.env</code> is needed.
+</p>
+
+<p class="expect">
+  Total cold start: <b>about a minute</b>, almost all of it typing.
 </p>
 
 <h2>Campaign quick reference <span class="pill">seed 0</span></h2>
@@ -142,17 +174,21 @@ which invites a leakage question mid-demo.</p>
 
 <h2>The checklist</h2>
 
+<p class="expect">Eleven steps, <b>~12 minutes</b> at a talking pace. The timings are the
+step itself, not the talking. Tick state is saved in this browser, so hit
+<b>Reset ticks</b> before the real run.</p>
+
 <ol class="steps">
 
   <li><input type="checkbox" class="tick" aria-label="step done">
-    <div class="do"><span class="route">http://localhost:8000/api/health</span></div>
+    <div class="do"><span class="route">http://localhost:8000/api/health</span> <span class="pill">~15 s</span></div>
     <p class="expect">Expect <b><code>core_artifacts_available: true</code></b> and
     <b><code>nested_artifacts_dir: null</code></b>. Then open the app &mdash; top-right chip must read
     <b>&ldquo;API ready&rdquo;</b> (green).</p>
   </li>
 
   <li><input type="checkbox" class="tick" aria-label="step done">
-    <div class="do"><span class="route">/dataset</span></div>
+    <div class="do"><span class="route">/dataset</span> <span class="pill">~60 s</span></div>
     <p class="expect">Four cards: <b>5,078,345</b> transactions &middot; <b>30,470</b> banks &middot;
     <b>370</b> campaigns &middot; <b>258</b> evaluable, with &ldquo;3,209 transactions&rdquo; and
     &ldquo;152 can be fragmented&rdquo;. The transactions-per-day chart shows a dashed
@@ -160,14 +196,14 @@ which invites a leakage question mid-demo.</p>
   </li>
 
   <li><input type="checkbox" class="tick" aria-label="step done">
-    <div class="do"><span class="route">/campaigns</span> &mdash; filter, then clear</div>
+    <div class="do"><span class="route">/campaigns</span> &mdash; filter, then clear <span class="pill">~60 s</span></div>
     <p class="expect"><b>25 rows</b> by default. Set <b>Pattern = BIPARTITE</b> and
     <b>Split = Test</b>: removable chips appear and the live count drops. Clear both.
     <span class="pill">rows open on click or Enter</span></p>
   </li>
 
   <li><input type="checkbox" class="tick" aria-label="step done">
-    <div class="do"><span class="route">/campaigns/211</span> &mdash; the hub control</div>
+    <div class="do"><span class="route">/campaigns/211</span> &mdash; the hub control <span class="pill">~90 s</span></div>
     <p class="expect">A <b>clean star with the hub account dead centre</b>. Sidebar: Group
     <b>Hub</b>. Now set <b>View = Target 25% visibility</b> &mdash; the badge must <b>stay
     100% / bin 100%</b> and show the note &ldquo;never reassigned (hub-shaped or too
@@ -175,7 +211,7 @@ which invites a leakage question mid-demo.</p>
   </li>
 
   <li><input type="checkbox" class="tick" aria-label="step done">
-    <div class="do"><span class="route">/campaigns/241</span> &mdash; the structural blind spot</div>
+    <div class="do"><span class="route">/campaigns/241</span> &mdash; the structural blind spot <span class="pill">~90 s</span></div>
     <p class="expect">Renders as <b>13 separate sender&rarr;receiver pairs</b>, nothing joined to
     anything else. Sidebar: Evaluated <b>Yes</b>, Finished before cutoff <b>Yes</b>.
     <em>Say: the matching rule needs 3 connected accounts; this campaign never connects
@@ -184,21 +220,21 @@ which invites a leakage question mid-demo.</p>
   </li>
 
   <li><input type="checkbox" class="tick" aria-label="step done">
-    <div class="do">Still on <span class="route">/campaigns/241</span> &mdash; step the View control</div>
+    <div class="do">Still on <span class="route">/campaigns/241</span> &mdash; step the View control <span class="pill">~60 s</span></div>
     <p class="expect">Target 100 &rarr; 75 &rarr; 50 &rarr; 25 gives badges
     <b>100% (bin 100%)</b> &rarr; <b>77% (bin 75%)</b> &rarr; <b>46% (bin 50%)</b> &rarr;
     <b>23% (bin Low)</b>. <em>The whole dose&ndash;response in one control.</em></p>
   </li>
 
   <li><input type="checkbox" class="tick" aria-label="step done">
-    <div class="do">Still on <span class="route">/campaigns/241</span> &mdash; bank&rsquo;s-eye view</div>
+    <div class="do">Still on <span class="route">/campaigns/241</span> &mdash; bank&rsquo;s-eye view <span class="pill">~60 s</span></div>
     <p class="expect">Click bank tab <b>I0</b>, then one or two others. The header reads
     <b>&ldquo;This bank sees N of 13 transactions&rdquo;</b> and everything that bank cannot see
     <b>fades out</b>. At target 25% the best bank sees <b>3 of 13</b>.</p>
   </li>
 
   <li><input type="checkbox" class="tick" aria-label="step done">
-    <div class="do"><span class="route">/campaigns/219</span> &mdash; time replay</div>
+    <div class="do"><span class="route">/campaigns/219</span> &mdash; time replay <span class="pill">~75 s</span></div>
     <p class="expect">Press <b>Play</b>: transactions appear one at a time, the counter runs
     <b>&ldquo;Showing k of 7&rdquo;</b>, and it stops at the end. Press <b>Show all</b>.
     Drag a node, then press <b>Reset view</b>. The deadline and cutoff marks sit on the
@@ -206,16 +242,48 @@ which invites a leakage question mid-demo.</p>
   </li>
 
   <li><input type="checkbox" class="tick" aria-label="step done">
-    <div class="do"><span class="route">/visibility</span> &mdash; the toy, then the real data</div>
+    <div class="do"><span class="route">/visibility</span> &mdash; the toy, then the real data <span class="pill">~90 s</span></div>
     <p class="expect">Drag or click accounts between Bank I0 / I1 / I2 and watch the
-    percentage recompute live. Then the real figures below:
+    percentage recompute live. <b>Move at least two accounts to two different banks before you
+    expect the number to drop</b> &mdash; one account moved out of a six-account ring still
+    leaves bank I0 touching every transaction, so it correctly stays at 100% and looks stuck.
+    Moving C and D to I1 and E and F to I2 walks it
+    <b>100% &rarr; 83% &rarr; 67% &rarr; 50% (bin 50%)</b>, &ldquo;3 of 6 transactions&rdquo;.
+    Then the real figures below:
     <b>152</b> fragmented &middot; <b>219</b> landed in bin 100 &middot;
     <b>2</b> unfragmentable. <em>This is the only number on the whole site the frontend
     computes itself &mdash; and only for the scenario you just invented.</em></p>
   </li>
 
   <li><input type="checkbox" class="tick" aria-label="step done">
-    <div class="do"><span class="route">/results</span>, then <span class="route">/methodology</span>, then the theme toggle</div>
+    <div class="do"><span class="route">/live</span> &mdash; the live panel <span class="pill">~90 s</span></div>
+    <p class="expect">The page loads in about a second. Under <b>Settings where the toggle
+    changes the answer</b>, click <b>2022-09-08 06:00:00, I4</b> &mdash; do not demo the default
+    window, which misses in both modes and shows nothing.
+    <br>With <b>This institution alone</b>: 138 flagged edges, <b>17</b> alerts,
+    demo campaign <b class="bad">missed</b>, purity <b>0%</b>.
+    <br>Click <b>All 8 models, scores averaged</b>: 158 flagged, <b>20</b> alerts,
+    demo campaign <b class="ok">found</b>, purity <b>100%</b>, coverage <b>14%</b>,
+    and a lead time of <b>66.0 h before the deadline</b>. Measured end to end at
+    <b>~530 ms</b>; the page prints its own recompute time underneath.
+    <br><em>Then read the honesty line yourself before anyone asks: over all 64 settings
+    offered, both modes find it in 4, averaging only in 2, own model only in 0,
+    <b>neither in 58</b>.</em></p>
+    <div class="panel warnbox" style="margin-top:8px">
+      <b>Two things to say out loud on this page.</b>
+      (1) Every number here is computed from a bundle built on the <b>1% sample</b>, so it is a
+      <b>development check, not a result</b> &mdash; the page says so at the top, but it says
+      &ldquo;if&rdquo;, and the answer is yes.
+      (2) The <b>&ldquo;And how often does it hold?&rdquo;</b> card at the bottom shows an empty
+      state reading <em>&ldquo;Could not reach the API&rdquo;</em>. The backend is fine; that
+      endpoint returns a 500 on a NaN. <b>Known, unfixed by choice</b> &mdash; fixing it would put
+      1%-sample numbers under a heading that reads like a result. Scroll past it, or say
+      &ldquo;the aggregate comes from the full run, which has not finished&rdquo;.
+    </div>
+  </li>
+
+  <li><input type="checkbox" class="tick" aria-label="step done">
+    <div class="do"><span class="route">/results</span>, then <span class="route">/methodology</span>, then the theme toggle <span class="pill">~60 s</span></div>
     <p class="expect">Results: <b>&ldquo;Experiment results are not available yet&rdquo;</b>, the four
     conditions legend, five outlined figures, and <b>no numbers at all</b>.
     Methodology: <b>10</b> definition cards, each with its reason and values.
@@ -242,6 +310,20 @@ which invites a leakage question mid-demo.</p>
 <p class="expect">Lead the topology story with <b>211</b> (a genuinely perfect star) and
 <b>241</b> (13 visibly isolated pairs). Both carry the point without needing the ring.</p>
 
+<div class="panel warnbox">
+  <p style="margin:0 0 6px"><strong>If a faculty member reads a number off the screen, this is
+  where each one comes from.</strong></p>
+  <p style="margin:0 0 6px">Home, Dataset, Campaigns, Campaign detail and the lower half of
+  Visibility Lab are all served from <code>backend/artifacts/</code>, which was produced from the
+  <b>full</b> IBM HI-Small dataset on Kaggle (5,078,345 transactions). Those are real figures.</p>
+  <p style="margin:0 0 6px">The <b>top half of Visibility Lab</b> is the only number the frontend
+  computes itself, and only for the scenario the viewer just invented.</p>
+  <p class="dont" style="margin:0"><b>Every number on <code>/live</code> is from the 1% sample</b>
+  &mdash; 53,960 transactions, not 5 million. Say &ldquo;development check&rdquo;, never
+  &ldquo;result&rdquo;. The Results page is deliberately empty because the full Phase 4 run is not
+  finished; nothing on screen is a Phase 4 result.</p>
+</div>
+
 <h2>If something goes wrong</h2>
 
 <table>
@@ -253,18 +335,35 @@ which invites a leakage question mid-demo.</p>
         <td>Read its <code>hint</code> field: it detects artifacts extracted one folder too deep. Fix the folder, then <b>restart the server</b> &mdash; artifacts are cached at startup.</td></tr>
     <tr><td>A campaign page shows <b>&ldquo;Could not load this view&rdquo;</b></td>
         <td>That id does not exist (valid ids are <b>0&ndash;369</b>). Expected behaviour, not a crash.</td></tr>
-    <tr><td>The main panel is <b>blank</b> with the sidebar still showing</td>
-        <td>A non-numeric id was typed in the URL, e.g. <code>/campaigns/abc</code>. Navigate to a real campaign. <span class="pill">known, cosmetic</span></td></tr>
+    <tr><td>Chip stuck on <b>&ldquo;Checking API&rdquo;</b>, pages stuck on loading</td>
+        <td><b>This is the 2026-11-15 failure.</b> A stale backend is holding port 8000 and
+        answering nothing. It now resolves itself to &ldquo;API unreachable&rdquo; after 20 s.
+        Fix: <code>netstat -ano | findstr ":8000"</code>, <code>taskkill /PID &lt;pid&gt; /T /F</code>,
+        restart Terminal 1. No browser reload needed &mdash; the pages recover on their own.</td></tr>
+    <tr><td>Browser shows <b>&ldquo;can&rsquo;t reach this page&rdquo;</b> at the app itself</td>
+        <td>You typed <code>127.0.0.1:5173</code>. Vite listens on the IPv6 loopback only.
+        Use <code>http://localhost:5173</code>.</td></tr>
+    <tr><td>Live panel: <b>&ldquo;No aggregate figures yet&rdquo;</b> at the bottom</td>
+        <td>Expected. <code>/api/demo/aggregate</code> returns 500 on a NaN and the error carries no
+        CORS header, so the browser reports it as unreachable. Everything above it on the page is
+        live and correct. <span class="pill">known, left alone deliberately</span></td></tr>
+    <tr><td>A campaign URL with a <b>non-numeric id</b>, e.g. <code>/campaigns/abc</code></td>
+        <td>Now says &ldquo;Not a campaign id&rdquo; with a link back to the list.
+        <span class="pill">fixed 2026-11-16</span></td></tr>
     <tr><td>Results page says &ldquo;Could not check for results&rdquo;</td>
         <td>Backend unreachable. It is deliberately <em>not</em> claiming results are missing &mdash; only that it cannot tell.</td></tr>
   </tbody>
 </table>
 
 <footer>
-  Verified 2026-11-14 against the real artifacts (370 campaigns, 258 eval_ok, 5 visibility
-  seeds, all digests matching). Every page rendered in Chrome with no exceptions; heaviest
-  campaign reached first render in 198&nbsp;ms. Expected values above come from
-  <code>backend/artifacts/</code> and <code>docs/reference/oracle_diagnose.csv</code>, not from this page.
+  Re-verified <b>2026-11-16</b>: every step above was walked end to end in headless Chrome
+  against a live backend, and every expected value on this page was read back out of the rendered
+  DOM and checked against the API. <b>Zero uncaught exceptions and zero console warnings</b> on
+  every path, including the three campaign graphs (270 Cytoscape warnings were fixed that day).
+  &ldquo;This bank sees X of Y&rdquo; was compared against the API&rsquo;s <code>n_visible</code>
+  for all 8 banks of all 3 campaigns at target 25%: <b>23 of 23 agree</b>. The live panel toggle
+  was measured at ~530&nbsp;ms. Expected values come from <code>backend/artifacts/</code> and
+  <code>docs/reference/oracle_diagnose.csv</code>, not from this page.
 </footer>
 
 </div>

@@ -3611,6 +3611,8 @@ rather than the run.
 
 | Date | Decision | Reason | Evidence |
 |---|---|---|---|
+| 2026-11-16 | **The demo failure of 2026-11-15 was a stale backend, not a code defect — and four demo-readiness fixes were applied, all of them unable to change a number** | A `uvicorn --reload` worker started 2026-11-13 still held `127.0.0.1:8000`: 24 MB resident and ~36 CPU-hours burnt, accepting connections and answering none. `fetch` had no deadline, so the status chip sat on "Checking API" forever with no error to render. Killing it and starting a clean backend restored everything; `/api/health` then answered in 90 ms with `core_artifacts_available: true`. Fixed with it: a 20 s request deadline (verified against a listener that accepts and never answers — the chip now reaches "API unreachable" in 21.6 s instead of never), the page `<title>` (was `frontend`), 270 Cytoscape `institutionLabel` warnings (scoped the mapper to `node[institutionLabel]`, which is what the warning itself recommends), and the blank panel on `/campaigns/abc`. Each is an error path or a label; none can change a displayed figure | §[Testing](#testing) 2026-11-16 walk; `docs/demo_checklist.html`; `frontend/src/api/client.ts` `REQUEST_TIMEOUT_MS` |
+| 2026-11-16 | **NOT fixed before the demo, deliberately: the `/api/demo/aggregate` 500, and the CYCLE ring layout** | Both are real defects, and both change **what the demo shows** rather than whether it runs. Repairing the 500 would make a table of **1% sample** differences appear under the heading "And how often does it hold?" beside a live panel — inventing the appearance of an aggregate result is precisely what the frontend rule forbids, and the empty state it currently falls back to is the honest display. Re-laying out the cycle would invalidate the "say this, not that" guidance the run sheet is built around, the night before it is used. Both are recorded with their repair, and both are the user's call | §[Known limitations](#known-limitations-and-open-questions) |
 | 2026-11-16 | **DECIDED, and it changes a pre-registered stop condition: a low-edge F1 tau is RECORDED at the floor tau, flagged `tau_at_low_edge`, and kept in the pooled means.** Approved explicitly by the user. `--stop-on-low-edge-tau` restores the old behaviour; `--allow-low-edge-tau` is accepted and ignored. Rejected: **(b)** extending `MODEL_TAU_GRID` downward, **(c)** treating it as undefined, **(d)** keeping the stop | The pre-registered rule stopped because a low edge "means something is wrong with the training data, the weighting or the grid" — a suspected **bug**. The mechanism is not one: campaign F1 needs a cluster reaching 3 of a campaign's accounts at 50% purity, an institution's own ceiling at target 1.0 is 0.139, so at any selective threshold it detects nothing, F1 is ~0 across the whole grid, and the floor is the only place detection happens at all. The policy had generalised from the **dataset's** 0.102% prevalence to a **per-institution detector's** optimum, which depends on reach instead. Recorded rather than excluded because **(c) would drop exactly the starved institutions that demonstrate what fragmentation costs, raising the isolated floor** — the one arm that must not be flattered, since every Phase 4 comparison is measured against it. A lone bank with a ceiling of 0.139 cannot do that job, and its weak number is the finding, not an error. **(b)** touches a frozen definition and would re-run all 12 cells, so it is a follow-up study; **(d)** would leave the isolated arm unmeasurable at target 1.0 | §[DECIDED: a low-edge F1 tau is recorded and flagged](#decided-a-low-edge-f1-tau-is-recorded-and-flagged--2026-11-16); `LOW_EDGE_POLICY` in `kaggle_runner.py`; `test_a_low_edge_f1_tau_is_recorded_under_the_2026_11_16_policy` |
 | 2026-11-16 | **Required with the recording policy: `f1_best_value` and `f1_degenerate` on every (institution, cell), with the epsilon fixed at 0.01 before any cell ran.** Every pooled, union and comparison row carries `n_f1_degenerate`. The primary operating points are **unchanged** — `f1` and `total_10` stand as designated | Recording a floor tau is only honest beside the value at it. When campaign F1 is ~0 at every threshold the argmax is settled by the deterministic tie-break in `best_tau`, not by the data, and the floor tau is not an optimum — a reader must be told which cells are in that regime. The epsilon is 0.01 rather than exactly 0 because a curve flat at 0.004 is in the same regime as one flat at 0.0, and it is fixed **in advance** so it can never be chosen after seeing which cells it would catch. The count travels with every pooled figure for the same reason the binding-budget count does: a mean mixing flat-curve cells with real-maximum cells is not one quantity. **The flag must not select the comparison point** — `f1`/`total_10` were justified independently in stage 4.1, and letting a degeneracy count move them would make the choice post hoc | `isolated.F1_DEGENERATE_EPSILON`; `degenerate_summary`; `test_the_degeneracy_epsilon_is_fixed_and_its_boundary_is_inclusive`; `test_f1_best_value_is_the_value_at_the_chosen_tau` |
 | 2026-11-16 | **`t100_s0` and `t100_s1` are BACKFILLED, not re-run**, by `kaggle_runner.py backfill-f1-value`. A decision taken before assembly, not discovered at it | The value is already implicit in each cell's `_summary.csv`: the validation row at the `f1` point was evaluated **at the chosen tau**, so its precision and recall are those at the argmax and campaign F1 is `2PR/(P+R)` of them, which is exactly what `select_tau` maximises. Verified against the measured curves over all 32 (cell, institution) pairs of the 1% sample dry run — the only place both the curve and the row are on disk — agreeing to **≤2.22e-16**, one ULP. Not bit-exact, because the per-cell CSV stores precision and recall at 16 significant digits; immaterial against an epsilon of 0.01 and figures reported to three decimals. A re-run would cost ~1.5 h and change nothing but the 16th digit. The one unrecoverable pair, `t100_s0` institution 0, had its F1 point rejected at the grid top so no validation run exists at that tau — it is `None`, never 0, and was already excluded from every pooled mean | §[`t100_s0` and `t100_s1` do not need re-running](#t100_s0-and-t100_s1-do-not-need-re-running--the-value-is-backfillable); `command_backfill_f1_value`; `test_the_backfill_identity_holds_for_the_f1_point_on_validation` |
@@ -4299,10 +4301,13 @@ project-root/
   .gitignore                       data/, artifacts/ contents, node_modules, .venv, __pycache__, .env
   docs/
     PROJECT_OVERVIEW.md           readable summary of the whole project + improvement roadmap
-    demo_checklist.html           standalone run sheet for a live demo: startup commands,
-                                    a 10-step browser checklist with the expected value at
-                                    each step, and the campaigns to show. No dependencies,
-                                    no network, opens from the filesystem
+    demo_checklist.html           standalone run sheet for a live demo: cold-start commands
+                                    with the output each one prints, an 11-step browser
+                                    checklist with the expected value and a rough duration at
+                                    each step, the live-panel click path, where every number
+                                    on screen comes from, and an 8-row "if something goes
+                                    wrong" table. No dependencies, no network, opens from the
+                                    filesystem
     reference/
       01_data_verification.ipynb   read-only: verified Kaggle exploration behind every definition above
       verify_report.md             stage 3.0 Kaggle run: all 24 regression numbers
@@ -5278,6 +5283,20 @@ dataset: it reads the bundle `scripts/make_demo_bundle.py` wrote.
   an aggregate is a state to report, because the panel's aggregate section
   ships whether or not the numbers exist.
 
+> **`aggregate` currently returns 500, and that is recorded rather than
+> fixed — 2026-11-16.** `phase4_compare.csv` carries NaN in some columns,
+> `to_dict("records")` passes them through, and `json.dumps` refuses them:
+> `ValueError: Out of range float values are not JSON compliant: nan`. The
+> error response is produced *outside* `CORSMiddleware`, so it carries no
+> `Access-Control-Allow-Origin` header and the browser reports it as a CORS
+> failure, which makes the page say "Could not reach the API" while the
+> backend is perfectly healthy. The panel degrades to its empty state, so
+> nothing false is displayed. It is left alone deliberately until after the
+> faculty demo: the only comparison artifact on disk is the **1% sample** dry
+> run, so repairing the endpoint would put development numbers under a
+> heading that reads "And how often does it hold?". See
+> §[Known limitations](#known-limitations-and-open-questions).
+
 `manifest` and `run` 404 with the command to build the bundle when it is
 absent, so the page shows an empty state rather than placeholder numbers.
 
@@ -5324,6 +5343,7 @@ degree), and `breadthfirst` for chains, bipartite and random patterns.
 | Campaign Explorer | `/campaigns` | Searchable, filterable, sortable, paginated table with removable filter chips and a live result count; rows open a campaign | done |
 | Campaign Detail | `/campaigns/:id` | The demo centrepiece. Interactive Cytoscape graph (accounts as nodes labelled by institution, transactions as directed arrows, hover for amount/time, drag/zoom/pan, click a node for its details); time replay with play/pause and deadline + cutoff marks; visibility controls (seed, and either the natural bank split or a target) with the achieved-visibility and bin badge; bank's-eye-view tabs that fade everything the selected bank cannot see and report "this bank sees X of Y"; a detection panel that is an explicit empty state until Phase 5; and a metadata sidebar explaining every flag in plain language | done |
 | Visibility Lab | `/visibility` | A sandbox where accounts of a fan-out and a cycle are dragged (or clicked) between three bank zones while visibility updates live, then the real achieved-visibility histogram per target, bins per group, and the unfragmentable count | done |
+| Live panel | `/live` | The demo centrepiece for the mechanism. One detection window scored on the spot: pick a window, an institution and an operating point, then flip **own model** / **all 8 models averaged** and watch the flagged edges, clusters, purity, coverage, lead time and alert count recompute. Carries its own "chosen to illustrate, not representative" disclaimer, the selection rule verbatim, and the four-way count over every offered setting so it cannot be read as "averaging always helps" | done; **every number on it is from the 1% sample** |
 | Results | `/results` | Empty state plus labelled outlines of all five planned figures, each with a "how to read this" note and no numbers at all; the condition legend with its fixed colours and dash patterns | done |
 | Methodology | `/methodology` | `/api/methodology` rendered as cards: each definition, the reason for it, and its machine-readable values | done |
 
@@ -5777,8 +5797,9 @@ campaign_id)`:
   skipped, 0 failed. The skips are the full-data suite, which needs the
   dataset that only exists on Kaggle; all 24 of its numbers passed there on
   2026-10-08/09.
-- Frontend: `npm run test` from `frontend/` → 48 passed, 0 failed.
-  `npm run build` (tsc + bundle) and `npm run lint` both clean.
+- Frontend: `npm run test` from `frontend/` → **52 passed**, 0 failed.
+  `npm run build` (tsc + bundle) and `npm run lint` both clean
+  (re-checked 2026-11-16, after the demo-readiness fixes).
 
 **Browser verification (2026-11-14).** The pages have now been opened in a
 real browser — headless Chrome driven over the DevTools protocol, which needs
@@ -5805,11 +5826,51 @@ was checked, and what it found:
   not reach the API at http://localhost:8000" on every page within ~150 ms with
   the status chip reading "API unreachable", the results 404 gives the empty
   state, and a slow API shows "Loading campaign...".
-- **Two defects found**, both recorded under
-  §[Known limitations](#known-limitations-and-open-questions): a CYCLE does not
-  read as a ring, and a non-numeric id in the URL (`/campaigns/abc`) leaves the
-  main panel empty with no message, because `Number('abc')` is `NaN`, the query
-  is disabled, and `CampaignDetailPage` returns `null`.
+- **Two defects found.** A CYCLE does not read as a ring — still open, and
+  still recorded under
+  §[Known limitations](#known-limitations-and-open-questions). A non-numeric id
+  in the URL (`/campaigns/abc`) left the main panel empty with no message,
+  because `Number('abc')` is `NaN`, the query is disabled, and
+  `CampaignDetailPage` returned `null` — **fixed 2026-11-16**, it now renders
+  "Not a campaign id" with a link back to the list.
+
+**Browser verification (2026-11-16), the demo-readiness walk.** The whole
+faculty demo was walked end to end in headless Chrome over CDP against a live
+backend, and every expected value was read back out of the rendered DOM and
+compared with the API rather than inspected in the source.
+
+- **Zero uncaught exceptions on every path**, and after the fixes below,
+  **zero console warnings of any kind** (270 before: Cytoscape's
+  `institutionLabel` mapper, 34 on campaign 211, 28 on 219, 208 on 241).
+- The three demo campaigns render: 211 (17 accounts, 16 transactions),
+  241 (26, 13), 219 (7, 7) — graph aria-labels and canvas sizes checked, and
+  the hub of 211 seen centred in a screenshot with every node labelled.
+- The visibility control changes what is displayed, at every target and on
+  every campaign: 241 steps 100% → 77% → 46% → 23% (bins 100/75/50/low) and
+  219 steps 100% → 71% → 57% → 29%, each matching
+  `/api/campaigns/{id}/visibility` exactly. 211 stays 100% at every target and
+  shows the "never reassigned" note, as the control must.
+- **"This bank sees X of Y" agrees with the API's `n_visible` on 23 of 23
+  bank-campaign pairs** at target 0.25 (8 banks on 211, 8 on 241, 7 on 219).
+  The earlier suspicion that these two disagree is not reproducible.
+- Explorer filters are live: 25 rows and "370 campaigns" by default,
+  5 rows and "5" with Pattern=BIPARTITE and Split=Test, matching
+  `/api/campaigns?base_type=BIPARTITE&split=test` → `total: 5`.
+- Time replay on 219 runs and stops: 7 of 7 → Play → 4 of 7 at +3 s →
+  7 of 7 at +8 s → Show all → Reset view.
+- The Visibility Lab toy recomputes live, walking 100% → 83% → 67% → 50%
+  (bin 50%, "3 of 6 transactions") as accounts are moved to a third bank.
+  It takes **two** accounts in two different banks before the number can
+  move, which is correct and looks like a bug if you only move one.
+- The live panel works end to end. At the suggested setting
+  `2022-09-08 06:00:00, I4`: own model → 17 alerts, demo campaign **missed**,
+  purity 0%; averaged → 20 alerts, **found**, purity 100%, coverage 14%,
+  66.0 h before the deadline. Toggle measured at **526 ms** end to end
+  (backend-reported 347 ms), and 35 ms flipping back onto a warm cache.
+- Results still shows the empty state with **no numbers**, and Methodology
+  renders 10 definition cards against `/api/methodology`'s `n_entries: 10`.
+- Theme toggle works on a live graph: `dark` → light, background
+  `rgb(249, 249, 247)`, all three canvases still painted.
 
 Still not verified: human visual judgement on a real display (projector colour,
 and edge contrast in light mode), and any browser other than Chrome. The jsdom
@@ -5927,9 +5988,17 @@ is recorded here rather than in the suite.
   was fixed before any cell ran under the policy. How many of the full data's
   96 institution-cells are degenerate is **not yet known**: only
   `t100_s0`/`t100_s1` exist, and the risk is concentrated at target 1.0.
-- **The live panel's numbers are only as real as its bundle.** Built from the
-  1% sample it is a development check and says so on the page; built from a
-  full-data bundle it is a real detection on one window. Either way the
+- **The live panel's numbers are only as real as its bundle, and the bundle
+  on disk is the 1% sample.** `artifacts/demo_panel/demo_manifest.json`
+  records `config: configs/local.yaml`, which is
+  `data/sample/HI-Small_Trans.csv` — **53,960 rows against the full
+  5,078,345**. Every figure the panel computes is therefore a development
+  check. The page carries the warning, but it is phrased conditionally — *"If
+  this bundle was built from the 1% sample..."* — and `/api/demo/manifest`
+  does not expose the manifest's `config` field, so **the page cannot tell the
+  viewer that the answer is yes**. Resolving that would change what the demo
+  displays, so it is recorded here and left to a decision. Built from a
+  full-data bundle the same panel is a real detection on one window. Either way the
   campaign was **selected for the mechanism** by a stated rule that
   deliberately picks the campaign most spread across institutions, so nothing
   the panel shows is evidence of typicality. That is what the aggregate table
@@ -6056,6 +6125,22 @@ is recorded here rather than in the suite.
   be read as "investigate", not automatically "the search broke". The
   `unfragmentable` count and the achieved-visibility values are the
   environment-independent things to compare.
+- **`/api/demo/aggregate` returns 500, and the browser reports it as a CORS
+  failure.** Found 2026-11-16. `aggregate_table` reads
+  `phase4_dev/phase4_compare.csv`, whose records carry NaN, and
+  `json.dumps` rejects them: *Out of range float values are not JSON
+  compliant: nan*. Because an unhandled exception is rendered outside
+  `CORSMiddleware`, the 500 arrives without `Access-Control-Allow-Origin`, so
+  the console says *"has been blocked by CORS policy"* and the page says
+  *"Could not reach the API at http://localhost:8000. Is the backend
+  running?"* — with the backend healthy and every other endpoint answering.
+  The panel degrades to its empty state, so no false number is shown.
+  **Not fixed, deliberately:** the only comparison artifact on disk is the 1%
+  sample dry run, and making the table appear would put development numbers
+  under the heading "And how often does it hold?", next to a live panel, which
+  is the one thing the frontend rule exists to prevent. The repair, when the
+  full run exists, is two parts — serialise NaN as `null`, and label the card
+  with the artifact's provenance.
 - **A CYCLE does not read as a ring, so the topology rationale for Cytoscape
   is only half met.** Measured 2026-11-14 on the real artifacts: `circle`
   layout orders nodes by collection order — `[...accounts].sort()`, i.e.
@@ -6068,11 +6153,16 @@ is recorded here rather than in the suite.
   does the determinism claim, since the same campaign still draws identically
   every time. Fixing it means ordering a cycle's nodes by traversal before
   handing them to `circle`; until then, a demo should not claim the ring is
-  visible. Recorded rather than fixed, by decision of 2026-11-14.
+  visible. Recorded rather than fixed, by decision of 2026-11-14 —
+  **re-confirmed 2026-11-16** (219 still joins exactly 5 of 7 circle-adjacent
+  pairs) and **still not fixed**, deliberately: changing a layout the night
+  before a demo would invalidate the "say this, not that" guidance built
+  around it in the run sheet. An hour's work, whenever it is wanted.
 - The frontend **has** now been inspected in a real browser (headless Chrome
-  over CDP, 2026-11-14): all six pages and eight hand-picked campaign graphs
-  render with no exceptions, no failed requests and no layout collapse, and
-  all 370 campaigns build finite, non-overlapping Cytoscape layouts headlessly.
+  over CDP, 2026-11-14, and the whole demo walked again 2026-11-16): all
+  pages, the live panel and eight hand-picked campaign graphs render with no
+  exceptions and no console warnings, and all 370 campaigns build finite,
+  non-overlapping Cytoscape layouts headlessly.
   What remains unverified is **human visual judgement** on a real display —
   colour rendition on a projector, and the low-contrast edge styling in light
   mode — plus every browser other than Chrome. The jsdom tests still stub the
@@ -6125,6 +6215,56 @@ Tagged points in the repository, newest first. Check one out with
 | `v0.1-data-pipeline` | 2026-10-08 | Phase 2 complete, plus the stage 3.0 Kaggle runner. The research pipeline (campaign ground truth, splits, topology groups, institutions, visibility), the artifact export, the read-only FastAPI server, and the full React frontend — 69 backend tests and 48 frontend tests passing. **No models and no experiment results**: the four conditions are defined and the result schema is fixed, but nothing has been trained or run, and the full-data regression numbers are still unverified (that is what stage 3.0's Kaggle run is for). |
 
 ## Changelog
+
+- **2026-11-16 (demo readiness: the failure diagnosed, four fixes, and the
+  run sheet re-verified)** — unrelated to Phase 4; nothing under stage 4.1 was
+  touched and C2 has not been started.
+
+  *The failure of the 15th.* The dashboard sat on "Loading the demo bundle..."
+  with "Checking API" never resolving. Cause: a `uvicorn --reload` worker from
+  **2026-11-13** still owned `127.0.0.1:8000` — 24 MB resident, ~36 CPU-hours
+  of spin — accepting the TCP connection and never writing a response. The
+  browser therefore got no error to show, and `fetch` had no deadline, so
+  every query stayed pending forever. It was not a code defect: with the stale
+  process killed, a clean backend answered `/api/health` in 90 ms with
+  `core_artifacts_available: true` and all 11 artifacts present, and the whole
+  demo walked through without a single exception.
+
+  *Fixed (none of these can change a number).* A **20 s request deadline** in
+  `api/client.ts`, so a silent backend now reaches "API unreachable" rather
+  than hanging — verified against a listener that accepts and never answers:
+  21.6 s, where before it was never. The page **`<title>`**, which was
+  `frontend`. The **270 Cytoscape warnings** (`institutionLabel` mapped before
+  the data exists) by scoping the mapper to `node[institutionLabel]`, which is
+  what Cytoscape's own warning recommends; labels still draw, confirmed in a
+  screenshot. And the **blank panel on a non-numeric campaign id**, which now
+  says "Not a campaign id" with a link back to the list. Frontend: 52 passed,
+  lint and build clean.
+
+  *Reported, not fixed, because both change what the demo shows.*
+  `/api/demo/aggregate` **returns 500** on a NaN in the 1% sample's
+  `phase4_compare.csv`, and because the error is rendered outside
+  `CORSMiddleware` the browser calls it a CORS failure and the page says
+  "Could not reach the API" with the backend healthy. Repairing it would put
+  **development-sample** differences under the heading "And how often does it
+  hold?". The **CYCLE still does not read as a ring** (219: 5 of 7 edges join
+  circle-adjacent pairs, re-measured) and re-laying it out would invalidate
+  the run sheet's "say this, not that" guidance the night before it is used.
+
+  *Measured in the walk.* All three demo campaigns render; the visibility
+  control steps 241 through 100/77/46/23% and 219 through 100/71/57/29%,
+  matching the API exactly; "this bank sees X of Y" **agrees with the API's
+  `n_visible` on 23 of 23** bank-campaign pairs; the live panel's toggle takes
+  **526 ms** end to end and flips the demo campaign from **missed** to
+  **found** at `2022-09-08 06:00:00, I4` (purity 100%, coverage 14%, 66.0 h
+  before the deadline).
+
+  *Changed:* `frontend/index.html`, `frontend/src/api/client.ts`,
+  `frontend/src/components/CampaignGraph.tsx`,
+  `frontend/src/pages/CampaignDetailPage.tsx`, `docs/demo_checklist.html`
+  (cold-start commands with their expected output, 11 steps with durations,
+  the live-panel click path, a provenance box, and an 8-row troubleshooting
+  table). No backend code and no research code changed.
 
 - **2026-11-16 (C1's outcomes pre-registered, before it runs)** — session C1
   is approved to run. Before it does, its three possible outcomes are
