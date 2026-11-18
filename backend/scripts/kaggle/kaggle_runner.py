@@ -5170,15 +5170,7 @@ def _reclassify_high_edge_reasons(reloaded: dict[str, list[dict]]) -> list[dict]
         except (TypeError, ValueError, KeyError):
             continue
 
-    degenerate: dict[int, bool | None] = {}
-    for row in reloaded.get("tau_rows", []):
-        try:
-            institution = int(row["institution"])
-        except (TypeError, ValueError, KeyError):
-            continue
-        flag = _truthy_flag(row.get("f1_degenerate"))
-        if flag is not None or institution not in degenerate:
-            degenerate[institution] = flag
+    degenerate = _degenerate_flags_by_institution(reloaded)
 
     changed: list[dict] = []
     for key in ("tau_rows", "summary_rows"):
@@ -5206,6 +5198,84 @@ def _reclassify_high_edge_reasons(reloaded: dict[str, list[dict]]) -> list[dict]
                     "institution": institution, "was": was, "now": now,
                 })
     return changed
+
+
+def _degenerate_flags_by_institution(
+    reloaded: dict[str, list[dict]]
+) -> dict[int, bool | None]:
+    """A reloaded cell's F1-degeneracy flags, one per institution in its panel.
+
+    The panel is every institution the cell evaluated, not the ones that
+    survived into a mean. `f1_degenerate` is the same value on all of an
+    institution's tau rows, so any row carries it; a row that carries nothing
+    leaves the institution at ``None``, which is what an institution with no
+    curve is.
+    """
+    flags: dict[int, bool | None] = {}
+    for row in reloaded.get("tau_rows", []):
+        try:
+            institution = int(row["institution"])
+        except (TypeError, ValueError, KeyError):
+            continue
+        flag = _truthy_flag(row.get("f1_degenerate"))
+        if flag is not None or institution not in flags:
+            flags[institution] = flag
+    return flags
+
+
+def _count_as_int(value) -> int | None:
+    """An integer count off a reloaded CSV cell, or None for a blank one."""
+    if value is None or value != value or value == "":
+        return None
+    try:
+        return int(float(value))
+    except (TypeError, ValueError):
+        return None
+
+
+def _recount_degenerate_on_reload(reloaded: dict[str, list[dict]]) -> list[dict]:
+    """Re-take a reloaded cell's degeneracy count over its whole panel.
+
+    `degenerate_summary` counts over the panel rather than over the survivors
+    of the mean since 2026-11-18, and the figure travels on every pooled row
+    and every union row. Those rows are reloaded verbatim, so without this the
+    session that writes the report over all twelve cells publishes nine cells
+    as the sessions that evaluated them counted them - `t100_s2` at `1 of 7`
+    beside C3's own cells at the new denominator, in one table, with nothing
+    saying the two were counted differently. The reason text has the same
+    problem and `_reclassify_high_edge_reasons` is its answer; this is the
+    same answer for the count.
+
+    Nothing is re-evaluated. The flags come from the cell's own `*_taus.csv`,
+    and the count is taken by `isolated.degenerate_summary` itself, so a
+    reloaded cell and a fresh one cannot disagree about what it means. It also
+    adds `n_institutions` to rows written before that column existed, which is
+    what stops the panel size being inferred from the survivor count.
+    """
+    from fraudcamp.federation import isolated
+
+    flags = _degenerate_flags_by_institution(reloaded)
+    if not flags:
+        return []
+    counted = isolated.degenerate_summary(flags)
+    now = (counted["n_f1_degenerate"], counted["n_cells_with_an_f1_curve"])
+
+    seen: dict[tuple, int] = {}
+    for key in ("pooled_rows", "union_rows"):
+        for row in reloaded.get(key, []):
+            was = (
+                _count_as_int(row.get("n_f1_degenerate")),
+                _count_as_int(row.get("n_cells_with_an_f1_curve")),
+            )
+            row.update(counted)
+            if was == now:
+                continue
+            seen[(key, was)] = seen.get((key, was), 0) + 1
+    return [
+        {"rows": key.replace("_rows", ""), "was": was, "now": now,
+         "panel": counted["n_institutions"], "n_rows": n}
+        for (key, was), n in sorted(seen.items(), key=lambda kv: str(kv[0]))
+    ]
 
 
 def _reloaded_cell_edges(
@@ -5655,6 +5725,18 @@ def command_evaluate_isolated(args: argparse.Namespace) -> int:
                         f"{_NEWLINE}    now: {moved['now']}",
                         flush=True,
                     )
+                # The count beside those rows was taken by the session that
+                # evaluated the cell, over the denominator in force then. The
+                # report assembled here has to state one denominator.
+                for moved in _recount_degenerate_on_reload(reloaded):
+                    print(
+                        f"  degeneracy count re-taken over the panel on "
+                        f"{moved['n_rows']} {moved['rows']} row(s)"
+                        f"{_NEWLINE}    was: {moved['was'][0]} of {moved['was'][1]}"
+                        f"{_NEWLINE}    now: {moved['now'][0]} of {moved['now'][1]}"
+                        f"  (panel {moved['panel']})",
+                        flush=True,
+                    )
                 cell_high, cell_edges = _reloaded_cell_edges(reloaded)
                 high_edge.extend(cell_high)
                 edge_taus.extend(cell_edges)
@@ -5904,6 +5986,35 @@ def command_evaluate_isolated(args: argparse.Namespace) -> int:
             "budgeted point for an isolated institution - the binding count",
             "beside it says how often the budget set the threshold at all.",
             "",
+            "**The union's F1 point is not comparable across visibility",
+            "targets, because its cost is not.** Measured on the full data:",
+            "the union's F1 point costs **1,321-2,119 false alarms a day at",
+            "target 1.0** against **39-87 at targets 0.75 and 0.50** - a factor",
+            "of 24 to 54 against the one target-1.0 cell whose artifacts are",
+            "committed, for recall figures that sit in the same range. The",
+            "cause is in the taus, and it is the same starvation the degenerate",
+            "flag marks: at target 1.0 one institution holds a whole campaign",
+            "and the rest see almost nothing, their validation F1 curves are",
+            "nearly flat, and the F1 rule hands them a very permissive",
+            "threshold - 0.05 at `t100_s2` institution 1, 0.1 at `t100_s0`",
+            "institution 3 and `t100_s1` institution 4. The union inherits the",
+            "flood: on `t100_s2`, institution 1 alone raises **1,956.0 of the",
+            "2,119.4** summed false alarms a day, 92% of the total.",
+            "",
+            "Two consequences, in this order. **A union F1 number is never",
+            "quoted without its realised false-alarm rate** - that is what",
+            "`false_alarms_per_day` and `summed_false_alarms_per_day` are doing",
+            "in the table below, and a quotation that drops them is reporting a",
+            "recall at an unstated and wildly varying price. And **a",
+            "cross-target reading of union recall at the F1 point is confounded",
+            "by cost** and must not be made; `total_10` holds alert volume",
+            "fixed by construction and is the point that supports it.",
+            "",
+            "**Which points are primary does not change.** `f1` and `total_10`",
+            "were designated in advance, and re-designating them now, on the",
+            "strength of a result, would be the post-hoc move this stage is",
+            "built to avoid. The F1 point stays, reported with its price.",
+            "",
             _markdown_table(headline_union),
             "",
             "## Timing",
@@ -6096,6 +6207,18 @@ def _run_condition_cells(
                             f"  institution {moved['institution']} f1: reason re-derived "
                             f"at assembly{_NEWLINE}    was: {moved['was']}"
                             f"{_NEWLINE}    now: {moved['now']}",
+                            flush=True,
+                        )
+                    # The count beside those rows was taken by the session that
+                    # evaluated the cell, over the denominator in force then. The
+                    # report assembled here has to state one denominator.
+                    for moved in _recount_degenerate_on_reload(reloaded):
+                        print(
+                            f"  degeneracy count re-taken over the panel on "
+                            f"{moved['n_rows']} {moved['rows']} row(s)"
+                            f"{_NEWLINE}    was: {moved['was'][0]} of {moved['was'][1]}"
+                            f"{_NEWLINE}    now: {moved['now'][0]} of {moved['now'][1]}"
+                            f"  (panel {moved['panel']})",
                             flush=True,
                         )
                     cell_high, cell_edges = _reloaded_cell_edges(reloaded)

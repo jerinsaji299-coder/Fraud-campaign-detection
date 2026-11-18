@@ -2336,8 +2336,8 @@ against the 12 h limit:
 
 | Session | Command | Inputs | Cells | Estimate | Produces |
 |---|---|---|---:|---:|---|
-| **C1** | `evaluate-isolated --targets 1.0 --seeds 2` | dataset + **A** | 1 | **~0.8 h** | `t100_s2` — the cell B stopped on |
-| **C2** | `evaluate-isolated --targets 0.75,0.5` | dataset + **A** | 6 | **~4.6 h** | all of 0.75 and 0.50 |
+| **C1** | `evaluate-isolated --targets 1.0 --seeds 2` | dataset + **A** | 1 | **~0.8 h** | `t100_s2` — the cell B stopped on — **DONE 2026-11-18: outcome (a)** |
+| **C2** | `evaluate-isolated --targets 0.75,0.5` | dataset + **A** | 6 | **~4.6 h** | all of 0.75 and 0.50 — **DONE 2026-11-18: 6 of 6, 4.4 h, exit 0, no degeneracy and no edge taus anywhere** |
 | **C3** | `evaluate-isolated` (plain) | dataset + **A** + **B** + **C1** + **C2** | 3 + assembly | **~2.5 h** | the three 0.25 cells **and the complete report over all twelve** |
 
 **Why C1 is alone.** It is the cell the pre-registered rule stopped, and the
@@ -2672,6 +2672,12 @@ code = subprocess.run(cmd, cwd="/kaggle/temp/repo/backend").returncode
 print("evaluate-isolated exit code:", code)
 ```
 
+> **Observed 2026-11-18: exit 0**, 6 of 6 cells in 4.4 h (2,604-2,755s each).
+> The artifacts say so independently of the printed code —
+> `phase4_isolated_c2.json` has an empty `tau_at_grid_edge` and no tau row in
+> any of the six cells carries a `tau_edge`, so there was no edge for the
+> session to exit 3 about.
+
 ```python
 # C2f - the six cells, their F1 taus, and every degenerate one
 import pathlib, pandas as pd
@@ -2686,6 +2692,13 @@ print(f1[["visibility_target", "seed", "institution", "tau", "tau_edge",
 print("\nat the floor:", int((f1.tau == 0.05).sum()), "of", len(f1))
 print("degenerate:", int((f1.f1_degenerate == True).sum()), "of", len(f1))
 ```
+
+> **Observed 2026-11-18: 0 at the floor of 48, 0 degenerate of 48.** Every F1
+> tau landed between 0.9 and 0.995 and `f1_best_value` ran 0.0317-0.3226. The
+> degenerate regime is target 1.0 only, which is the measured form of the
+> 2026-11-16 risk-direction correction, and the (A)+(D) policy therefore binds
+> on 2 of the 12 cells — pending C3's three, which are predicted clean by the
+> same mechanism and not yet observed.
 
 ### C3 — target 0.25, then the complete report. CPU, commit mode. ~2.5 h.
 
@@ -2821,6 +2834,14 @@ print("\nEXPECT NO GAPS. t100_s0 institution 0's F1 point was rejected at "
 #       F1 point, rejected at 0.9999999), and exit 3 is this report
 #       describing itself - every file is written first. A low-edge tau does
 #       NOT cause it any more; that is recorded and flagged.
+#
+#       EACH RELOADED CELL PRINTS WHAT MOVED, in two lines of its own. Expect
+#       "reason re-derived at assembly" for t100_s0 institution 0 and t100_s2
+#       institution 2 - both from TAU_BEYOND_GRID to the zero-validation-
+#       ceiling reason - and "degeneracy count re-taken over the panel" on
+#       t100_s2's 12 pooled and 12 union rows, 1 of 7 -> 2 of 8 (panel 8).
+#       C2's six cells should print neither: they have no exclusion and no
+#       degenerate curve. A cell that prints nothing was already right.
 import subprocess
 code = subprocess.run(
     ["python", "scripts/kaggle/kaggle_runner.py", "evaluate-isolated",
@@ -2844,13 +2865,21 @@ print(pooled[(pooled.eval_split == "test") & (pooled.metric == "campaign_recall"
         "median_over_institutions", "min_over_institutions", "min_institution",
         "max_over_institutions", "max_institution",
         "n_binding_budgets", "n_cells_with_a_budget",
-        "n_f1_degenerate", "n_cells_with_an_f1_curve"]].to_string(index=False))
+        "n_f1_degenerate", "n_cells_with_an_f1_curve",
+        "n_institutions"]].to_string(index=False))
 print(union[(union.eval_split == "test") & (union.test_subset == "all")]
       [["visibility_target", "seed", "operating_point", "campaign_recall",
         "oracle_recall", "recall_relative_to_ceiling", "false_alarms_per_day",
         "summed_false_alarms_per_day", "n_institutions_operating",
-        "n_f1_degenerate"]].to_string(index=False))
+        "n_f1_degenerate", "n_institutions"]].to_string(index=False))
 ```
+
+> **Read the union's `f1` rows with `false_alarms_per_day` beside them, always.**
+> Measured 2026-11-18: the union's F1 point costs 1,321-2,119 false alarms a
+> day at target 1.0 against 39-87 at 0.75 and 0.50, so its recall is NOT
+> comparable across targets. `total_10` is volume-matched by construction and
+> is the point that carries a cross-target reading. The primary points do not
+> change on the strength of that - they were fixed in advance.
 
 ```python
 # C3g - archive. Commit mode keeps /kaggle/working, so this is the handoff.
@@ -2870,7 +2899,7 @@ print(union[(union.eval_split == "test") & (union.test_subset == "all")]
 
 ### Does anything already run need redoing?
 
-**No.** `t100_s0`, `t100_s1` and session A stand as they are.
+**No.** `t100_s0`, `t100_s1`, session A, C1 and C2 stand as they are.
 
 * a cell's CSVs are written only **after** it completes, so a written cell is
   complete — the two that exist are whole;
@@ -2882,6 +2911,10 @@ print(union[(union.eval_split == "test") & (union.test_subset == "all")]
   `*_taus.csv`, so B's cells are reclassified without being re-run. C3 prints
   every reason it moves;
 * the D6 relabelling changes a column name, not a number;
+* C1's and C2's cells carry a degeneracy count taken over the denominator in
+  force when they ran. It is **re-taken at assembly** from each cell's own
+  `*_taus.csv`, by `degenerate_summary` itself, so the report over all twelve
+  states one denominator and prints every row it moves. Nothing is re-run;
 * `f1_best_value` is **backfilled**, not re-measured — see C3c2. Re-running
   the two cells would cost ~1.5 h and produce the same numbers, differing only
   in the 16th significant digit.

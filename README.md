@@ -61,6 +61,7 @@ git clone https://github.com/jerinsaji299-coder/Fraud-campaign-detection.git
         - [Measured on the 1% sample — development only](#measured-on-the-1-sample--development-only-not-for-quotation)
         - [Session A: the 96 boosters](#the-full-data-run-session-a-the-96-boosters--done-2026-11-15)
         - [Session B: the ceiling holds, the recall does not](#the-full-data-run-session-b-the-ceiling-holds-the-recall-does-not--done-2026-11-15)
+        - [Session C2: the degenerate regime is target 1.0 only](#the-full-data-run-session-c2-the-degenerate-regime-is-target-10-only-and-the-unions-f1-point-is-not-comparable-across-targets--done-2026-11-18)
         - [Session C: proposed](#the-full-data-run-session-c-proposed-not-yet-run)
         - [What the 96 boosters say](#what-the-96-boosters-say-before-any-detection-is-run)
         - [The institutions are not exchangeable](#the-institutions-are-not-exchangeable-institution-0-holds-the-hub-bank)
@@ -174,7 +175,7 @@ feature set only, three seeds, one lookback**. See
 | Stage | Description | Status |
 |---|---|---|
 | 4.0 | Institution-split data: per-institution views of every window, and the account features each institution can compute from its own view alone | **done** — `federation/views.py`, 31 tests, per-institution training loads measured on the sample, visibility cross-check exact on all 370 campaigns |
-| 4.1 | **The `isolated` condition**: each institution trained and scoring on its own view alone, with its **own** oracle ceiling per target, and the two pooled numbers (per-institution mean, and the union over institutions) | **built and tested** — `federation/isolated.py`, 61 tests, backend 469 passed / 25 skipped; `train-isolated` and `evaluate-isolated` runner subcommands, resumable. Full-data **session A done 2026-11-15** (96 boosters, exit 0) and **session B 2 of 12 cells**: B wrote `t100_s0` and `t100_s1` — one cell excluded at the grid top — then **stopped on the low-edge F1 tau rule at `t100_s2`**, a pre-registered stop condition now [changed to record and flag](#decided-a-low-edge-f1-tau-is-recorded-and-flagged--2026-11-16). **B's result: the union's ceiling equals the centralized ceiling exactly, and the union still recovers 0.16-0.26 less of it — the deficit is scoring, not visibility** ([session B](#the-full-data-run-session-b-the-ceiling-holds-the-recall-does-not--done-2026-11-15)). Sessions **C1-C3**, the ten remaining cells and the complete report, are next. §[stage 4.1](#stage-41-the-isolated-condition--approved-and-implemented-2026-11-14) |
+| 4.1 | **The `isolated` condition**: each institution trained and scoring on its own view alone, with its **own** oracle ceiling per target, and the two pooled numbers (per-institution mean, and the union over institutions) | **built and tested** — `federation/isolated.py`, 62 tests, backend 470 passed / 25 skipped; `train-isolated` and `evaluate-isolated` runner subcommands, resumable. Full-data **session A done 2026-11-15** (96 boosters, exit 0) and **session B 2 of 12 cells**: B wrote `t100_s0` and `t100_s1` — one cell excluded at the grid top — then **stopped on the low-edge F1 tau rule at `t100_s2`**, a pre-registered stop condition now [changed to record and flag](#decided-a-low-edge-f1-tau-is-recorded-and-flagged--2026-11-16). **B's result: the union's ceiling equals the centralized ceiling exactly, and the union still recovers 0.16-0.26 less of it — the deficit is scoring, not visibility** ([session B](#the-full-data-run-session-b-the-ceiling-holds-the-recall-does-not--done-2026-11-15)). **C1 done 2026-11-18** (`t100_s2`, outcome (a)) and **C2 done 2026-11-18** (6 cells, 4.4 h, exit 0): zero degeneracy and zero grid edges at targets 0.75 and 0.50, so the degenerate regime is target 1.0 only — and the union's F1 point is **not comparable across targets**, costing 1,321-2,119 false alarms a day at target 1.0 against 39-87 at the others ([session C2](#the-full-data-run-session-c2-the-degenerate-regime-is-target-10-only-and-the-unions-f1-point-is-not-comparable-across-targets--done-2026-11-18)). **C3**, the three target-0.25 cells and the report over all twelve, is next. §[stage 4.1](#stage-41-the-isolated-condition--approved-and-implemented-2026-11-14) |
 | 4.2 | **The `fedavg` condition**: the FedAvg analogue for a tree ensemble is **score averaging** — each institution scores its own view with all K boosters, equal weights, nothing retrained | **built and tested** 2026-11-15 — `federation/fedavg.py`; the design question that moved here from 4.1 is answered in [stage 4.2](#stage-42-the-fedavg-analogue-for-a-tree-ensemble--implemented-2026-11-15). No numbers yet |
 | 4.3 | **The `evidence` and `fedavg_evidence` conditions**: boundary accounts receive the window node features computed across the views that hold them; boosters retrained on augmented views; evaluated with own-model scoring (4.3a) and score averaging (4.3b) | **built and tested** 2026-11-15 — `federation/evidence.py`. Under this definition the ceiling cannot move, which is what keeps every comparison paired; see [stage 4.3](#stage-43-boundary-account-evidence--implemented-2026-11-15). No numbers yet |
 | 4.4 | **The `centralized` arm re-reported in the Phase 4 cell grid**, as the `K = 1` case of a per-institution condition | **built and tested** 2026-11-15 — `federation/centralized.py`. **One open decision blocks its number**: which model seed(s) it uses. See [O1](#o1-which-model-seeds-the-centralized-arm-uses) |
@@ -2683,7 +2684,7 @@ one in either observed case — which is why the reason is
 |---|---|
 | `federation/isolated.py` | the condition: the masking scorer, per-institution training, the per-institution oracle ceiling, the union (outcomes, and the deduplicating cluster pass), the two pooled means, the seven operating points, and `run_cell`, which both runners call so the local and Kaggle reports come from one code path |
 | `constants.PHASE4_SEEDS`, `constants.PHASE4_LOOKBACK_H` | the frozen scope **in code** — `[0, 1, 2]` and `48` — so a runner cannot drift from this README. `evaluate-isolated` refuses more than one lookback outright |
-| `tests/test_federation_isolated.py` | **61 tests**, including the grid-edge policy at both one-of-eight and eight-of-eight, the 2026-11-16 low-edge recording policy, the 2026-11-18 three-reason split and its re-derivation on a reloaded cell, the degeneracy count over the whole panel, the reload path's carry-over of a cell's exclusions, the budget-binding audit, the primary-point designation and the pooled spread's denominator and tie-breaking; backend suite **469 passed, 25 skipped** |
+| `tests/test_federation_isolated.py` | **62 tests**, including the grid-edge policy at both one-of-eight and eight-of-eight, the 2026-11-16 low-edge recording policy, the 2026-11-18 three-reason split and its re-derivation on a reloaded cell, the degeneracy count over the whole panel and its re-taking on a reloaded cell, the reload path's carry-over of a cell's exclusions, the budget-binding audit, the primary-point designation and the pooled spread's denominator and tie-breaking; backend suite **470 passed, 25 skipped** |
 | `scripts/run_isolated.py` | the condition on the 1% sample, for development |
 | `scripts/run_phase4_chain.py` | the whole Phase 4 chain on the 1% sample: 4.1 → 4.2 → 4.3a/b → 4.4 → compare-conditions, from scratch. The dry run that has to pass before anything is run on Kaggle |
 | `scripts/make_demo_bundle.py` | exports the live panel's bundle: the offered windows, the ground truth, the account → institution map and the 8 boosters of one `(target, seed)`. Picks the demo campaign by the stated rule and records the audit trail |
@@ -3468,7 +3469,7 @@ So, added in the same change and **before any cell ran under the new policy**:
 | `f1_best_value` | the best validation campaign F1 the sweep reached, i.e. the value **at** `tau_f1`. Recorded for every (institution, cell), beside the tau |
 | `f1_degenerate` | true when `f1_best_value <= 0.01` |
 | `f1_degenerate_epsilon` | **0.01**, fixed 2026-11-16 before any cell ran, carried in every row that uses it |
-| `n_f1_degenerate`, `n_cells_with_an_f1_curve`, `f1_degenerate_fraction` | on **every** pooled row, union row and comparison row, exactly as the binding-budget count already travels with every pooled budget number |
+| `n_f1_degenerate`, `n_cells_with_an_f1_curve`, `f1_degenerate_fraction`, `n_institutions` | on **every** pooled row, union row and comparison row, exactly as the binding-budget count already travels with every pooled budget number. Counted over the **panel** since 2026-11-18, with `n_institutions` carrying the panel size so the denominator is never inferred from the survivor count — and [re-taken at assembly](#the-count-now-covers-the-panel-not-the-survivors) for a cell reloaded from an earlier session, which is what stops one report carrying two denominators |
 
 **0.01 rather than exactly 0** because a curve flat at 0.004 is in the same
 regime as one flat at 0.0, and demanding an exact zero would let one lucky
@@ -3622,6 +3623,31 @@ it: a budget binds or does not bind for the cells being averaged.
 This is the one number the change moves, and it is a diagnostic rather than a
 result.
 
+**Corrected 2026-11-18, same day: the change did not reach the cells it was
+made for, and now does.** `degenerate_summary` runs inside `run_cell`, so it
+governs a cell the moment that cell is evaluated — and nine of the twelve
+cells were already evaluated. Their pooled and union rows are reloaded
+verbatim from their own CSVs, which means session C3, the session that writes
+the authoritative report over all twelve, would have published `t100_s2` at
+**1 of 7** beside its own three cells at the new denominator: one table, two
+denominators, and nothing on the page saying so. The fix is the one already
+used for the exclusion *reason* — re-derive at assembly from what survives the
+cell's CSV round trip. `_recount_degenerate_on_reload` reads the flags out of
+the cell's own `*_taus.csv`, hands them to `degenerate_summary` itself so a
+reloaded cell and a fresh one cannot mean different things by the number,
+rewrites the five figures on every pooled and union row, adds `n_institutions`
+to rows written before that column existed, and prints what moved. Run against
+the committed artifacts it moves C1's 12 pooled and 12 union rows from `1 of 7`
+to `2 of 8` (panel 8) and leaves C2's alone, which is correct — C2 has no
+degenerate curve anywhere.
+
+*A second, smaller thing the recount repairs:* C1's file disagreed with itself.
+Counted over the survivors, the same cell read **1 of 7** on its validation
+`recall_relative_to_own_ceiling` rows — institution 2's own validation ceiling
+is 0, so it is out of that mean too — and **2 of 8** on the test and stress
+rows of the same operating point. One denominator per cell was the point of
+the change; now one denominator per report is as well.
+
 ##### Two consequences, recorded beside the pooled numbers
 
 **1. The F1 point and the budget points are means over different institution
@@ -3700,6 +3726,179 @@ column**, naming them and the command above, because a missing value would be
 counted as not-degenerate and that is a different claim from not knowing.
 
 
+#### The full-data run, session C2: the degenerate regime is target 1.0 only, and the union's F1 point is not comparable across targets — done 2026-11-18
+
+Six cells — targets **0.75** and **0.50** at all three seeds — in 4.4 h,
+2,604-2,755s each. **Exit 0**, and the artifacts say why rather than the
+expectation: `tau_at_grid_edge` is empty in
+[`phase4_isolated_c2.json`](docs/reference/phase4_isolated_c2.json) and no tau
+row in any of the six cells carries a `tau_edge`, so there was no edge for the
+session to exit 3 about. All nine files are committed as
+[`docs/reference/phase4_isolated_c2.*`](docs/reference/phase4_isolated_c2.md),
+session-scoped for the same reason C1's are.
+
+**1. Zero degeneracy and zero grid edges across all 48 institution-cells.**
+Every F1 point is defined, every chosen F1 tau lies between **0.9 and 0.995**
+— the interior of the grid, nowhere near either end — and `f1_best_value`
+runs **0.0317 to 0.3226** — 12 to 120 times the 0.0027 that `t100_s2`
+institution 1 produced. All **288** budget points are defined and
+all 288 bind.
+
+This is the measured confirmation of the [risk-direction
+correction](#the-full-data-run-session-b-the-ceiling-holds-the-recall-does-not--done-2026-11-15)
+made on 2026-11-16, which reversed an earlier claim that the starved regime
+deepened as the target fell. It does the opposite: an institution's own
+ceiling *rises* as the target falls, the F1 optimum moves away from the floor
+with it, and the degenerate regime exists **only at target 1.0**. The
+correction was an argument from the visibility rule when it was made; it is
+now a result.
+
+**So the (A)+(D) policy binds on exactly 2 of the 12 cells** — `t100_s0` and
+`t100_s2`, one institution each — and on none of the six C2 evaluated. *Nine
+of the twelve are measured; the three target-0.25 cells are C3's and are
+predicted clean by the same mechanism, not yet observed. If one of them is not
+clean, this line is what has to change.* The denominator fix of 2026-11-18
+moves nothing in C2 for the same reason: with every F1 point defined, the
+panel and the survivors of the mean are the same eight institutions.
+
+**2. NEW RESULT: the union's F1 point is not comparable across visibility
+targets, because its price moves by a factor of 15 to 54.** This is a result,
+not a caveat about one cell.
+
+| Target | union recall at `f1` | its realised cost | union recall at `total_10` | its realised cost |
+|---|---:|---:|---:|---:|
+| **1.00** | 0.571 (seed 2) | **2,119.2 /day** | 0.339 | 3.0 /day |
+| **0.75** | 0.500-0.625 | **39.0-74.5 /day** | 0.393-0.446 | 1.9-3.6 /day |
+| **0.50** | 0.518-0.607 | **61.0-86.7 /day** | 0.268-0.411 | 1.9-4.0 /day |
+
+Seed 2 is the only target-1.0 cell with committed artifacts; session B's two
+reported **1,321-2,119 /day** across the three, and that lower bound is a
+hand-off figure to be re-checked when C3 commits B's cells.
+
+Read the `f1` column alone and the three targets look alike — 0.50 to 0.63,
+no dose-response worth naming. They are not alike. They are the same recall
+bought at prices that differ by up to fifty times, which is not a comparison
+at all.
+
+**The mechanism is the starvation the degenerate flag already marks, arriving
+somewhere else.** At target 1.0 one institution holds a whole campaign and the
+others see almost nothing, so their validation F1 curves are nearly flat and
+the F1 rule hands them a very permissive threshold: **0.05** at `t100_s2`
+institution 1, **0.1** at `t100_s0` institution 3 and `t100_s1` institution 4.
+The union sums what its members raise, so it inherits the flood. On `t100_s2`
+institution 1 alone raises **1,956.0** of the union's **2,119.4** summed false
+alarms a day — **92%** — and institution 7, at tau 0.6, raises another 137.7.
+Two institutions out of seven account for 98.8% of the cost.
+
+**Two rules follow, and one thing deliberately does not change.**
+
+- **A union F1 number is never quoted without its realised false-alarm
+  rate.** `false_alarms_per_day` and `summed_false_alarms_per_day` are already
+  on every union row and in the generated report's union table; the rule is
+  that a quotation which drops them is reporting a recall at an unstated and
+  wildly varying price. Every union F1 figure in this README carries its cost.
+- **Cross-target comparison at the F1 point is confounded by cost and must
+  not be made.** `total_10` holds alert volume fixed by construction — 1.9 to
+  4.0 a day at every target, against a budget of 10 — and is the point that
+  supports a cross-target reading.
+- **Which points are primary does NOT change.** `f1` and `total_10` were
+  designated in advance. Re-designating them now, on the strength of a result,
+  is exactly the post-hoc move the pre-registration exists to prevent. The F1
+  point stays primary and is reported with its price.
+
+**3. And the union's ceiling equals the centralized ceiling at 0.75 and 0.50
+too, now on committed evidence.** Session B confirmed it at target 1.00 from
+figures reported before its CSVs existed. C2's union rows carry
+`oracle_recall` **0.8928571** — 50 of 56 — at every one of its six cells,
+identical to the target-1.00 value and to the centralized L = 48 ceiling of
+0.893. The structural argument §5 rests on is now measured at three of the
+four targets, from files in `docs/reference/`.
+
+#### OPEN: should the union's F1 point exclude a degenerate institution? — proposed 2026-11-18
+
+**Proposed, not implemented.** Nothing in the code or the artifacts changes
+on the strength of this section; it exists so the decision can be made
+deliberately rather than inside a commit.
+
+**First, the asked question has a factual answer, and it is "it already
+does".** The pooled mean's handling of a degenerate institution is: an
+institution whose F1 point is **undefined** is out of the mean, whatever the
+reason it is undefined; an institution that is **degenerate but defined** is
+in the mean and carries the flag. The union applies exactly that rule
+already — `operating` holds only the institutions with a tau at the point, so
+an institution excluded under (D) or (A) contributes no alerts and no
+outcomes to the union, and `t100_s2` institution 2 has no F1 rows in
+[`phase4_isolated_c1_t100_s2_outcomes.csv`](docs/reference/phase4_isolated_c1_t100_s2_outcomes.csv)
+at all. There is no asymmetry between the two pooled numbers to repair.
+
+**So the question that is actually open is narrower:** should **option (C)** —
+*exclude every degenerate F1 cell*, [rejected on
+2026-11-18](#decided-a-high-edge-f1-tau-has-three-reasons-and-only-one-of-them-is-a-grid-problem--2026-11-18)
+— be revisited **for the union only**, now that the cost of including a
+degenerate institution is measured rather than hypothetical?
+
+**What it would change, measured on `t100_s2`** — the one target-1.0 cell
+with committed artifacts. Institution 1 is the degenerate-but-defined one
+(`f1_best_value` 0.0027, tau 0.05):
+
+| Union F1 point, test | with institution 1 | without it |
+|---|---:|---:|
+| campaigns detected of 56 | 32 | 23 |
+| campaign recall | **0.571** | **0.411** |
+| realised cost | **2,119.2 /day** | **≈163 /day** |
+| institutions operating | 7 | 6 |
+
+Nine campaigns are lost and the price falls thirteenfold. The recall figures
+are exact — the union's detection set is the union of its members' sets, and
+recomputing it from the committed outcomes rows reproduces 32 of 56 exactly.
+The cost is `summed_false_alarms_per_day` minus institution 1's 1,956.0, so
+it is an upper bound: the deduplication pass would take it slightly lower,
+and that pass cannot be re-run from the artifacts.
+
+**Recommendation: do not exclude.** Five reasons, in order of weight.
+
+1. **It would be the same post-hoc move as re-designating the primary
+   point**, which has already been refused this week. The exclusion would be
+   chosen *because* of what the cost turned out to be. `degenerate_summary`'s
+   own docstring states the rule it would break: *the flag informs
+   interpretation and must never select the comparison point*.
+2. **The direction of the bias is wrong.** Institution 1 has the **highest**
+   test recall of the seven at the F1 point (0.232). Dropping it takes the
+   union from 0.571 to 0.411 — it makes the isolated floor **lower**, which
+   flatters whatever 4.2 and 4.3 go on to show against it. The existing
+   [+12.5% overstatement](#decided-a-high-edge-f1-tau-has-three-reasons-and-only-one-of-them-is-a-grid-problem--2026-11-18)
+   errs the other way deliberately, and for the stated reason that an
+   overstated floor is the safer way to be wrong here.
+3. **It does not actually fix the confound it would be adopted for.** At
+   ≈163 a day the cell still costs 2-4x the 39-87 of the targets it is being
+   compared against, because the remaining institutions' taus differ too.
+   Cross-target comparison at the F1 point would still be unsafe, so the
+   annotation would still be needed — and then the exclusion has bought
+   nothing but a changed number.
+4. **It would split the panel again.** The union's F1 point and the pooled
+   F1 mean would then be taken over different institution sets within one
+   cell, which is precisely the defect the
+   [different-panels warning](#the-full-data-run-session-b-the-ceiling-holds-the-recall-does-not--done-2026-11-15)
+   was written to expose, reintroduced on purpose.
+5. **The cheaper instrument already exists and is already primary.**
+   `total_10` holds volume fixed by construction and supports the
+   cross-target reading the F1 point cannot. Nothing is unmeasurable without
+   the exclusion.
+
+**If it is wanted anyway, the form that costs least** is a **diagnostic
+row**, not a changed primary: a second union row per cell at the F1 point
+with the degenerate institutions dropped, `primary = False`, labelled the way
+`per_inst_*` is labelled — reported, never the headline, and never the number
+a 4.2 or 4.3 contrast is taken against. That keeps the published floor where
+pre-registration put it while making the sensitivity visible. It is ~20 lines
+in `run_cell` plus a schema row, and it would need C3 to re-run the three
+0.25 cells only, since the nine reloaded cells could not gain a row they
+never wrote.
+
+**Not recommended in any form:** applying the exclusion to the pooled mean as
+well, which is option (C) entire and was rejected on grounds that the cost
+evidence does not touch.
+
 #### The full-data run, session C: proposed, not yet run
 
 Three CPU sessions in commit mode, cell by cell in
@@ -3712,7 +3911,7 @@ with the estimates below and no GPU quota consumed:
 | **B** | `evaluate-isolated --targets 1.0,0.75` — 6 cells | dataset + A | **2.5-5.5 h** | **2 of 6 cells written** (`t100_s0`, `t100_s1`), then **stopped on the low-edge F1 tau rule at `t100_s2`**, derived from its own `eval_seconds`. Its exit code was never observed; the earlier "exit 3" was inferred and is withdrawn |
 | **C** | **superseded.** Its input check asserted six of B's cells and failed in 44s, correctly | — | — | replaced by sessions **C1-C3** in [§5n](backend/scripts/kaggle/run_on_kaggle.md) |
 | **C1** | `evaluate-isolated --targets 1.0 --seeds 2` | dataset + A | **~0.8 h** | **done 2026-11-18 — [outcome (a)](#c1s-verdict-outcome-a-and-the-cell-next-to-it--2026-11-18), the pre-registered verdict that proceeds.** Institution 1 low-edge and degenerate as diagnosed; institution 2 excluded at the grid top with a curve flat at 0 and a **zero validation ceiling**, which is what the 2026-11-18 reason split came out of |
-| **C2** | `evaluate-isolated --targets 0.75,0.5` — 6 cells | dataset + A | **~4.6 h** | **running** |
+| **C2** | `evaluate-isolated --targets 0.75,0.5` — 6 cells | dataset + A | **~4.6 h** | **done 2026-11-18 — 6 of 6 cells, 4.4 h, [exit 0](#the-full-data-run-session-c2-the-degenerate-regime-is-target-10-only-and-the-unions-f1-point-is-not-comparable-across-targets--done-2026-11-18).** Zero degeneracy and zero grid edges across all 48 institution-cells, and the union's F1 point costs 39-87 false alarms a day here against 1,321-2,119 at target 1.0 |
 | **C3** | `evaluate-isolated` (plain) — 3 cells **and** the report over all twelve | dataset + A + B + C1 + C2 | **~2.5 h** | last |
 
 Session **C3** will exit **3** as well, and that is correct rather than a new
@@ -3766,6 +3965,11 @@ rather than the run.
 
 | Date | Decision | Reason | Evidence |
 |---|---|---|---|
+| 2026-11-18 | **RECORDED AS A RESULT: the union's F1 point is not comparable across visibility targets, because its realised cost moves by a factor of 15 to 54.** Two rules follow — a union F1 number is never quoted without its realised false-alarm rate, and no cross-target reading is taken at the F1 point; `total_10` is the point that carries one. **Which points are primary is NOT changed** | Session C2 measured the union's F1 point at **39-87 false alarms a day at targets 0.75 and 0.50** against **1,321-2,119 at target 1.0**, for union recall in the same 0.50-0.63 range at all three. The recall columns therefore look comparable and are not. The mechanism is the target-1.0 starvation regime arriving somewhere new: a starved institution's validation F1 curve is nearly flat, the F1 rule hands it a very permissive tau — 0.05 at `t100_s2` institution 1 — and the union sums what its members raise, so institution 1 alone contributes **1,956.0 of 2,119.4** summed alarms a day, 92%. Re-designating the primary point on the strength of a result is the post-hoc move this stage is built to avoid, so the F1 point stays primary and is reported with its price instead | §[session C2](#the-full-data-run-session-c2-the-degenerate-regime-is-target-10-only-and-the-unions-f1-point-is-not-comparable-across-targets--done-2026-11-18); `docs/reference/phase4_isolated_c2_union.csv`; `verify_phase4_crosscheck.py --json` section `session_c2` |
+| 2026-11-18 | **RECORDED: the degenerate regime exists only at target 1.0, so the (A)+(D) policy binds on 2 of the 12 cells.** Measured, not argued | C2's 48 institution-cells at targets 0.75 and 0.50 have **zero** degenerate curves and **zero** grid-edge taus; every F1 tau falls between **0.9 and 0.995** and `f1_best_value` runs **0.0317-0.3226**, 12 to 120 times `t100_s2` institution 1's 0.0027. All 288 budget points are defined and binding. This confirms on full data the [risk-direction correction](#the-full-data-run-session-b-the-ceiling-holds-the-recall-does-not--done-2026-11-15) of 2026-11-16, which was an argument from the visibility rule when it was made. Nine of twelve cells are measured; C3's three target-0.25 cells are predicted clean by the same mechanism and not yet observed | §[session C2](#the-full-data-run-session-c2-the-degenerate-regime-is-target-10-only-and-the-unions-f1-point-is-not-comparable-across-targets--done-2026-11-18); `docs/reference/phase4_isolated_c2_taus.csv` |
+| 2026-11-18 | **CORRECTED, same day: the panel denominator is re-taken for reloaded cells at assembly, or it would never have reached nine of the twelve.** `_recount_degenerate_on_reload` rewrites `n_institutions`, `n_cells_with_an_f1_curve`, `n_f1_degenerate` and `f1_degenerate_fraction` on every reloaded pooled and union row, from the cell's own `*_taus.csv`, using `degenerate_summary` itself | The denominator change runs inside `run_cell`, and nine cells were already evaluated. Their pooled and union rows reload verbatim, so C3 — the session that writes the report over all twelve — would have published `t100_s2` at **1 of 7** beside its own cells at the new denominator, in one table, with nothing saying they were counted differently. The same defect and the same remedy as the exclusion *reason*, one step later. It also repairs a disagreement inside C1's own file, which read 1 of 7 on its validation relative-recall rows and 2 of 8 on test and stress | §[the count now covers the panel](#the-count-now-covers-the-panel-not-the-survivors); `_recount_degenerate_on_reload`; `test_a_reloaded_cells_degeneracy_count_is_re_taken_over_the_panel` |
+| 2026-11-18 | **PROPOSED, NOT IMPLEMENTED: the union's F1 point should NOT exclude a degenerate institution.** The asked form of the question is already settled — the union applies the pooled mean's rule exactly, excluding an institution with no tau at the point and keeping a degenerate-but-defined one. The open form is whether rejected option (C) should be revisited for the union alone on the new cost evidence; the recommendation is no, with a diagnostic non-primary row as the least-cost alternative if it is wanted anyway | Dropping `t100_s2`'s degenerate institution 1 from the union's F1 point takes recall from **0.571 to 0.411** (32 campaigns to 23 of 56) and the price from 2,119.2 to **≈163 a day**. Against it: the exclusion would be selected because of a result, which `degenerate_summary`'s own rule forbids; institution 1 has the **highest** test recall of the seven, so dropping it lowers the floor and flatters 4.2 and 4.3; ≈163 a day is still 2-4x the other targets' 39-87, so the confound and its annotation survive the exclusion anyway; and the union's F1 point and the pooled F1 mean would then be over different panels within one cell, the defect the different-panels warning exists to expose | §[OPEN: should the union's F1 point exclude a degenerate institution?](#open-should-the-unions-f1-point-exclude-a-degenerate-institution--proposed-2026-11-18); recomputed from `phase4_isolated_c1_t100_s2_outcomes.csv` |
+| 2026-11-18 | **C2's nine artifacts are filed session-scoped as `phase4_isolated_c2.*`**, like C1's | Same reason: they are the evidence for the two C2 findings and for the union-ceiling confirmation at 0.75 and 0.50, but under their own names they would collide with C3's report over all twelve cells, which takes the plain `phase4_isolated.*` names | `docs/reference/`; §[Artifacts](#artifacts) |
 | 2026-11-18 | **DECIDED: a high-edge F1 tau is given one of THREE reasons, and the first-precedence one is a zero validation ceiling.** No exclusion, tau or pooled mean changes; the sentence beside each exclusion does, plus one diagnostic count. (D) val `n_oracle_reachable == 0` -> *no threshold is selectable by any rule*; (A) `f1_degenerate` with a real ceiling -> *the argmax is the tie-break, so no optimum exists*; otherwise `TAU_BEYOND_GRID`, unchanged. Rejected: **(B)** record-and-flag symmetric with the low edge, **(C)** exclude every degenerate F1 cell | C1 returned `t100_s2` institution 2 excluded under *"the optimum lies beyond it"* with a validation curve identically 0.0 at all 22 thresholds — a cell for which no optimum lies beyond the grid because none exists. Its **validation oracle reaches no campaign at all** (`n_oracle_reachable` 0), so the flat curve is forced by the split rather than being a property of the booster: on test the same institution detects 4 of 56 at its budget tau, second best of the eight. The precedent is already in `pooled_mean`, which drops a zero-ceiling cell from the relative mean for the same reason. **(B)** would need a ~46 min re-run per cell to publish a number chosen by `best_tau`'s tie-break; **(C)** reverses the approved 2026-11-16 policy and would drop institution 1 — the highest test recall of the seven — taking `t100_s2`'s F1 mean from 0.0944 to 0.0714. Keyed on the ceiling rather than the curve because the ceiling survives a cell's CSV round trip and the curve does not, so session B's cells can be reclassified without re-running them | §[DECIDED: a high-edge F1 tau has three reasons](#decided-a-high-edge-f1-tau-has-three-reasons-and-only-one-of-them-is-a-grid-problem--2026-11-18); `isolated.high_edge_reason`; `_reclassify_high_edge_reasons`; `test_the_three_reasons_a_high_edge_f1_tau_can_happen` |
 | 2026-11-18 | **`degenerate_summary` counts over ALL institutions in the cell, not over the survivors of the mean.** `t100_s2`'s pooled F1 row goes from **1 of 7** to **2 of 8**; `n_institutions` is added beside it. The one number this change moves | An institution excluded *for* its degeneracy took its own flag out of the count with it, so the figure that exists to warn a reader about flat-curve cells omitted precisely the cell it was warning about. A flag that hides the cell it exists to expose is worse than a count that moves. `binding_summary` is deliberately **not** changed: a budget binds or does not bind for the cells actually being averaged, which is the question it answers | §[the count now covers the panel](#the-count-now-covers-the-panel-not-the-survivors); `degenerate_summary`; `test_a_degenerate_count_is_over_all_institutions_not_the_survivors` |
 | 2026-11-18 | **CORRECTED: `t100_s0` institution 0's missing `f1_best_value` does NOT cost nothing, and it is derivable after all** | It was recorded as a harmless gap because the cell is excluded from every pooled mean either way. True when nothing keyed on the value; false once `f1_degenerate` decides which of three reasons the exclusion is given and the degeneracy count covers all eight institutions — a `None` would put the cell straight back outside a denominator that had just been widened to include it. It is also recoverable: a zero validation oracle ceiling forces campaign F1 to 0 at every tau for any scorer, so the curve maximum is exactly 0.0 by arithmetic on the ceiling. Recorded as `derived_from_zero_val_ceiling`, never as a measurement | §[the value is backfillable](#t100_s0-and-t100_s1-do-not-need-re-running--the-value-is-backfillable); `command_backfill_f1_value`; `test_a_zero_validation_ceiling_backfills_f1_best_value_as_zero` |
@@ -4569,6 +4773,12 @@ project-root/
       phase4_isolated_c1_t100_s2_ceilings.csv  the per-institution oracle ceilings - institution 2's val ceiling of 0 is the whole 2026-11-18 decision
       phase4_isolated_c1_t100_s2_{institutions,summary,pooled,union,outcomes}.csv  the rest of the cell, as written
       (session-scoped on purpose: C3's report over all twelve cells takes the plain phase4_isolated.* names)
+      --- phase 4 stage 4.1, session C2 (2026-11-18): targets 0.75 and 0.50, all three seeds ---
+      phase4_isolated_c2.{md,json}    the six cells C2 evaluated, their timings, and an empty tau_at_grid_edge - the evidence for exit 0
+      phase4_isolated_c2_taus.csv     48 institution-cells with no degenerate curve and no edge tau: F1 taus 0.9-0.995, f1_best_value 0.0317-0.3226
+      phase4_isolated_c2_union.csv    the union at 0.75 and 0.50, where the F1 point costs 39-87 false alarms a day against 2,119 at target 1.0
+      phase4_isolated_c2_{institutions,ceilings,summary,pooled,outcomes}.csv  the rest of the six cells, as written
+      (session-scoped for the same reason C1's are)
   backend/
     requirements.txt               Python dependencies: pandas, numpy, pyarrow, pyyaml, pytest, fastapi, uvicorn, pydantic
     pyproject.toml                 setuptools packaging for `fraudcamp` (src/ layout) + pytest `fulldata` marker
@@ -6023,7 +6233,7 @@ campaign_id)`:
     stubbed in these tests.
 
 **Current pass status (2026-11-16):**
-- Backend: `python -m pytest tests/` from `backend/` → **469 passed, 25
+- Backend: `python -m pytest tests/` from `backend/` → **470 passed, 25
   skipped**, 0 failed. The skips are the full-data suite, which needs the
   dataset that only exists on Kaggle; all 24 of its numbers passed there on
   2026-10-08/09.
@@ -6304,6 +6514,27 @@ is recorded here rather than in the suite.
   **learning** (thin positives) or **weaker features** from a partial view.
   This is a structural proxy on the sample that ignores time, not the
   measured ceiling, and stage 4.1 is what measures the real one.
+- **The union's F1 point is priced differently at every visibility target, so
+  a cross-target reading of it is confounded by cost and is not made.**
+  Measured on the full data 2026-11-18: the union's F1 point costs
+  **1,321-2,119 false alarms a day at target 1.0** against **39-87 at targets
+  0.75 and 0.50** — a factor of 15 to 54, and 24 to 54 against the one
+  target-1.0 cell whose artifacts are committed — for union recall in the
+  same 0.50-0.63 range at all three. The recall numbers therefore look
+  comparable and are not. The cause is the target-1.0 starvation regime: an
+  institution that sees almost nothing has a nearly flat validation F1 curve
+  and is handed a very permissive threshold — 0.05 at `t100_s2` institution
+  1, where it alone raises 1,956 of the union's 2,119 summed alarms a day —
+  and the union sums what its members raise. The consequences are recorded as
+  a [result](#the-full-data-run-session-c2-the-degenerate-regime-is-target-10-only-and-the-unions-f1-point-is-not-comparable-across-targets--done-2026-11-18)
+  rather than only here: every union F1 figure is quoted with its realised
+  false-alarm rate, and `total_10` — volume-matched by construction, 1.9 to
+  4.0 a day at every target — is the point that carries a cross-target
+  reading. **Which points are primary was fixed in advance and is not
+  changed in response to this**, so the F1 point stays primary and is
+  reported with its price. Open: whether the union's F1 point should apply
+  the same degenerate-institution handling the pooled mean applies, which is
+  [proposed and not implemented](#open-should-the-unions-f1-point-exclude-a-degenerate-institution--proposed-2026-11-18).
 - **No stage 4.1 figure may be quoted yet.** Everything measured so far is
   on the 1% sample, whose 3.3% positive rate against the full data's 0.102%
   moves the class weights by an order of magnitude and with them every chosen
@@ -6445,6 +6676,72 @@ Tagged points in the repository, newest first. Check one out with
 | `v0.1-data-pipeline` | 2026-10-08 | Phase 2 complete, plus the stage 3.0 Kaggle runner. The research pipeline (campaign ground truth, splits, topology groups, institutions, visibility), the artifact export, the read-only FastAPI server, and the full React frontend — 69 backend tests and 48 frontend tests passing. **No models and no experiment results**: the four conditions are defined and the result schema is fixed, but nothing has been trained or run, and the full-data regression numbers are still unverified (that is what stage 3.0's Kaggle run is for). |
 
 ## Changelog
+
+- **2026-11-18 (C2 returns clean, and prices the union's F1 point)** —
+  session C2 evaluated six cells at targets **0.75** and **0.50** in 4.4 h and
+  exited **0**, which its own artifacts show rather than assert:
+  `tau_at_grid_edge` is empty and no tau row carries an edge. All nine files
+  are committed as `docs/reference/phase4_isolated_c2.*`, session-scoped so
+  C3's twelve-cell report can take the plain names.
+
+  **Zero degeneracy and zero grid edges across all 48 institution-cells.**
+  Every F1 tau lands between 0.9 and 0.995, `f1_best_value` runs 0.0317-0.3226,
+  and all 288 budget points are defined and binding. The degenerate regime
+  exists **only at target 1.0**, which is the measured confirmation of the
+  2026-11-16 risk-direction correction — an argument from the visibility rule
+  when it was made, a result now. The (A)+(D) policy therefore binds on **2 of
+  the 12 cells**; nine are measured and C3's three target-0.25 cells are
+  predicted clean rather than observed.
+
+  **A new result, recorded as one: the union's F1 point is not comparable
+  across visibility targets, because its price is not.** It costs **39-87
+  false alarms a day at 0.75 and 0.50** against **1,321-2,119 at target
+  1.0** — a factor of 15 to 54 — for union recall sitting in the same
+  0.50-0.63 range at all three. The cause is the target-1.0 starvation regime
+  arriving somewhere new: a starved institution's validation F1 curve is
+  nearly flat, the F1 rule hands it a very permissive threshold (0.05 at
+  `t100_s2` institution 1), and the union sums what its members raise — that
+  one institution contributes 1,956.0 of the union's 2,119.4 summed alarms a
+  day, 92% of the total. Two rules follow: **no union F1 number is quoted
+  without its realised false-alarm rate**, and **no cross-target reading is
+  taken at the F1 point**, where `total_10` — volume-matched by construction,
+  1.9 to 4.0 a day at every target — is the point that supports one. **Which
+  points are primary does not change**, because re-designating them on the
+  strength of a result is the post-hoc move the pre-registration exists to
+  prevent. The generated report now carries all of this above its union table.
+
+  **Also measured, and not previously on committed evidence: the union's
+  ceiling equals the centralized ceiling at 0.75 and 0.50 too** — 0.8928571,
+  50 of 56, identical at every one of C2's six cells. The structural argument
+  §5 rests on now holds at three of the four targets, from files in
+  `docs/reference/`.
+
+  **One correction to the morning's commit, found by this run.** The panel
+  denominator for `degenerate_summary` runs inside `run_cell`, and nine cells
+  were already evaluated — their pooled and union rows reload verbatim, so C3
+  would have published `t100_s2` at `1 of 7` beside its own three cells at the
+  new denominator. `_recount_degenerate_on_reload` re-takes the count at
+  assembly from the cell's own `*_taus.csv`, through `degenerate_summary`
+  itself, and prints what moved; on the committed artifacts it moves C1's 12
+  pooled and 12 union rows to `2 of 8` (panel 8) and leaves C2 alone. It also
+  repairs a disagreement inside C1's own file, which read 1 of 7 on its
+  validation relative-recall rows and 2 of 8 on test and stress.
+
+  Verification: backend **470 passed, 25 skipped** (one new test),
+  `verify_phase4_crosscheck.py` **146 passed, 0 failed, 10 skipped** (up from
+  111 — the new `session_c2` section pins every C2 figure the README quotes,
+  the target-1.0 contrast it is read against, and the counterfactual behind
+  the proposal), README anchors and relative links **237 checked, 0 dangling,
+  0 missing**.
+
+  **Proposed and not implemented**, at the user's request: whether the union's
+  F1 point should exclude a degenerate institution. The asked form is already
+  settled — the union applies the pooled mean's rule exactly. The open form,
+  revisiting rejected option (C) for the union alone, is recommended
+  **against**: it would take `t100_s2` from 0.571 to 0.411 recall for a price
+  of ≈163 a day that is still 2-4x the other targets, it drops the highest
+  test recall of the seven and so lowers the floor 4.2 and 4.3 must beat, and
+  it would be an exclusion selected because of a result.
 
 - **2026-11-18 (C1 returns outcome (a); a high-edge exclusion learns to say
   which of three things happened)** — session C1 evaluated `t100_s2` and

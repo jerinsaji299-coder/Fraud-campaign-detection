@@ -1508,6 +1508,65 @@ def test_a_reloaded_cells_high_edge_reason_is_re_derived_at_assembly():
     assert kaggle_runner._reclassify_high_edge_reasons(reloaded) == []
 
 
+def test_a_reloaded_cells_degeneracy_count_is_re_taken_over_the_panel():
+    """The denominator fix has to reach the cells it was made for.
+
+    `degenerate_summary` began counting over the panel on 2026-11-18, but
+    every pooled and union row of the nine already-evaluated cells is
+    reloaded verbatim from CSV, so without this the session that writes the
+    report over all twelve would publish `t100_s2` at `1 of 7` next to its
+    own cells at the new denominator - one table, two denominators, nothing
+    saying so. The flags come from the cell's own tau rows and the count is
+    taken by `degenerate_summary` itself, so nothing is re-evaluated and a
+    reloaded cell cannot mean something different by the number.
+    """
+    kaggle_runner = _kaggle_runner()
+    reloaded = {
+        "tau_rows": [
+            # institution 2 is the one excluded FOR its degeneracy, so the
+            # old count over the survivors is exactly the count without it
+            {"institution": 0, "operating_point": "f1", "f1_degenerate": "False"},
+            {"institution": 1, "operating_point": "f1", "f1_degenerate": "True"},
+            {"institution": 2, "operating_point": "f1", "f1_degenerate": "True"},
+            {"institution": 3, "operating_point": "f1", "f1_degenerate": "False"},
+            # an untrained institution has no curve: out of the numerator and
+            # out of the curve count, but still part of the panel
+            {"institution": 4, "operating_point": "f1",
+             "f1_degenerate": float("nan")},
+        ],
+        "pooled_rows": [
+            {"operating_point": "f1", "metric": "campaign_recall",
+             "n_f1_degenerate": 1, "n_cells_with_an_f1_curve": 3},
+            # a budget row whose mean kept every institution was already
+            # right, and must not be reported as having moved
+            {"operating_point": "total_10", "metric": "campaign_recall",
+             "n_f1_degenerate": 2, "n_cells_with_an_f1_curve": 4},
+        ],
+        "union_rows": [
+            {"operating_point": "f1", "n_f1_degenerate": 1,
+             "n_cells_with_an_f1_curve": 3},
+        ],
+    }
+
+    moved = kaggle_runner._recount_degenerate_on_reload(reloaded)
+
+    for row in reloaded["pooled_rows"] + reloaded["union_rows"]:
+        assert row["n_f1_degenerate"] == 2
+        assert row["n_cells_with_an_f1_curve"] == 4
+        # the panel size, so no reader infers the denominator from survivors
+        assert row["n_institutions"] == 5
+
+    assert [(m["rows"], m["was"], m["now"], m["n_rows"]) for m in moved] == [
+        ("pooled", (1, 3), (2, 4), 1),
+        ("union", (1, 3), (2, 4), 1),
+    ]
+    assert all(m["panel"] == 5 for m in moved)
+
+    # idempotent, like the reason re-derivation beside it: a cell reloaded
+    # twice must not read as having changed twice
+    assert kaggle_runner._recount_degenerate_on_reload(reloaded) == []
+
+
 def test_a_zero_validation_ceiling_backfills_f1_best_value_as_zero(tmp_path):
     """The one value the backfill used to leave empty, derived rather than
     measured - and labelled so it can never be read as a measurement.

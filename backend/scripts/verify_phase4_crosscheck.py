@@ -747,6 +747,229 @@ def session_c1(checker: Checker) -> None:
     )
 
 
+def session_c2(checker: Checker) -> None:
+    """C2's two findings, and the union-ceiling confirmation beside them.
+
+    Six cells at targets 0.75 and 0.50, committed 2026-11-18. The cost
+    figures are pinned here because the README now states a rule about them -
+    a union F1 number is never quoted without its realised false-alarm rate -
+    and a rule whose numbers are not re-derivable is a rule nobody can check.
+    """
+    stem = "phase4_isolated_c2"
+    source = f"docs/reference/{stem}_*"
+    taus_path = REFERENCE / f"{stem}_taus.csv"
+    if not taus_path.exists():
+        checker.skip("session C2", "all", source, "file missing")
+        return
+
+    taus = pd.read_csv(taus_path)
+    f1 = taus[taus.operating_point == "f1"]
+    how = "the f1 tau rows of C2's six cells"
+
+    # --- finding 1: the degenerate regime is target 1.0 only -------------
+    checker.check("C2 institution-cells", 48, int(len(f1)), source, how)
+    checker.check(
+        "C2 cells evaluated", 6,
+        int(taus[["visibility_target", "seed"]].drop_duplicates().shape[0]),
+        source, "the distinct (target, seed) pairs",
+    )
+    checker.check(
+        "C2 targets", "0.5,0.75",
+        ",".join(str(v) for v in sorted(taus.visibility_target.unique())),
+        source, "the distinct targets",
+    )
+    checker.check(
+        "C2 degenerate F1 curves", 0,
+        int(f1.f1_degenerate.astype(str).str.lower().eq("true").sum()),
+        source, how,
+    )
+    checker.check(
+        "C2 F1 points with no flag at all (would hide a degeneracy)", 0,
+        int(f1.f1_degenerate.isna().sum()), source, how,
+    )
+    checker.check(
+        "C2 undefined F1 points", 0,
+        int((~f1.defined.astype(bool)).sum()), source, how,
+    )
+    checker.check(
+        "C2 tau rows at a grid edge", 0,
+        int(taus.tau_edge.notna().sum()), source,
+        "every tau row of the six cells",
+    )
+    checker.check("C2 lowest F1 tau", 0.9, float(f1.tau.min()), source, how)
+    checker.check("C2 highest F1 tau", 0.995, float(f1.tau.max()), source, how)
+    checker.check(
+        "C2 lowest f1_best_value", 0.0317, float(f1.f1_best_value.min()),
+        source, how, tol=5e-4,
+    )
+    checker.check(
+        "C2 highest f1_best_value", 0.3226, float(f1.f1_best_value.max()),
+        source, how, tol=5e-4,
+    )
+    budgets = taus[taus.operating_point != "f1"]
+    checker.check(
+        "C2 budget points", 288, int(len(budgets)), source,
+        "the budget tau rows",
+    )
+    checker.check(
+        "C2 budget points that bind", 288,
+        int(budgets.budget_binding.astype(str).str.lower().eq("true").sum()),
+        source, "the budget tau rows",
+    )
+    # the exit code, from the artifacts rather than from the expectation
+    report = REFERENCE / f"{stem}.json"
+    if report.exists():
+        payload = json.loads(report.read_text(encoding="utf-8"))
+        checker.check(
+            "C2 edge taus in its own report (so: exit 0)", 0,
+            len(payload["tau_at_grid_edge"]), source,
+            "tau_at_grid_edge in the session JSON",
+        )
+        checker.check(
+            "C2 cells in its own report", 6, len(payload["cells"]), source,
+            "the cells list in the session JSON",
+        )
+
+    # --- finding 2: the union's F1 point costs 20-50x more at target 1.0 -
+    union = pd.read_csv(REFERENCE / f"{stem}_union.csv")
+    head = union[(union.eval_split == "test") & (union.test_subset == "all")]
+    uf1 = head[head.operating_point == "f1"]
+    ut10 = head[head.operating_point == "total_10"]
+    how_u = "the test/all union rows of C2's six cells"
+    checker.check(
+        "C2 union F1 cheapest cell", 39.0,
+        float(uf1.false_alarms_per_day.min()), source, how_u, tol=5e-3,
+    )
+    checker.check(
+        "C2 union F1 dearest cell", 86.7,
+        float(uf1.false_alarms_per_day.max()), source, how_u, tol=5e-3,
+    )
+    checker.check(
+        "C2 union F1 lowest recall", 0.500,
+        float(uf1.campaign_recall.min()), source, how_u, tol=5e-3,
+    )
+    checker.check(
+        "C2 union F1 highest recall", 0.625,
+        float(uf1.campaign_recall.max()), source, how_u, tol=5e-3,
+    )
+    checker.check(
+        "C2 union total_10 cheapest cell", 1.9,
+        float(ut10.false_alarms_per_day.min()), source, how_u, tol=5e-2,
+    )
+    checker.check(
+        "C2 union total_10 dearest cell", 4.0,
+        float(ut10.false_alarms_per_day.max()), source, how_u, tol=5e-2,
+    )
+
+    # the target-1.0 side of the contrast, from C1's committed cell
+    c1_union = REFERENCE / "phase4_isolated_c1_t100_s2_union.csv"
+    if c1_union.exists():
+        c1 = pd.read_csv(c1_union)
+        c1h = c1[(c1.eval_split == "test") & (c1.test_subset == "all")]
+        c1f1 = c1h[c1h.operating_point == "f1"].iloc[0]
+        how_c = "the test/all union f1 row of t100_s2"
+        checker.check(
+            "t100_s2 union F1 cost", 2119.2,
+            float(c1f1.false_alarms_per_day), source, how_c, tol=5e-4,
+        )
+        checker.check(
+            "t100_s2 union F1 recall", 0.571,
+            float(c1f1.campaign_recall), source, how_c, tol=1e-3,
+        )
+        checker.check(
+            "the factor between target 1.0 and the dearest C2 cell", 24.4,
+            float(c1f1.false_alarms_per_day)
+            / float(uf1.false_alarms_per_day.max()),
+            source, "arithmetic on the two above", tol=5e-3,
+        )
+        checker.check(
+            "the factor between target 1.0 and the cheapest C2 cell", 54.3,
+            float(c1f1.false_alarms_per_day)
+            / float(uf1.false_alarms_per_day.min()),
+            source, "arithmetic on the two above", tol=5e-3,
+        )
+        # the mechanism: one starved institution raises nearly all of it
+        c1_summary = pd.read_csv(
+            REFERENCE / "phase4_isolated_c1_t100_s2_summary.csv"
+        )
+        rows = c1_summary[
+            (c1_summary.split == "test") & (c1_summary.test_subset == "all")
+            & (c1_summary.operating_point == "f1")
+        ].set_index("institution")
+        checker.check(
+            "t100_s2 institution 1's F1 tau", 0.05,
+            float(rows.loc[1, "tau"]), source, "the test f1 summary rows",
+        )
+        checker.check(
+            "t100_s2 institution 1's own false alarms a day", 1956.0,
+            float(rows.loc[1, "false_alarms_per_day"]), source,
+            "the test f1 summary rows", tol=5e-4,
+        )
+        checker.check(
+            "its share of the union's summed volume", 0.923,
+            float(rows.loc[1, "false_alarms_per_day"])
+            / float(c1f1.summed_false_alarms_per_day),
+            source, "arithmetic on the two above", tol=1e-3,
+        )
+
+        # the counterfactual behind the PROPOSAL, so the recommendation can
+        # be checked rather than taken on trust
+        outcomes = pd.read_csv(
+            REFERENCE / "phase4_isolated_c1_t100_s2_outcomes.csv"
+        )
+        f1_test = outcomes[
+            (outcomes.operating_point == "f1") & (outcomes.eval_split == "test")
+        ]
+        members = f1_test[f1_test.institution.astype(str) != "union"]
+        detected = {
+            str(i): set(g[g.detected.astype(bool)].campaign_id)
+            for i, g in members.groupby("institution")
+        }
+        n_campaigns = f1_test.campaign_id.nunique()
+        whole = set().union(*detected.values())
+        without_1 = set().union(*[v for k, v in detected.items() if k != "1"])
+        how_o = "the per-institution f1/test outcome rows, unioned"
+        checker.check(
+            "the union's own detection count, recomputed from members", 32,
+            len(whole), source, how_o,
+        )
+        checker.check(
+            "the union's F1 recall, recomputed", 0.571,
+            len(whole) / n_campaigns, source, how_o, tol=1e-3,
+        )
+        checker.check(
+            "campaigns left if the degenerate institution were dropped", 23,
+            len(without_1), source, how_o + ", without institution 1",
+        )
+        checker.check(
+            "union F1 recall if it were dropped", 0.411,
+            len(without_1) / n_campaigns, source,
+            how_o + ", without institution 1", tol=1e-3,
+        )
+        checker.check(
+            "the cost left if it were dropped (an upper bound)", 163.4,
+            float(c1f1.summed_false_alarms_per_day)
+            - float(rows.loc[1, "false_alarms_per_day"]),
+            source, "summed volume minus institution 1's", tol=5e-3,
+        )
+
+    # --- the union ceiling, at 0.75 and 0.50 as well ---------------------
+    checker.check(
+        "C2 union oracle recall, every cell", 0.8928571,
+        float(head.oracle_recall.unique()[0])
+        if head.oracle_recall.nunique() == 1 else float("nan"),
+        source, "oracle_recall on the test/all union rows - one value or fail",
+        tol=1e-6,
+    )
+
+    # --- the rule the README now states about quoting these numbers ------
+    checker.text(
+        "the README states the cross-target confound at the F1 point",
+        "Cross-target comparison at the F1 point is confounded by cost",
+        "README.md", "a form of words, not a number",
+    )
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--json", action="store_true")
@@ -759,6 +982,7 @@ def main() -> int:
     sample_runs(checker)
     dry_run(checker)
     session_c1(checker)
+    session_c2(checker)
     uncommitted_session_b(checker)
 
     frame = pd.DataFrame(checker.rows)

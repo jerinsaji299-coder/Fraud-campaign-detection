@@ -14,7 +14,7 @@ It re-derives every **committed** figure from its source file and prints PASS
 or FAIL per figure with the value it recomputed. Exit 0 if all match. Add
 `--json` for the machine-readable form.
 
-**Current state: 111 passed, 0 failed, 10 skipped.** The ten skipped are the
+**Current state: 146 passed, 0 failed, 10 skipped.** The ten skipped are the
 only Phase 4 figures in the README that are **not** reproducible from a
 committed file — they are listed in their own section at the bottom, and they
 are the things to re-check when their evidence lands. A skipped figure is one
@@ -172,6 +172,39 @@ superseded version of it. C1's artifacts were written before the denominator
 fix, so they still say 1 of 7; every cell from C2 onward says 2 of 8 for a
 cell shaped like this one. Both are correct for what they are, and keeping
 both checkable is what stops the change looking like a drift.
+
+*Added 2026-11-18, after the fix was found not to reach them:* a cell written
+before the fix is reloaded verbatim, so the count is re-taken at assembly by
+`_recount_degenerate_on_reload`. Run against these artifacts it moves C1's 12
+pooled and 12 union rows from `1 of 7` to `2 of 8` and leaves C2's alone.
+
+## 5b. Stage 4.1 session C2 — targets 0.75 and 0.50 (2026-11-18)
+
+Source for all of these: **`docs/reference/phase4_isolated_c2*`**, the nine
+artifacts of the six cells C2 evaluated.
+
+| Figure | Claimed | Source row |
+|---|---|---|
+| cells, and institution-cells | 6 and 48, targets 0.5 and 0.75 | `_taus.csv`, distinct `(visibility_target, seed)` and the `f1` rows |
+| degenerate F1 curves | **0** — and 0 rows with no flag at all | `_taus.csv`, the 48 `f1` rows |
+| undefined F1 points, and tau rows at a grid edge | 0 and 0 | `_taus.csv`, `defined` and `tau_edge` |
+| the exit code, from the artifacts rather than the expectation | 0 edge taus over 6 cells, so **exit 0** | `tau_at_grid_edge` and `cells` in `phase4_isolated_c2.json` |
+| the F1 tau range | 0.9 to 0.995 — the interior of the grid | `_taus.csv`, the 48 `f1` rows |
+| the `f1_best_value` range | 0.0317 to 0.3226 | the same rows |
+| budget points, and how many bind | 288 of 288 | `_taus.csv`, the non-`f1` rows |
+| union recall at `f1`, and what it costs | 0.500-0.625 at **39.0-86.7 /day** | `_union.csv`, test / subset `all` |
+| union recall at `total_10`, and what it costs | 0.268-0.446 at **1.9-4.0 /day** | the same rows |
+| the same at target 1.0 | 0.571 at **2,119.2 /day** | `phase4_isolated_c1_t100_s2_union.csv`, test / `all` |
+| the factor between them | **24.4x** against C2's dearest cell, **54.4x** against its cheapest | arithmetic on the two above |
+| the mechanism: institution 1's tau and its own volume | 0.05, and **1,956.0 /day** — 92.3% of the union's summed total | `phase4_isolated_c1_t100_s2_summary.csv`, test / `f1` |
+| union oracle recall at 0.75 and 0.50 | **0.8928571** at every cell — the centralized ceiling | `_union.csv`, test / `all` |
+| the counterfactual behind the proposal: union F1 without institution 1 | 32 campaigns to **23 of 56**, 0.571 to **0.411**, at a cost of **≤163.4 /day** | recomputed from `phase4_isolated_c1_t100_s2_outcomes.csv`, the per-institution `f1` / test rows |
+| the rule the README states about quoting any of this | *"Cross-target comparison at the F1 point is confounded by cost"* | `README.md` — a form of words, checked as one |
+
+The last row is checked because the cost figures only mean something
+alongside the rule they were recorded for. The counterfactual row is checked
+because a recommendation nobody can re-derive is a recommendation taken on
+trust.
 
 ## 6. SKIPPED — the ten figures not reproducible from a committed file
 
