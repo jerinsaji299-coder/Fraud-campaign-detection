@@ -1300,6 +1300,9 @@ def test_a_reloaded_cell_carries_its_exclusions_into_the_report():
     assert high_edge == [{
         "visibility_target": 1.0, "seed": 0, "institution": 0,
         "operating_point": "f1",
+        # carried through so the assembly can print WHY each exclusion
+        # happened; None here because this fixture's rows predate the column
+        "undefined_reason": None,
     }], high_edge
     assert len(edge_taus) == 1, edge_taus
     assert edge_taus[0]["institution"] == 0
@@ -1308,6 +1311,274 @@ def test_a_reloaded_cell_carries_its_exclusions_into_the_report():
 
     # and a cell with nothing at an edge contributes nothing
     assert _reloaded_cell_edges({"tau_rows": [], "institution_rows": []}) == ([], [])
+
+
+def test_the_three_reasons_a_high_edge_f1_tau_can_happen():
+    """POLICY (2026-11-18): a high-edge F1 tau has three causes and they are
+    not the same claim. All three are still EXCLUDED - only the sentence
+    differs - but "the optimum lies beyond the grid" is false for two of
+    them, and a reader who acts on it would go looking for a longer grid.
+
+    Precedence is ceiling first: a zero validation ceiling forces the flat
+    curve, so the degeneracy is a symptom of it rather than a separate
+    finding.
+    """
+    # (D) nothing reachable on the split tau is chosen on
+    assert isolated.high_edge_reason(0, True) == isolated.VAL_UNREACHABLE
+    assert isolated.high_edge_reason(0, False) == isolated.VAL_UNREACHABLE
+    assert isolated.high_edge_reason(0, None) == isolated.VAL_UNREACHABLE
+
+    # (A) a flat curve with something there to find
+    assert isolated.high_edge_reason(3, True) == isolated.F1_CURVE_DEGENERATE
+
+    # the original case, unchanged: a real maximum at the top of the grid
+    assert isolated.high_edge_reason(3, False) == isolated.TAU_BEYOND_GRID
+    assert isolated.high_edge_reason(3, None) == isolated.TAU_BEYOND_GRID
+
+    # validation not among the evaluated splits is UNKNOWN, not zero
+    assert isolated.high_edge_reason(None, False) == isolated.TAU_BEYOND_GRID
+    assert isolated.high_edge_reason(None, True) == isolated.F1_CURVE_DEGENERATE
+
+    # and the three are distinguishable, which is the whole point
+    assert len({
+        isolated.VAL_UNREACHABLE,
+        isolated.F1_CURVE_DEGENERATE,
+        isolated.TAU_BEYOND_GRID,
+    }) == 3
+
+
+def test_a_degenerate_count_is_over_all_institutions_not_the_survivors():
+    """POLICY (2026-11-18): the count travels with the panel, not the mean.
+
+    Counted over the institutions left in the mean, an institution excluded
+    FOR its degeneracy left the count as it went - the full-data cell
+    `t100_s2` read "1 of 7" over a panel holding two degenerate curves out of
+    eight, omitting the one the flag exists to warn about.
+    """
+    flags = {0: False, 1: True, 2: True, 3: False,
+             4: False, 5: False, 6: False, 7: False}
+    row = isolated.degenerate_summary(flags)
+    assert row["n_institutions"] == 8
+    assert row["n_cells_with_an_f1_curve"] == 8
+    assert row["n_f1_degenerate"] == 2
+    assert row["f1_degenerate_fraction"] == 2 / 8
+
+    # an untrained institution has no curve at all, which is still out of
+    # both - "no curve" is not "a curve that is flat"
+    flags[6] = None
+    row = isolated.degenerate_summary(flags)
+    assert row["n_institutions"] == 8, "the panel size does not shrink"
+    assert row["n_cells_with_an_f1_curve"] == 7
+    assert row["n_f1_degenerate"] == 2
+
+
+def test_a_cell_excluded_for_degeneracy_is_still_counted_in_its_own_cell(
+    monkeypatch, _module_world
+):
+    """The end-to-end version of the above, through `run_cell`'s pooled rows.
+
+    The stubbed curve is flat at 0, so every point lands at the top of the
+    grid by the tie-break and every institution is excluded - and the pooled
+    row must still report all eight as degenerate rather than reporting over
+    the empty set of survivors.
+    """
+    result, _ = _module_world
+    high = max(evaluation.MODEL_TAU_GRID)
+    monkeypatch.setattr(
+        isolated.evaluation, "select_tau",
+        lambda *a, **k: (high, [{"tau": high, "campaign_f1": 0.0,
+                                 "false_alarms_per_day": 0.0}]),
+    )
+    monkeypatch.setattr(
+        isolated.evaluation, "select_tau_for_budget", lambda curve, budget: high
+    )
+    cell = isolated.run_cell(
+        result, target=1.0, seed=0, lookback_h=48, splits=("test",),
+    )
+
+    k = len(cell["flags"]["f1_degenerate"])
+    assert k, "the stubbed flat curve must read as degenerate"
+    for row in cell["pooled_rows"]:
+        assert row["n_institutions_in_mean"] == 0, (
+            "every point is excluded in this fixture"
+        )
+        assert row["n_institutions"] == k, row
+        assert row["n_f1_degenerate"] == k, (
+            "the count must survive the exclusion it explains", row
+        )
+
+
+def test_a_high_edge_on_a_budget_point_keeps_the_original_reason(
+    monkeypatch, trainable_world
+):
+    """The new reasons are about the F1 ARGMAX and say nothing about a budget.
+
+    `select_tau_for_budget` returns the lowest AFFORDABLE tau, so a budget
+    point at the top of the grid means only the top was affordable - there is
+    no curve maximum involved. On the full data `t100_s2` institution 2 has a
+    zero validation ceiling and all six of its budget points are defined,
+    which is the same fact from the other side.
+    """
+    high = max(evaluation.MODEL_TAU_GRID)
+    ev = _evaluate_with_curve(monkeypatch, high, high, trainable_world)
+    for point in (p["operating_point"] for p in isolated.operating_points()):
+        if point == "f1":
+            continue
+        assert ev.undefined_reason[point] == isolated.TAU_BEYOND_GRID, point
+
+
+def _kaggle_runner():
+    import sys
+    from pathlib import Path
+
+    sys.path.insert(
+        0, str(Path(__file__).resolve().parent.parent / "scripts" / "kaggle")
+    )
+    import kaggle_runner
+
+    return kaggle_runner
+
+
+def test_a_reloaded_cells_high_edge_reason_is_re_derived_at_assembly():
+    """Session B's `t100_s0` wrote `TAU_BEYOND_GRID`, because on 2026-11-14
+    that was the only sentence there was. Its institution 0 has a validation
+    ceiling of 0, so the report assembled over all twelve cells has to say
+    what this session would say rather than carry B's wording forward.
+
+    Both inputs survive the per-cell CSV round trip - `n_oracle_reachable` in
+    `*_ceilings.csv` and `f1_degenerate` in `*_taus.csv`. The CURVE does not:
+    it lives only in the JSON of the session that evaluated the cell, which
+    is why the rule keys on the ceiling first rather than on the curve.
+    """
+    kaggle_runner = _kaggle_runner()
+    high = max(evaluation.MODEL_TAU_GRID)
+    reloaded = {
+        "ceiling_rows": [
+            # institution 0 can reach nothing on the split tau is chosen on
+            {"institution": 0, "eval_split": "val", "test_subset": "all",
+             "oracle_recall": 0.0, "n_oracle_reachable": 0},
+            # ... but plenty on test, which is NOT what tau is chosen on
+            {"institution": 0, "eval_split": "test", "test_subset": "all",
+             "oracle_recall": 0.27, "n_oracle_reachable": 15},
+            {"institution": 1, "eval_split": "val", "test_subset": "all",
+             "oracle_recall": 0.115, "n_oracle_reachable": 3},
+        ],
+        "tau_rows": [
+            {"institution": 0, "operating_point": "f1", "tau_edge": "high",
+             "rejected_tau": high, "f1_degenerate": float("nan"),
+             "undefined_reason": isolated.TAU_BEYOND_GRID},
+            # a budget point with no affordable tau carries no rejected tau
+            # and must be left exactly alone
+            {"institution": 0, "operating_point": "total_10",
+             "rejected_tau": float("nan"), "f1_degenerate": float("nan"),
+             "undefined_reason": isolated.NO_AFFORDABLE_TAU},
+            {"institution": 1, "operating_point": "f1", "tau_edge": "high",
+             "rejected_tau": high, "f1_degenerate": "True",
+             "undefined_reason": isolated.TAU_BEYOND_GRID},
+        ],
+        "summary_rows": [
+            {"institution": 0, "operating_point": "f1", "eval_split": "test",
+             "test_subset": "all", "defined": False, "rejected_tau": high,
+             "undefined_reason": isolated.TAU_BEYOND_GRID},
+        ],
+    }
+
+    moved = kaggle_runner._reclassify_high_edge_reasons(reloaded)
+
+    # institution 0: the ceiling answers it, and outranks the missing flag
+    assert reloaded["tau_rows"][0]["undefined_reason"] == isolated.VAL_UNREACHABLE
+    # institution 1: a real ceiling, a flat curve - the other new reason
+    assert (
+        reloaded["tau_rows"][2]["undefined_reason"]
+        == isolated.F1_CURVE_DEGENERATE
+    )
+    # the budget point is untouched: no rejected tau, so not a high edge
+    assert reloaded["tau_rows"][1]["undefined_reason"] == isolated.NO_AFFORDABLE_TAU
+    # and the summary rows move with the tau rows, or the two disagree
+    assert (
+        reloaded["summary_rows"][0]["undefined_reason"]
+        == isolated.VAL_UNREACHABLE
+    )
+
+    assert [m["institution"] for m in moved] == [0, 1]
+    assert all(m["was"] == isolated.TAU_BEYOND_GRID for m in moved)
+
+    # idempotent: running it again reports nothing, so a cell reloaded twice
+    # does not read as having changed twice
+    assert kaggle_runner._reclassify_high_edge_reasons(reloaded) == []
+
+
+def test_a_zero_validation_ceiling_backfills_f1_best_value_as_zero(tmp_path):
+    """The one value the backfill used to leave empty, derived rather than
+    measured - and labelled so it can never be read as a measurement.
+
+    If the institution's own oracle reaches no campaign on validation then
+    campaign recall is 0 at every tau for ANY scorer, so campaign F1 is 0 at
+    every tau and the maximum over the curve is exactly 0.0. Without this the
+    cell keeps a `None`, and a `None` is outside the degeneracy denominator -
+    which would put `t100_s0` back to counting over seven institutions right
+    after the count was changed to cover all eight.
+    """
+    import argparse
+
+    import pandas as pd
+
+    kaggle_runner = _kaggle_runner()
+    cells = tmp_path / "isolated_cells"
+    cells.mkdir()
+    high = max(evaluation.MODEL_TAU_GRID)
+
+    pd.DataFrame([
+        {"institution": 0, "eval_split": "val", "test_subset": "all",
+         "oracle_recall": 0.0, "n_oracle_reachable": 0},
+        {"institution": 1, "eval_split": "val", "test_subset": "all",
+         "oracle_recall": 0.115, "n_oracle_reachable": 3},
+        {"institution": 2, "eval_split": "val", "test_subset": "all",
+         "oracle_recall": 0.154, "n_oracle_reachable": 4},
+    ]).to_csv(cells / "t100_s0_ceilings.csv", index=False)
+
+    pd.DataFrame([
+        # excluded, ceiling 0: derivable
+        {"institution": 0, "operating_point": "f1", "eval_split": "val",
+         "test_subset": "all", "defined": False, "rejected_tau": high,
+         "campaign_precision": None, "campaign_recall": None},
+        # excluded, ceiling NOT 0: still not recoverable
+        {"institution": 1, "operating_point": "f1", "eval_split": "val",
+         "test_subset": "all", "defined": False, "rejected_tau": high,
+         "campaign_precision": None, "campaign_recall": None},
+        # ordinary: reconstructed from its own precision and recall
+        {"institution": 2, "operating_point": "f1", "eval_split": "val",
+         "test_subset": "all", "defined": True, "rejected_tau": None,
+         "campaign_precision": 0.25, "campaign_recall": 0.2},
+    ]).to_csv(cells / "t100_s0_summary.csv", index=False)
+    for suffix in ("taus", "institutions"):
+        pd.DataFrame([
+            {"institution": i, "operating_point": "f1"} for i in range(3)
+        ]).to_csv(cells / f"t100_s0_{suffix}.csv", index=False)
+
+    args = argparse.Namespace(cells_dir=str(cells), out=None, force=False)
+    assert kaggle_runner.command_backfill_f1_value(args) == 0
+
+    taus = pd.read_csv(cells / "t100_s0_taus.csv").set_index("institution")
+    assert taus.loc[0, "f1_best_value"] == 0.0
+    assert taus.loc[0, "f1_best_value_source"] == "derived_from_zero_val_ceiling"
+    assert bool(taus.loc[0, "f1_degenerate"]) is True, (
+        "a curve that is 0 everywhere is the degenerate case by definition"
+    )
+
+    assert pd.isna(taus.loc[1, "f1_best_value"]), (
+        "a non-zero ceiling leaves nothing to derive from - None, never 0"
+    )
+    assert (
+        taus.loc[1, "f1_best_value_source"] == "undefined_f1_point_not_recoverable"
+    )
+
+    # and the ordinary path is unchanged: 2PR / (P + R)
+    assert taus.loc[2, "f1_best_value"] == pytest.approx(
+        2 * 0.25 * 0.2 / 0.45
+    )
+    assert taus.loc[2, "f1_best_value_source"] == "backfilled_from_val_summary"
+    assert bool(taus.loc[2, "f1_degenerate"]) is False
 
 
 def test_assembly_refuses_cells_written_before_f1_best_value_existed():

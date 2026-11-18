@@ -82,11 +82,82 @@ def training_tier(n_positive: int) -> str:
     return TIER_NORMAL
 
 
-#: Why an operating point has no tau. Both are **undefined** — excluded from
+#: Why an operating point has no tau. All are **undefined** — excluded from
 #: the pooled means and listed — and never recall 0, because a detector that
 #: cannot be operated at a point was not measured at that point.
 NO_AFFORDABLE_TAU = "no tau on the grid meets this budget"
 TAU_BEYOND_GRID = "the chosen tau is at the top of the grid: the optimum lies beyond it"
+
+#: A high-edge F1 tau has three possible causes and they are not the same
+#: claim. Approved 2026-11-18 after `t100_s2` institution 2 came back
+#: excluded under `TAU_BEYOND_GRID` with a validation curve that was
+#: identically 0.0 at all 22 thresholds — a cell for which no optimum lies
+#: beyond the grid because no optimum exists anywhere.
+#:
+#: **First precedence.** The institution's own oracle, on the split the
+#: threshold is chosen on, reaches no campaign at all: `n_oracle_reachable`
+#: is 0 and the validation ceiling is 0.0. Campaign F1 is then 0 at every
+#: tau for *any* scorer, so this is not a statement about the booster and
+#: the exclusion is not a verdict on it — `t100_s2` institution 2 goes on to
+#: detect 4 of 56 campaigns on test at its budget tau, the second best of
+#: the eight. There is simply nothing on the selection split to select
+#: against.
+#:
+#: The precedent is in `pooled_mean` below, which already drops a cell whose
+#: own ceiling is 0 from the relative mean "only": the same fact, applied to
+#: the same cell, for the same reason. This extends it to the F1 point,
+#: where a zero ceiling does not merely make the ratio undefined but makes
+#: the threshold unselectable.
+VAL_UNREACHABLE = (
+    "no campaign is reachable on validation for this institution, so no "
+    "threshold is selectable by any rule"
+)
+
+#: **Second precedence.** The curve is flat at or below
+#: :data:`F1_DEGENERATE_EPSILON` without the ceiling being 0, so the argmax
+#: is settled by `best_tau`'s fourth tie-break key — "then the **higher**
+#: tau" — and lands on the grid top by construction. Nothing lies beyond the
+#: grid; there is no maximum to lie beyond.
+#:
+#: Note which way the tie-break happens to fall decides the treatment: the
+#: same degeneracy with a tiny *ordered* curve puts the argmax at the floor
+#: and is RECORDED and flagged (the low-edge policy, 2026-11-16), while at
+#: the top it is excluded. That asymmetry is not defended here — it is only
+#: made visible, so a reader can see that the two cells are the same
+#: phenomenon.
+F1_CURVE_DEGENERATE = (
+    "the validation F1 curve is flat at or below the degeneracy epsilon: the "
+    "argmax is the tie-break, which returns the highest tau, so no optimum "
+    "exists rather than lying beyond the grid"
+)
+
+
+def high_edge_reason(
+    val_reachable: int | None,
+    f1_degenerate: bool | None,
+) -> str:
+    """Why this **F1** point's chosen tau sat at the top of the grid.
+
+    Kept as a function with no state so the assembly session can re-derive
+    it for a cell it reloads from CSV rather than evaluated itself — the
+    columns it needs, `n_oracle_reachable` on validation and
+    `f1_degenerate`, both survive the per-cell round trip. That matters for
+    session B's `t100_s0`, which was written before the distinction existed.
+
+    Only for the F1 point. A **budget** point at the top of the grid means
+    the lowest affordable tau was the highest one, which is a statement
+    about the budget and not about any curve's maximum — `t100_s2`
+    institution 2 has a zero validation ceiling and all six of its budget
+    points are defined.
+
+    ``val_reachable`` is ``None`` when validation was not among the
+    evaluated splits, which is not the same as 0 and falls through.
+    """
+    if val_reachable == 0:
+        return VAL_UNREACHABLE
+    if f1_degenerate:
+        return F1_CURVE_DEGENERATE
+    return TAU_BEYOND_GRID
 
 
 def tau_grid_edge(tau: float | None, tau_grid=None) -> str | None:
@@ -635,10 +706,21 @@ def degenerate_summary(flags: dict[int, bool | None]) -> dict:
 
     ``None`` entries are cells with no curve - an untrained institution - and
     are out of both the numerator and the denominator.
+
+    **Counted over ALL institutions in the cell, not over the institutions
+    left in the mean** (approved 2026-11-18). It was previously counted over
+    the survivors, which meant an institution excluded *for* its degeneracy
+    left the count as it went: `t100_s2` read `1 of 7` where the cell held
+    two degenerate curves out of eight, and the one it omitted was the one
+    whose threshold the flag exists to warn about. A flag that hides the cell
+    it exists to expose is worse than a count that moves. `n_institutions`
+    carries the panel size beside it so the denominator is never inferred
+    from the number of survivors.
     """
     with_curve = {i: value for i, value in flags.items() if value is not None}
     n_degenerate = sum(1 for value in with_curve.values() if value)
     return {
+        "n_institutions": len(flags),
         "n_cells_with_an_f1_curve": len(with_curve),
         "n_f1_degenerate": n_degenerate,
         "f1_degenerate_fraction": (
@@ -952,7 +1034,14 @@ def evaluate_institution(
             out.tau_edges[name] = "high"
             out.rejected_taus[name] = chosen
             out.taus[name] = None
-            out.undefined_reason[name] = TAU_BEYOND_GRID
+            if point["kind"] == "f1":
+                val_reachable = out.oracle_reachable.get("val")
+                out.undefined_reason[name] = high_edge_reason(
+                    len(val_reachable) if val_reachable is not None else None,
+                    out.f1_degenerate,
+                )
+            else:
+                out.undefined_reason[name] = TAU_BEYOND_GRID
             continue
         if edge == "low" and point["kind"] == "f1":
             out.tau_edges[name] = "low"
@@ -1238,8 +1327,10 @@ def run_cell(
 
                 if res is None and ev.tier != TIER_UNTRAINED:
                     # no operating point here - either no affordable tau, or a
-                    # chosen tau at the top of the grid with the optimum beyond
-                    # it. Undefined, never zero.
+                    # chosen tau at the top of the grid. Undefined, never
+                    # zero. WHY it sat there is in `undefined_reason`, and
+                    # only one of the three answers is "the optimum lies
+                    # beyond the grid" - see `high_edge_reason`.
                     recall_by_institution[institution] = None
                     relative_by_institution[institution] = None
                     for subset in constants.TEST_SUBSETS:
@@ -1321,9 +1412,12 @@ def run_cell(
                     **binding_summary(
                         {i: binding_by_institution.get(i) for i in in_mean}
                     ),
-                    **degenerate_summary(
-                        {i: degenerate_by_institution.get(i) for i in in_mean}
-                    ),
+                    # over ALL institutions, unlike `binding_summary`
+                    # above: a budget binds or does not bind for the cells
+                    # the mean is taken over, but a degenerate curve is the
+                    # reason a cell may be missing from that set, so counting
+                    # it over the survivors hides exactly the cell it is for.
+                    **degenerate_summary(degenerate_by_institution),
                 })
 
             # --- the union: a supervisory reader, not a bank ---
@@ -1385,8 +1479,10 @@ def run_cell(
                         1 for i in operating
                         if evaluations[i].budget_binding.get(name) is True
                     ),
+                    # over ALL institutions, not just those operating -
+                    # see `degenerate_summary`
                     **degenerate_summary(
-                        {i: evaluations[i].f1_degenerate for i in operating}
+                        {i: ev.f1_degenerate for i, ev in evaluations.items()}
                     ),
                     "summed_false_alarms": accounting["summed_false_alarms"],
                     "summed_false_alarms_per_day": accounting["summed_per_day"],

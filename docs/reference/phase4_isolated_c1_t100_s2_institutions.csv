@@ -1,0 +1,9 @@
+condition,model,variant,visibility_target,lookback_h,seed,institution,tier,trained,n_rows,n_positive,positive_rate,class_weight_min,class_weight_max,n_windows,train_seconds,tau_f1,tau_at_grid_edge,f1_best_value,f1_degenerate,f1_degenerate_epsilon,eval_seconds
+isolated,xgboost,xgboost_centralized,1.0,48,2,0,normal,True,2040378,2213,0.0010846029510218204,,,,0.0,0.95,False,0.06360424028268552,False,0.01,341.37
+isolated,xgboost,xgboost_centralized,1.0,48,2,1,normal,True,1983208,1233,0.0006217199607907995,,,,0.0,0.05,True,0.002714625042416016,True,0.01,337.65
+isolated,xgboost,xgboost_centralized,1.0,48,2,2,normal,True,2001183,1422,0.0007105796921121157,,,,0.0,0.9999999,True,0.0,True,0.01,321.44
+isolated,xgboost,xgboost_centralized,1.0,48,2,3,normal,True,1999787,1290,0.0006450686998165304,,,,0.0,0.99,False,0.14285714285714288,False,0.01,338.38
+isolated,xgboost,xgboost_centralized,1.0,48,2,4,normal,True,1992774,1297,0.000650851526565481,,,,0.0,0.9,False,0.18992805755395684,False,0.01,342.24
+isolated,xgboost,xgboost_centralized,1.0,48,2,5,normal,True,1987628,1418,0.0007134131738937065,,,,0.0,0.9,False,0.18142548596112312,False,0.01,362.87
+isolated,xgboost,xgboost_centralized,1.0,48,2,6,normal,True,1994379,1417,0.0007104968514008622,,,,0.0,0.999,False,0.07407407407407407,False,0.01,342.23
+isolated,xgboost,xgboost_centralized,1.0,48,2,7,normal,True,1992663,1161,0.0005826374053214216,,,,0.0,0.6,False,0.07853757616790792,False,0.01,341.33

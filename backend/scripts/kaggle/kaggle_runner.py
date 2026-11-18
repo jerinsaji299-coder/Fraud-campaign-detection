@@ -5111,6 +5111,103 @@ def _low_edge_outcome(name: str, cell: dict, args) -> int | None:
     return None
 
 
+def _truthy_flag(value) -> bool | None:
+    """A CSV round trip's idea of a boolean, or ``None`` when it says nothing.
+
+    Distinct from `_reloaded_cell_edges`'s local `truthy`, which collapses
+    "unknown" into False because an unknown edge is not an edge. Here the
+    three states are different claims: a cell whose `f1_degenerate` is
+    missing is not a cell that is known not to be degenerate.
+    """
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return None
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in {"true", "1", "yes"}:
+            return True
+        if lowered in {"false", "0", "no"}:
+            return False
+        return None
+    try:
+        if value != value:  # NaN is not equal to itself
+            return None
+    except Exception:
+        return None
+    return bool(value)
+
+
+def _reclassify_high_edge_reasons(reloaded: dict[str, list[dict]]) -> list[dict]:
+    """Re-derive WHY a reloaded cell's high-edge F1 points are undefined.
+
+    A cell written before 2026-11-18 says `TAU_BEYOND_GRID` for every high
+    edge, which is the right sentence for only one of the three causes. The
+    exclusion itself is unchanged and no number moves - this rewrites the
+    reason text in the rows the report is assembled from, so that the one
+    report over all twelve cells does not describe `t100_s0` institution 0 as
+    an optimum beyond the grid when its validation ceiling is 0.
+
+    Both inputs survive the per-cell round trip: `n_oracle_reachable` is in
+    `*_ceilings.csv`, which is written for every cell, and `f1_degenerate` is
+    in `*_taus.csv` once `backfill-f1-value` has run. The curve is **not** -
+    it lives only in the JSON of the session that evaluated the cell - which
+    is why the rule keys on the ceiling first.
+
+    Rows are mutated in place, because `collected` holds the same dict
+    objects the caller read them into.
+    """
+    from fraudcamp.federation import isolated
+
+    reachable: dict[int, int] = {}
+    for row in reloaded.get("ceiling_rows", []):
+        if str(row.get("eval_split")) != "val":
+            continue
+        if str(row.get("test_subset")) != "all":
+            continue
+        try:
+            reachable[int(row["institution"])] = int(row["n_oracle_reachable"])
+        except (TypeError, ValueError, KeyError):
+            continue
+
+    degenerate: dict[int, bool | None] = {}
+    for row in reloaded.get("tau_rows", []):
+        try:
+            institution = int(row["institution"])
+        except (TypeError, ValueError, KeyError):
+            continue
+        flag = _truthy_flag(row.get("f1_degenerate"))
+        if flag is not None or institution not in degenerate:
+            degenerate[institution] = flag
+
+    changed: list[dict] = []
+    for key in ("tau_rows", "summary_rows"):
+        for row in reloaded.get(key, []):
+            if str(row.get("operating_point")) != "f1":
+                continue
+            # a high edge is the one undefined point that carries a rejected
+            # tau; an unaffordable budget carries none
+            rejected = row.get("rejected_tau")
+            if rejected is None or rejected != rejected:
+                continue
+            try:
+                institution = int(row["institution"])
+            except (TypeError, ValueError, KeyError):
+                continue
+            was = row.get("undefined_reason")
+            now = isolated.high_edge_reason(
+                reachable.get(institution), degenerate.get(institution)
+            )
+            if was == now:
+                continue
+            row["undefined_reason"] = now
+            if key == "tau_rows":
+                changed.append({
+                    "institution": institution, "was": was, "now": now,
+                })
+    return changed
+
+
 def _reloaded_cell_edges(
     reloaded: dict[str, list[dict]]
 ) -> tuple[list[dict], list[dict]]:
@@ -5141,6 +5238,7 @@ def _reloaded_cell_edges(
             "seed": row["seed"],
             "institution": row["institution"],
             "operating_point": row["operating_point"],
+            "undefined_reason": row.get("undefined_reason"),
         }
         for row in reloaded.get("tau_rows", [])
         if isinstance(row.get("tau_edge"), str)
@@ -5325,13 +5423,28 @@ def command_backfill_f1_value(args: argparse.Namespace) -> int:
     all 32 (cell, institution) pairs of the 1% sample dry run, where both the
     curve and the summary row are on disk.
 
-    What cannot be backfilled: an (institution, point) pair whose F1 point is
-    **undefined**, which on the full data is session B's `t100_s0`
-    institution 0, rejected at the top of the grid. No validation evaluation
-    was run at a rejected tau, so nothing was written to reconstruct from.
-    Those get `None`, never 0, and they are already excluded from every
-    pooled mean - so the gap costs nothing. `f1_best_value_source` records
-    which of the three cases each row is.
+    **An undefined F1 point with a zero validation ceiling is derived, not
+    left empty** (2026-11-18). If the institution's own oracle reaches no
+    campaign on validation - `n_oracle_reachable` 0 in `*_ceilings.csv` -
+    then campaign recall is 0 at every tau for *any* scorer, so campaign F1
+    is 0 at every tau and the maximum over the curve is exactly 0.0. That is
+    arithmetic on the ceiling, not a measurement, and it is recorded as
+    `derived_from_zero_val_ceiling` so it can never be mistaken for one.
+    Session B's `t100_s0` institution 0 is this case.
+
+    What still cannot be backfilled: an undefined F1 point with a **non-zero**
+    validation ceiling. No validation evaluation was run at a rejected tau,
+    and the curve lives only in the JSON of the session that evaluated the
+    cell, so there is nothing to reconstruct from. Those get `None`, never 0.
+
+    The gap was previously described as costing nothing, on the grounds that
+    such a cell is excluded from every pooled mean either way. That was true
+    when nothing keyed on the value. It is **not** true now: `f1_degenerate`
+    decides which of the three reasons the exclusion is given, and every
+    pooled row counts degeneracy over all institutions, so a missing value
+    puts the cell back outside a denominator it belongs in.
+
+    `f1_best_value_source` records which of the four cases each row is.
     """
     import pandas as pd
 
@@ -5365,6 +5478,21 @@ def command_backfill_f1_value(args: argparse.Namespace) -> int:
             print(f"  {name}: already has f1_best_value, left alone")
             continue
 
+        # how many campaigns this institution's own oracle reaches on the
+        # split tau is chosen on. 0 forces the whole curve to 0.
+        reachable: dict[int, int] = {}
+        ceilings_path = cells_dir / f"{name}_ceilings.csv"
+        if ceilings_path.exists():
+            ceilings = pd.read_csv(ceilings_path)
+            val_all = ceilings[
+                (ceilings["eval_split"] == "val")
+                & (ceilings["test_subset"] == "all")
+            ]
+            for _, row in val_all.iterrows():
+                count = pd.to_numeric(row.get("n_oracle_reachable"), errors="coerce")
+                if pd.notna(count):
+                    reachable[int(row["institution"])] = int(count)
+
         # the one row per institution that holds the value: the F1 point, on
         # VALIDATION (where tau was chosen), over all campaigns
         chosen = summary[
@@ -5377,6 +5505,12 @@ def command_backfill_f1_value(args: argparse.Namespace) -> int:
         for _, row in chosen.iterrows():
             institution = int(row["institution"])
             if not bool(row.get("defined", False)):
+                if reachable.get(institution) == 0:
+                    # nothing on validation for any scorer to find, so the
+                    # curve is 0 everywhere and its maximum is exactly 0.0
+                    values[institution] = 0.0
+                    sources[institution] = "derived_from_zero_val_ceiling"
+                    continue
                 values[institution] = None
                 sources[institution] = "undefined_f1_point_not_recoverable"
                 continue
@@ -5511,6 +5645,16 @@ def command_evaluate_isolated(args: argparse.Namespace) -> int:
                 # report over all 12 cells would not name the excluded cells
                 # among them, and would exit 0 while reporting a tau at a grid
                 # edge - the one thing the exit code exists to say.
+                # before the edges are read off, so the report carries the
+                # reason this session would give rather than the one the
+                # session that evaluated the cell was able to give
+                for moved in _reclassify_high_edge_reasons(reloaded):
+                    print(
+                        f"  institution {moved['institution']} f1: reason re-derived "
+                        f"at assembly{_NEWLINE}    was: {moved['was']}"
+                        f"{_NEWLINE}    now: {moved['now']}",
+                        flush=True,
+                    )
                 cell_high, cell_edges = _reloaded_cell_edges(reloaded)
                 high_edge.extend(cell_high)
                 edge_taus.extend(cell_edges)
@@ -5592,9 +5736,15 @@ def command_evaluate_isolated(args: argparse.Namespace) -> int:
             cell_reports.append({k: v for k, v in cell.items() if not k.endswith("_rows")})
             if flags["tau_at_grid_edge"] or flags["tau_at_high_edge"]:
                 edge_taus.extend(_edge_tau_rows(cell["institution_rows"]))
+            fresh_reasons = {
+                (row["institution"], row["operating_point"]):
+                    row.get("undefined_reason")
+                for row in cell["tau_rows"]
+            }
             high_edge.extend(
                 {"visibility_target": target, "seed": seed,
-                 "institution": institution, "operating_point": point}
+                 "institution": institution, "operating_point": point,
+                 "undefined_reason": fresh_reasons.get((institution, point))}
                 for institution, point in flags["tau_at_high_edge"]
             )
             print(
@@ -5716,6 +5866,34 @@ def command_evaluate_isolated(args: argparse.Namespace) -> int:
             "",
             f"## The two pooled numbers ({headline_split}, campaign recall)",
             "",
+            "**The F1 point and the budget points are means over DIFFERENT",
+            "institution sets, and must not be compared across a row.** The F1",
+            "objective needs a campaign that is reachable on validation; a",
+            "budget constraint does not. An institution whose own oracle reaches",
+            "no campaign on validation has campaign F1 of 0 at every tau, so no",
+            "threshold is selectable for it and its F1 point is undefined - while",
+            "its budget points are selected from the alarm rate and are perfectly",
+            "well defined. On the full data `t100_s2` institution 2 is exactly",
+            "this: out of the F1 mean, in all six budget means, and at",
+            "`total_10` on test the second best of the eight. **`total_10` is",
+            "therefore the primary point with complete membership**, and a",
+            "reader comparing an F1 mean against a budget mean within one cell",
+            "is comparing over two different panels. `n_institutions_in_mean`",
+            "and `undefined_institutions` beside each row say which.",
+            "",
+            "**That exclusion raises the isolated arm's F1 mean, and the",
+            "direction is stated rather than left implicit.** On `t100_s2` the",
+            "F1 mean is over 7 of 8; entering the excluded institution at recall",
+            "0 would move it from 0.0944 to 0.0826 on test, 0.0824 to 0.0721 on",
+            "validation and 0.0583 to 0.0510 on stress - **12.5% relative on",
+            "every split**, since adding a zero to seven values is a 7/8 scaling.",
+            "The exclusion is kept anyway, because the alternative is to publish",
+            "a number produced by `best_tau`'s tie-break rather than by the data:",
+            "the only tau the F1 rule could hand that cell is the top of the",
+            "grid, where it raises no alarms at all. An overstated floor makes",
+            "federation look *less* useful than it is, which is the safer way to",
+            "be wrong here - but it is an overstatement and is reported as one.",
+            "",
             _markdown_table(headline_pooled),
             "",
             f"## The union ({headline_split}, subset all)",
@@ -5745,15 +5923,17 @@ def command_evaluate_isolated(args: argparse.Namespace) -> int:
         print(
             f"{_NEWLINE}{len(high_edge)} (institution, operating point) cell(s) "
             "were EXCLUDED as undefined because the chosen tau sat at the top "
-            "of the grid - the optimum lies beyond it, so the operating point "
-            "was not found. They are listed in phase4_isolated_taus.csv with "
+            "of the grid. They are listed in phase4_isolated_taus.csv with "
             "their rejected tau, and they are excluded from the pooled means "
-            "rather than scored 0."
+            "rather than scored 0. The reason beside each one is not "
+            "decoration: only one of the three says the optimum lies beyond "
+            "the grid."
         )
         for row in high_edge:
             print(
                 f"  target {row['visibility_target']} seed {row['seed']} "
                 f"institution {row['institution']}: {row['operating_point']}"
+                f"{_NEWLINE}    {row.get('undefined_reason')}"
             )
     if edge_taus:
         print(f"{_NEWLINE}STOPPING: a chosen tau is at an edge of the model grid.")
@@ -5908,6 +6088,16 @@ def _run_condition_cells(
                             rows = pd.read_csv(path).to_dict("records")
                             reloaded[key] = rows
                             collected[condition][key].extend(rows)
+                    # before the edges are read off, so the report carries the
+                    # reason this session would give rather than the one the
+                    # session that evaluated the cell was able to give
+                    for moved in _reclassify_high_edge_reasons(reloaded):
+                        print(
+                            f"  institution {moved['institution']} f1: reason re-derived "
+                            f"at assembly{_NEWLINE}    was: {moved['was']}"
+                            f"{_NEWLINE}    now: {moved['now']}",
+                            flush=True,
+                        )
                     cell_high, cell_edges = _reloaded_cell_edges(reloaded)
                     high_edge.extend({**row, "condition": condition} for row in cell_high)
                     edge_taus.extend({**row, "condition": condition} for row in cell_edges)

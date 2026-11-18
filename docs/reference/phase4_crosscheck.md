@@ -14,14 +14,14 @@ It re-derives every **committed** figure from its source file and prints PASS
 or FAIL per figure with the value it recomputed. Exit 0 if all match. Add
 `--json` for the machine-readable form.
 
-**Current state: 77 passed, 0 failed, 10 skipped.** The ten skipped are the
+**Current state: 111 passed, 0 failed, 10 skipped.** The ten skipped are the
 only Phase 4 figures in the README that are **not** reproducible from a
 committed file — they are listed in their own section at the bottom, and they
 are the things to re-check when their evidence lands. A skipped figure is one
 the README asserts on trust; that is a smaller list than the passing one on
 purpose.
 
-Last updated 2026-11-16.
+Last updated 2026-11-18.
 
 ---
 
@@ -143,7 +143,37 @@ binding count are properties of the thinned sample. Two figures already
 reversed between the sample and the full data — the budget binding (0 of 8 →
 all) and the near-ceiling reading (0.62-0.89 → 0.306-0.369).
 
-## 5. SKIPPED — the ten figures not reproducible from a committed file
+## 5. Stage 4.1 session C1 — the gate evidence (2026-11-18)
+
+Source for all of these: **`docs/reference/phase4_isolated_c1_t100_s2*`**,
+the nine artifacts of the one cell C1 evaluated. **One cell of the full data,
+not a pooled Phase 4 result** — `t100_s2` alone, target 1.0, seed 2.
+
+| Figure | Claimed | Source row |
+|---|---|---|
+| low-edge F1 taus in the cell | 1, institution 1 | `_taus.csv`, `operating_point == f1`, `tau_edge == low` |
+| institution 1 `f1_best_value` | 0.0027, degenerate | the same row |
+| institution 1 curve maximum, and 0 from tau 0.3 up | 0.0027, then 0.0 | `tau_curves["1"]` in the cell JSON |
+| high-edge F1 taus in the cell | 1, institution 2 | `_taus.csv`, `tau_edge == high` |
+| institution 2 `f1_best_value`, curve maximum, campaigns ever detected on validation | 0.0, 0.0, 0 over all 22 points | `_taus.csv` and `tau_curves["2"]` |
+| institution 2 budget points **defined** | 6 of 6 | `_taus.csv`, its six non-`f1` rows |
+| institution 2 validation oracle recall and reachable campaigns | 0.0 and 0 — the only such institution in the cell | `_ceilings.csv`, `eval_split == val`, `test_subset == all` |
+| F1 pooled mean over the 7 remaining, per split | val 0.082418, test 0.094388, stress 0.058271 | `_summary.csv`, the `f1` / subset-`all` rows |
+| the same with institution 2 entered at recall 0 | val 0.072115, test 0.082589, stress 0.050987 | the same rows plus one zero |
+| the relative change that would be | **−12.5% on every split** | arithmetic on the two above: adding a zero to seven values is a 7/8 scaling |
+| institution 1 test recall at `f1` — the highest of the seven | 0.2321 | `_summary.csv`, test / `f1` |
+| the F1 mean if institution 1 were dropped too (rejected option C) | 0.0714 | the same rows without institution 1 |
+| institution 2 test recall at `total_10`, and institutions beating it | 0.0714, and 1 — so second of the eight | `_summary.csv`, test / `total_10` |
+| degenerate curves in the cell, and the panel | **2 of 8** | `_taus.csv`, the eight `f1` rows |
+| the same count **as C1 shipped it** | 1 of 7 | `_pooled.csv` — the figure the 2026-11-18 denominator fix changes, pinned here so the change is visible rather than silent |
+
+The last two rows are the only place this script checks a figure **and** the
+superseded version of it. C1's artifacts were written before the denominator
+fix, so they still say 1 of 7; every cell from C2 onward says 2 of 8 for a
+cell shaped like this one. Both are correct for what they are, and keeping
+both checkable is what stops the change looking like a drift.
+
+## 6. SKIPPED — the ten figures not reproducible from a committed file
 
 All ten are **session B's**, reported into the README before its CSVs were
 committed. Session B covered targets 1.00 and 0.75 only; the complete report
@@ -185,7 +215,7 @@ of its per-institution `eval_seconds` is itself from the committed dry run,
 where it ranged 1.05-1.11 across four cells. Both become checkable here when
 B's CSVs are committed after session C3.
 
-## 6. Figures that are definitions, not measurements
+## 7. Figures that are definitions, not measurements
 
 Stated here so they are not looked for in a CSV. Each is checked by a test
 rather than by this script.
@@ -204,3 +234,7 @@ rather than by this script.
 | a cell with no F1 curve is out of both terms of the degenerate count | `test_degenerate_summary_excludes_cells_with_no_curve` |
 | `2PR/(P+R)` of the validation `f1` row is the curve maximum | `test_the_backfill_identity_holds_for_the_f1_point_on_validation`, and empirically by `scripts/verify_f1_backfill.py` |
 | a low-edge F1 tau is recorded, not a stop | `test_a_low_edge_f1_tau_is_recorded_under_the_2026_11_16_policy` |
+| a high-edge F1 tau gets one of three reasons, ceiling first | `test_the_three_reasons_a_high_edge_f1_tau_can_happen` — and `test_a_high_edge_on_a_budget_point_keeps_the_original_reason` for the scope |
+| the degenerate count is over all institutions, not the survivors | `test_a_degenerate_count_is_over_all_institutions_not_the_survivors`, end to end in `test_a_cell_excluded_for_degeneracy_is_still_counted_in_its_own_cell` |
+| a reloaded cell's high-edge reason is re-derived at assembly | `test_a_reloaded_cells_high_edge_reason_is_re_derived_at_assembly` |
+| a zero validation ceiling makes `f1_best_value` derivable as exactly 0.0 | `test_a_zero_validation_ceiling_backfills_f1_best_value_as_zero` |

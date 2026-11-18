@@ -2801,10 +2801,14 @@ print(f"\n{len(trained)} trained institution-cells, "
 print(gaps[["visibility_target", "seed", "institution",
             "f1_best_value_source"]].to_string(index=False) if len(gaps)
       else "  (none)")
-print("\nOne gap is EXPECTED and harmless: t100_s0 institution 0's F1 point "
-      "was rejected at the top of the grid, so no validation run exists at "
-      "that tau to reconstruct from. It is already excluded from every "
-      "pooled mean, and it is None rather than 0.")
+print("\nEXPECT NO GAPS. t100_s0 institution 0's F1 point was rejected at "
+      "the top of the grid, so no validation run exists at that tau - but "
+      "its validation oracle reaches NO campaign (n_oracle_reachable 0), "
+      "which forces campaign F1 to 0 at every tau for any scorer. Since "
+      "2026-11-18 the backfill derives it as exactly 0.0, recorded as "
+      "f1_best_value_source = derived_from_zero_val_ceiling. A gap here "
+      "now means the backfill was not re-run after that change: re-run it, "
+      "it re-evaluates nothing.")
 ```
 
 ```python
@@ -2860,7 +2864,7 @@ print(union[(union.eval_split == "test") & (union.test_subset == "all")]
 | Code | Meaning | What to do |
 |---|---|---|
 | **0** | every requested cell evaluated, no tau at a grid edge | nothing |
-| **3** | the report is complete and **written**, and some chosen tau sat at a grid edge. For C3 this is **expected**: `t100_s0` institution 0's F1 point was rejected at the grid top | read which cells; a **high** edge is excluded and named, a **low** edge is recorded and flagged |
+| **3** | the report is complete and **written**, and some chosen tau sat at a grid edge. For C3 this is **expected**: `t100_s0` institution 0 and `t100_s2` institution 2 both had their F1 point rejected at the grid top | read which cells, **and the reason printed beside each one** - since 2026-11-18 a high edge gives one of three, and only `TAU_BEYOND_GRID` means the grid is too short. Both observed so far are `VAL_UNREACHABLE`. A **high** edge is excluded and named, a **low** edge is recorded and flagged |
 | **3** with `STOPPING, and NOT recording` | only if `--stop-on-low-edge-tau` was passed | drop the flag — recording is the policy since 2026-11-16 |
 | non-zero, no report | an assertion in the input check or pre-flight, or the session hit 12 h | send the log; finished cells keep their files, so a re-run resumes |
 
@@ -2873,7 +2877,10 @@ print(union[(union.eval_split == "test") & (union.test_subset == "all")]
 * the boosters are untouched and were re-verified loadable at L = 48 with 66
   features;
 * `t100_s0`'s high-edge exclusion travels in its own rows and is re-derived at
-  assembly, so the complete report names it;
+  assembly, so the complete report names it - and since 2026-11-18 the
+  *reason* is re-derived there too, from the cell's own `*_ceilings.csv` and
+  `*_taus.csv`, so B's cells are reclassified without being re-run. C3 prints
+  every reason it moves;
 * the D6 relabelling changes a column name, not a number;
 * `f1_best_value` is **backfilled**, not re-measured — see C3c2. Re-running
   the two cells would cost ~1.5 h and produce the same numbers, differing only

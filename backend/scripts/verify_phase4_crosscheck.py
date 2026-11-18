@@ -563,6 +563,190 @@ def uncommitted_session_b(checker: Checker) -> None:
         )
 
 
+def session_c1(checker: Checker) -> None:
+    """C1's gate evidence: outcome (a), and the cell that produced the
+    2026-11-18 reason split.
+
+    Everything here reads the session-scoped artifacts committed on
+    2026-11-18. The figures are a single cell of the full data and are
+    reported as such - `t100_s2` alone, not a pooled Phase 4 result.
+    """
+    stem = "phase4_isolated_c1_t100_s2"
+    source = f"docs/reference/{stem}_*"
+    taus_path = REFERENCE / f"{stem}_taus.csv"
+    if not taus_path.exists():
+        checker.skip("session C1", "all", source, "file missing")
+        return
+
+    taus = pd.read_csv(taus_path)
+    f1 = taus[taus.operating_point == "f1"].set_index("institution")
+    how = "the f1 rows of t100_s2"
+
+    # --- outcome (a): one low edge, and it is degenerate -----------------
+    low = f1[f1.tau_edge.astype(str).str.lower() == "low"]
+    checker.check("C1 low-edge F1 taus", 1, int(len(low)), source, how)
+    checker.check("C1 low-edge institution", 1, int(low.index[0]), source, how)
+    checker.check(
+        "C1 institution 1 f1_best_value", 0.0027,
+        float(f1.loc[1, "f1_best_value"]), source, how, tol=5e-5,
+    )
+    checker.check(
+        "C1 institution 1 is degenerate", True,
+        bool(f1.loc[1, "f1_degenerate"]), source, how,
+    )
+
+    # --- the high edge, and why -----------------------------------------
+    high = f1[f1.tau_edge.astype(str).str.lower() == "high"]
+    checker.check("C1 high-edge F1 taus", 1, int(len(high)), source, how)
+    checker.check("C1 high-edge institution", 2, int(high.index[0]), source, how)
+    checker.check(
+        "C1 institution 2 f1_best_value", 0.0,
+        float(f1.loc[2, "f1_best_value"]), source, how,
+    )
+    checker.check(
+        "C1 institution 2 budget points defined", 6,
+        int(taus[(taus.institution == 2) & (taus.operating_point != "f1")]
+            .defined.astype(bool).sum()),
+        source, "the six budget rows of institution 2",
+    )
+
+    # --- the curve behind both, from the cell's own JSON -----------------
+    report = REFERENCE / f"{stem}.json"
+    if report.exists():
+        curves = json.loads(report.read_text(encoding="utf-8"))["cells"][0][
+            "tau_curves"
+        ]
+        how_c = "tau_curves in the cell JSON"
+        checker.check(
+            "C1 institution 2 curve points", 22, len(curves["2"]), source, how_c,
+        )
+        checker.check(
+            "C1 institution 2 curve maximum", 0.0,
+            max(r["campaign_f1"] for r in curves["2"]), source, how_c,
+        )
+        checker.check(
+            "C1 institution 2 campaigns ever detected on val", 0,
+            max(r["n_detected"] for r in curves["2"]), source, how_c,
+        )
+        checker.check(
+            "C1 institution 1 curve maximum", 0.0027,
+            max(r["campaign_f1"] for r in curves["1"]), source, how_c, tol=5e-5,
+        )
+        checker.check(
+            "C1 institution 1 curve is 0 from tau 0.3 up", 0.0,
+            max(r["campaign_f1"] for r in curves["1"] if r["tau"] >= 0.3),
+            source, how_c,
+        )
+
+    # --- the ceiling that drives the first-precedence reason -------------
+    ceilings = pd.read_csv(REFERENCE / f"{stem}_ceilings.csv")
+    val = ceilings[
+        (ceilings.eval_split == "val") & (ceilings.test_subset == "all")
+    ].set_index("institution")
+    how_v = "the val/all ceiling rows"
+    checker.check(
+        "C1 institution 2 val oracle recall", 0.0,
+        float(val.loc[2, "oracle_recall"]), source, how_v,
+    )
+    checker.check(
+        "C1 institution 2 val campaigns reachable", 0,
+        int(val.loc[2, "n_oracle_reachable"]), source, how_v,
+    )
+    checker.check(
+        "C1 institutions with a zero val ceiling", 1,
+        int((val.n_oracle_reachable == 0).sum()), source, how_v,
+    )
+
+    # --- the pooled F1 mean, and what including the cell would do --------
+    summary = pd.read_csv(REFERENCE / f"{stem}_summary.csv")
+    for split, claimed_in, claimed_out in (
+        ("val", 0.082418, 0.072115),
+        ("test", 0.094388, 0.082589),
+        ("stress", 0.058271, 0.050987),
+    ):
+        rows = summary[
+            (summary.split == split)
+            & (summary.test_subset == "all")
+            & (summary.operating_point == "f1")
+        ]
+        values = rows.campaign_recall.dropna()
+        how_p = f"the {split} f1 rows, subset all"
+        checker.check(
+            f"C1 F1 mean over 7 ({split})", claimed_in, float(values.mean()),
+            source, how_p, tol=1e-5,
+        )
+        checker.check(
+            f"C1 F1 mean with institution 2 at recall 0 ({split})",
+            claimed_out, float(values.sum() / (len(values) + 1)),
+            source, how_p + ", plus one zero", tol=1e-5,
+        )
+        checker.check(
+            f"C1 relative change from including it ({split})", -0.125,
+            float(values.sum() / (len(values) + 1)) / float(values.mean()) - 1,
+            source, "arithmetic on the two above", tol=1e-9,
+        )
+
+    # the two institution-level numbers the README quotes
+    test_f1 = summary[
+        (summary.split == "test") & (summary.test_subset == "all")
+        & (summary.operating_point == "f1")
+    ]
+    checker.check(
+        "C1 institution 1 test recall at f1 (highest of the seven)", 0.2321,
+        float(test_f1.set_index("institution").loc[1, "campaign_recall"]),
+        source, "the test f1 rows", tol=1e-4,
+    )
+    checker.check(
+        "C1 F1 mean if institution 1 were dropped too", 0.0714,
+        float(test_f1[test_f1.institution != 1].campaign_recall.sum() / 6),
+        source, "the test f1 rows without institution 1", tol=1e-4,
+    )
+    test_t10 = summary[
+        (summary.split == "test") & (summary.test_subset == "all")
+        & (summary.operating_point == "total_10")
+    ].set_index("institution")
+    checker.check(
+        "C1 institution 2 test recall at total_10", 0.0714,
+        float(test_t10.loc[2, "campaign_recall"]), source,
+        "the test total_10 rows", tol=1e-4,
+    )
+    checker.check(
+        "C1 institutions beating it at total_10 (so: second best)", 1,
+        int((test_t10.campaign_recall > test_t10.loc[2, "campaign_recall"]).sum()),
+        source, "the test total_10 rows",
+    )
+
+    # --- the degeneracy count, before and after the denominator fix ------
+    flags = {int(i): bool(v) for i, v in f1.f1_degenerate.items()}
+    checker.check(
+        "C1 degenerate curves in the cell (2 of 8)", 2,
+        sum(1 for v in flags.values() if v), source, how,
+    )
+    checker.check(
+        "C1 panel size the count is now over", 8, len(flags), source, how,
+    )
+    checker.check(
+        "C1 degenerate count as the cell SHIPPED it (1 of 7)", 1,
+        sum(1 for i, v in flags.items() if v and i != 2), source,
+        how + ", excluding institution 2 as the old denominator did",
+    )
+    pooled = pd.read_csv(REFERENCE / f"{stem}_pooled.csv")
+    shipped = pooled[
+        (pooled.operating_point == "f1") & (pooled.metric == "campaign_recall")
+    ]
+    checker.check(
+        "C1 n_institutions_in_mean at f1, as shipped", 7,
+        int(shipped.n_institutions_in_mean.iloc[0]), source,
+        "the pooled f1 rows as C1 wrote them",
+    )
+    checker.check(
+        "C1 n_f1_degenerate at f1, as shipped", 1,
+        int(shipped.n_f1_degenerate.iloc[0]), source,
+        "the pooled f1 rows as C1 wrote them - this is the figure the "
+        "2026-11-18 denominator fix changes to 2 of 8 from C2 onward",
+    )
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--json", action="store_true")
@@ -574,6 +758,7 @@ def main() -> int:
     float32_grid(checker)
     sample_runs(checker)
     dry_run(checker)
+    session_c1(checker)
     uncommitted_session_b(checker)
 
     frame = pd.DataFrame(checker.rows)

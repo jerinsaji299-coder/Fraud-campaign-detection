@@ -174,7 +174,7 @@ feature set only, three seeds, one lookback**. See
 | Stage | Description | Status |
 |---|---|---|
 | 4.0 | Institution-split data: per-institution views of every window, and the account features each institution can compute from its own view alone | **done** — `federation/views.py`, 31 tests, per-institution training loads measured on the sample, visibility cross-check exact on all 370 campaigns |
-| 4.1 | **The `isolated` condition**: each institution trained and scoring on its own view alone, with its **own** oracle ceiling per target, and the two pooled numbers (per-institution mean, and the union over institutions) | **built and tested** — `federation/isolated.py`, 55 tests, backend 463 passed / 25 skipped; `train-isolated` and `evaluate-isolated` runner subcommands, resumable. Full-data **session A done 2026-11-15** (96 boosters, exit 0) and **session B 2 of 12 cells**: B wrote `t100_s0` and `t100_s1` — one cell excluded at the grid top — then **stopped on the low-edge F1 tau rule at `t100_s2`**, a pre-registered stop condition now [changed to record and flag](#decided-a-low-edge-f1-tau-is-recorded-and-flagged--2026-11-16). **B's result: the union's ceiling equals the centralized ceiling exactly, and the union still recovers 0.16-0.26 less of it — the deficit is scoring, not visibility** ([session B](#the-full-data-run-session-b-the-ceiling-holds-the-recall-does-not--done-2026-11-15)). Sessions **C1-C3**, the ten remaining cells and the complete report, are next. §[stage 4.1](#stage-41-the-isolated-condition--approved-and-implemented-2026-11-14) |
+| 4.1 | **The `isolated` condition**: each institution trained and scoring on its own view alone, with its **own** oracle ceiling per target, and the two pooled numbers (per-institution mean, and the union over institutions) | **built and tested** — `federation/isolated.py`, 61 tests, backend 469 passed / 25 skipped; `train-isolated` and `evaluate-isolated` runner subcommands, resumable. Full-data **session A done 2026-11-15** (96 boosters, exit 0) and **session B 2 of 12 cells**: B wrote `t100_s0` and `t100_s1` — one cell excluded at the grid top — then **stopped on the low-edge F1 tau rule at `t100_s2`**, a pre-registered stop condition now [changed to record and flag](#decided-a-low-edge-f1-tau-is-recorded-and-flagged--2026-11-16). **B's result: the union's ceiling equals the centralized ceiling exactly, and the union still recovers 0.16-0.26 less of it — the deficit is scoring, not visibility** ([session B](#the-full-data-run-session-b-the-ceiling-holds-the-recall-does-not--done-2026-11-15)). Sessions **C1-C3**, the ten remaining cells and the complete report, are next. §[stage 4.1](#stage-41-the-isolated-condition--approved-and-implemented-2026-11-14) |
 | 4.2 | **The `fedavg` condition**: the FedAvg analogue for a tree ensemble is **score averaging** — each institution scores its own view with all K boosters, equal weights, nothing retrained | **built and tested** 2026-11-15 — `federation/fedavg.py`; the design question that moved here from 4.1 is answered in [stage 4.2](#stage-42-the-fedavg-analogue-for-a-tree-ensemble--implemented-2026-11-15). No numbers yet |
 | 4.3 | **The `evidence` and `fedavg_evidence` conditions**: boundary accounts receive the window node features computed across the views that hold them; boosters retrained on augmented views; evaluated with own-model scoring (4.3a) and score averaging (4.3b) | **built and tested** 2026-11-15 — `federation/evidence.py`. Under this definition the ceiling cannot move, which is what keeps every comparison paired; see [stage 4.3](#stage-43-boundary-account-evidence--implemented-2026-11-15). No numbers yet |
 | 4.4 | **The `centralized` arm re-reported in the Phase 4 cell grid**, as the `K = 1` case of a per-institution condition | **built and tested** 2026-11-15 — `federation/centralized.py`. **One open decision blocks its number**: which model seed(s) it uses. See [O1](#o1-which-model-seeds-the-centralized-arm-uses) |
@@ -2593,7 +2593,7 @@ the point:
 
 | The chosen tau sits at | What it means | What happens |
 |---|---|---|
-| the **top** of the grid | the optimum lies **beyond** the grid, so this operating point was **not found** | the cell is **undefined**: excluded from both pooled means, listed by `(institution, operating point)` with its **rejected tau** and the reason, and **never scored 0**. The run finishes and exits 3 |
+| the **top** of the grid | **one of three things, and the report now says which** ([2026-11-18](#decided-a-high-edge-f1-tau-has-three-reasons-and-only-one-of-them-is-a-grid-problem--2026-11-18)): the optimum lies beyond the grid; or the curve is flat so the tie-break returned the top and no optimum exists; or no campaign is reachable on validation at all, so no threshold was selectable by any rule | the cell is **undefined**: excluded from both pooled means, listed by `(institution, operating point)` with its **rejected tau** and the reason, and **never scored 0**. The run finishes and exits 3. The treatment is the same for all three; only the sentence differs |
 | the **bottom**, for the **F1** point | the most sensitive threshold on the grid is still the best one, so the optimum may lie **below** it | **recorded at that tau, flagged `tau_at_low_edge`, and kept in both pooled means**, with `f1_best_value` and `f1_degenerate` beside it ([policy changed 2026-11-16](#decided-a-low-edge-f1-tau-is-recorded-and-flagged--2026-11-16); it previously stopped the run unrecorded, and `--stop-on-low-edge-tau` restores that). The run finishes and exits 3 for the edge |
 | the **bottom**, for a **budget** point | the most sensitive threshold on the grid already fits the budget | **nothing.** This is a loose budget, not a missing optimum, and it is neither flagged nor excluded |
 
@@ -2618,6 +2618,13 @@ A high-edge cell is excluded for exactly the reason an unaffordable budget is,
 and is reported the same way: *a detector that could not be operated at a
 point was not measured at that point, and a mean that silently absorbs it as
 0 is reporting a measurement that was never made.*
+
+*That reasoning survives the 2026-11-18 split of the reason into three, but
+one of the three — a **degenerate** curve whose tie-break happened to return
+the grid top — is the same phenomenon as a low-edge degenerate tau, which is
+**recorded**. The asymmetry is left standing and [named](#decided-a-high-edge-f1-tau-has-three-reasons-and-only-one-of-them-is-a-grid-problem--2026-11-18)
+rather than resolved, because resolving it either way would move a published
+number.*
 
 **Six more points at the top of the grid — approved 2026-11-14 and applied,
 before the full-data run and not in response to any result.** The extension
@@ -2663,9 +2670,12 @@ serve XGBoost, the GNN and the four federated conditions at all.
 `score >= tau`, a tau of 1.0 would keep whichever scores happen to round to
 exactly 1.0 in float32 — which depends on the arithmetic, the library build
 and the hardware, and so is not reproducible. Stopping at `1 - 1e-7` keeps
-every threshold meaningful *and* reproducible, and keeps "the chosen tau is at
-the top of the grid" meaning what the policy above says it means: the optimum
-is beyond what can be resolved, so the operating point was not found.
+every threshold meaningful *and* reproducible, so that when a chosen tau does
+sit at the top of the grid, "beyond what can be resolved" is a real
+possibility rather than an artefact of a grid that stopped early. It is not
+the **only** possibility — on the full data it has so far not been the actual
+one in either observed case — which is why the reason is
+[now derived rather than assumed](#decided-a-high-edge-f1-tau-has-three-reasons-and-only-one-of-them-is-a-grid-problem--2026-11-18).
 
 #### What was built
 
@@ -2673,7 +2683,7 @@ is beyond what can be resolved, so the operating point was not found.
 |---|---|
 | `federation/isolated.py` | the condition: the masking scorer, per-institution training, the per-institution oracle ceiling, the union (outcomes, and the deduplicating cluster pass), the two pooled means, the seven operating points, and `run_cell`, which both runners call so the local and Kaggle reports come from one code path |
 | `constants.PHASE4_SEEDS`, `constants.PHASE4_LOOKBACK_H` | the frozen scope **in code** — `[0, 1, 2]` and `48` — so a runner cannot drift from this README. `evaluate-isolated` refuses more than one lookback outright |
-| `tests/test_federation_isolated.py` | **55 tests**, including the grid-edge policy at both one-of-eight and eight-of-eight, the 2026-11-16 low-edge recording policy, the reload path's carry-over of a cell's exclusions, the budget-binding audit, the primary-point designation and the pooled spread's denominator and tie-breaking; backend suite **463 passed, 25 skipped** |
+| `tests/test_federation_isolated.py` | **61 tests**, including the grid-edge policy at both one-of-eight and eight-of-eight, the 2026-11-16 low-edge recording policy, the 2026-11-18 three-reason split and its re-derivation on a reloaded cell, the degeneracy count over the whole panel, the reload path's carry-over of a cell's exclusions, the budget-binding audit, the primary-point designation and the pooled spread's denominator and tie-breaking; backend suite **469 passed, 25 skipped** |
 | `scripts/run_isolated.py` | the condition on the 1% sample, for development |
 | `scripts/run_phase4_chain.py` | the whole Phase 4 chain on the 1% sample: 4.1 → 4.2 → 4.3a/b → 4.4 → compare-conditions, from scratch. The dry run that has to pass before anything is run on Kaggle |
 | `scripts/make_demo_bundle.py` | exports the live panel's bundle: the offered windows, the ground truth, the account → institution map and the 8 boosters of one `(target, seed)`. Picks the demo campaign by the stated rule and records the audit trail |
@@ -3503,6 +3513,139 @@ Why C1 runs alone rather than folded into C2: ~45 minutes buys a checkpoint on
 a policy that has never executed on real data, and losing that checkpoint to
 save the 45 minutes would be a bad trade.
 
+#### C1's verdict: outcome (a), and the cell next to it — 2026-11-18
+
+**C1 returned outcome (a).** `t100_s2` institution 1 is the only low-edge F1
+tau, `f1_best_value` **0.0027**, and its validation curve is
+0.0027 / 0.0022 / 0.0019 and then exactly 0.0 from tau 0.3 upward. The
+mechanism is the one the recording policy was written for: a flat ~0
+objective, an argmax that carries no information, the floor selected because
+something has to be. The diagnosis in this README holds and C2 proceeds. The
+nine artifacts are committed as
+[`docs/reference/phase4_isolated_c1_t100_s2.*`](docs/reference/phase4_isolated_c1_t100_s2.md).
+
+**The cell beside it is what C1 actually taught us.** Institution **2** of the
+same cell has campaign F1 **exactly 0.0 at all 22 thresholds**. Its tie-break
+therefore ran out of keys and fell on `best_tau`'s fourth — *"then the higher
+tau"* — putting the argmax at the **top** of the grid, where it was rejected
+as a high edge and excluded from the F1 pooled mean, leaving that mean over
+**7 of 8**. The reason recorded beside it read *"the chosen tau is at the top
+of the grid: the optimum lies beyond it"*, which is false for this cell: there
+is no optimum beyond the grid and none anywhere.
+
+**The same degeneracy, resolved in opposite directions by which end of a flat
+line `max` happens to return.** Institution 1's curve is flat *enough* to be
+degenerate but still ordered, so its argmax is genuine and lands at the floor,
+and it is **recorded**. Institution 2's is exactly flat, so its argmax is the
+tie-break and lands at the top, and it is **excluded**. Two cells, one
+phenomenon, opposite treatments.
+
+| | institution 1 | institution 2 |
+|---|---|---|
+| validation curve | 0.0027 at the floor, 0 from tau 0.3 | 0.0 at every one of the 22 points |
+| what chose the tau | the argmax — a real, if tiny, ordering | the tie-break — nothing to order |
+| edge | low | high |
+| `f1_degenerate` | true | true |
+| treatment | **recorded** and flagged | **excluded** |
+
+#### DECIDED: a high-edge F1 tau has three reasons, and only one of them is a grid problem — 2026-11-18
+
+**No number, threshold, matching rule or exclusion changes.** Every cell that
+was excluded is still excluded, at the same tau, out of the same means. What
+changes is the sentence beside it, plus one diagnostic count. Approved by the
+user after the analysis below; implemented at **assembly time**, so no cell is
+re-evaluated.
+
+**The first-precedence reason, and the better diagnosis.** Institution 2's
+**validation oracle ceiling is 0.0**, with `n_oracle_reachable = 0`. On the
+split the threshold is chosen on, that institution can see no campaign well
+enough for a *perfect* detector to reach one. The flat curve is not a property
+of the booster at all — it is forced by the split, for any scorer. So the
+first thing the report asks is not "was the curve flat" but "was there
+anything there to find":
+
+| precedence | condition | what the report says |
+|---|---|---|
+| 1 | val `n_oracle_reachable == 0` | `VAL_UNREACHABLE` — *no campaign is reachable on validation for this institution, so no threshold is selectable by any rule* |
+| 2 | `f1_degenerate`, non-zero ceiling | `F1_CURVE_DEGENERATE` — *the curve is flat at or below the degeneracy epsilon: the argmax is the tie-break, which returns the highest tau, so no optimum exists rather than lying beyond the grid* |
+| 3 | otherwise | `TAU_BEYOND_GRID`, **unchanged** |
+
+**The precedent is already in the code.** `pooled_mean`'s docstring records
+that a cell *"whose own ceiling is 0 is out of the relative mean only"* — the
+same fact about the same kind of cell, for the same reason. This extends it to
+the F1 point, where a zero ceiling does not merely make a ratio undefined but
+makes the threshold unselectable. The exclusion stops being an accident of the
+tie-break's direction and becomes a statement about the selection split.
+
+**Only the F1 point.** `select_tau_for_budget` returns the lowest *affordable*
+tau, so a budget point at the top of the grid is a statement about the budget
+and not about any curve's maximum. Institution 2 is the proof from the other
+side: zero validation ceiling, and **all six of its budget points defined**.
+
+**It applies to the cells already written, without re-running them.** Both
+inputs survive the per-cell CSV round trip — `n_oracle_reachable` in
+`*_ceilings.csv`, `f1_degenerate` in `*_taus.csv`. The **curve** does not: it
+lives only in the JSON of the session that evaluated the cell, and a reloaded
+cell contributes only its seven CSVs, so a rule keying on the curve could not
+have classified session B's cells at all. The session that assembles the
+report re-derives the reason for every cell it reloads and prints what moved.
+
+**Confirmed for session B from its own ceilings**, supplied by the user:
+`t100_s0` institution 0 is val `oracle_recall` 0.0, `n_oracle_reachable` 0 —
+the **same** case as `t100_s2` institution 2, not an optimum beyond the grid.
+`t100_s1` has no zero validation ceiling anywhere, its lowest being
+institutions 3 and 4 at one reachable campaign, which is consistent with its
+F1 mean being over all eight. **Both high-edge exclusions observed on the full
+data are the val-unreachable case**, and neither is the case the original
+sentence described.
+
+##### Rejected, and why
+
+| | Rejected policy | Reason |
+|---|---|---|
+| (B) | record and flag, symmetric with the low edge | the only honest version **requires a re-run**: the curve gives the validation numbers, but val/test/stress across four subsets with bootstrap CIs at tau 0.9999999 was never computed. ~46 min a cell, to publish a number produced by a threshold the data did not choose |
+| (C) | exclude every degenerate F1 cell, at either edge | internally consistent, and it **reverses the approved 2026-11-16 decision**. It would drop institution 1 from `t100_s2`'s F1 mean — the *highest* test recall of the seven, 0.2321 — taking the mean from 0.0944 to 0.0714. A changed result to fix a label |
+
+##### The count now covers the panel, not the survivors
+
+`degenerate_summary` was computed over the institutions left **in the mean**.
+So an institution excluded *for* its degeneracy took its own flag with it:
+`t100_s2`'s pooled F1 row read **1 of 7** over a cell holding **2 degenerate
+curves out of 8**, and the one it omitted was the one whose threshold the flag
+exists to warn about. A flag that hides the cell it exists to expose is worse
+than a count that moves, so the count is now over **all institutions in the
+cell** and `n_institutions` carries the panel size beside it, so the
+denominator is never inferred from the number of survivors. `binding_summary`
+is unchanged and still counts over the mean's own cells, which is correct for
+it: a budget binds or does not bind for the cells being averaged.
+
+This is the one number the change moves, and it is a diagnostic rather than a
+result.
+
+##### Two consequences, recorded beside the pooled numbers
+
+**1. The F1 point and the budget points are means over different institution
+sets.** The F1 objective needs a campaign that is reachable on validation; a
+budget constraint does not. `t100_s2` institution 2 is out of the F1 mean, in
+all six budget means, and at `total_10` on test the **second best of the
+eight** at 0.0714 — a working detector that lost its threshold, not a weak
+one. **`total_10` is therefore the primary point with complete membership**,
+and a reader comparing an F1 mean against a budget mean within one cell is
+comparing over two different panels. `n_institutions_in_mean` and
+`undefined_institutions` beside every row say which.
+
+**2. The exclusion raises the isolated arm's F1 mean, and the direction is
+stated rather than left implicit.** Entering the excluded institution at
+recall 0 would move `t100_s2`'s F1 mean from **0.0944 to 0.0826** on test,
+**0.0824 to 0.0721** on validation and **0.0583 to 0.0510** on stress —
+**12.5% relative on every split**, since adding a zero to seven values is a
+7/8 scaling. The exclusion is kept anyway, because the alternative is to
+publish a number produced by `best_tau`'s tie-break rather than by the data:
+the only tau the F1 rule could hand that cell is the top of the grid, where it
+raises no alarms at all. An overstated isolated floor makes federation look
+**less** useful than it is, which is the safer way to be wrong here — but it
+is an overstatement, and both reports now say so where the number is read.
+
 #### `t100_s0` and `t100_s1` do not need re-running — the value is backfillable
 
 Both cells were written before `f1_best_value` existed. **They stand as they
@@ -3532,13 +3675,25 @@ cd backend
 python scripts/kaggle/kaggle_runner.py backfill-f1-value   # re-runs nothing
 ```
 
-**What cannot be backfilled, and why it costs nothing:** `t100_s0`
-institution 0's F1 point was **rejected at the top of the grid**, so no
-validation evaluation was ever run at that tau and there is nothing to
-reconstruct from. It gets `None` — never 0 — and it is already excluded from
-every pooled mean by the high-edge policy, so the gap is in a cell that is not
-counted either way. `f1_best_value_source` records which of the three cases
-each row is.
+**What was called unbackfillable is derived instead — corrected
+2026-11-18.** `t100_s0` institution 0's F1 point was rejected at the top of
+the grid, so no validation evaluation was run at that tau and the *summary
+row* holds nothing to reconstruct from. But its **validation oracle reaches no
+campaign** (`n_oracle_reachable` 0, in `*_ceilings.csv`, which every cell
+writes), and that forces campaign recall to 0 at every tau for any scorer — so
+campaign F1 is 0 at every tau and the maximum over the curve is exactly
+**0.0**. The backfill now records that as `derived_from_zero_val_ceiling`,
+labelled so it can never be read as a measurement. An undefined F1 point with
+a **non-zero** validation ceiling still gets `None`, never 0.
+
+*The earlier claim that the gap "costs nothing" was true when nothing keyed on
+the value, and is not true now.* `f1_degenerate` decides [which of three
+reasons](#decided-a-high-edge-f1-tau-has-three-reasons-and-only-one-of-them-is-a-grid-problem--2026-11-18)
+the exclusion is given, and every pooled row counts degeneracy over all
+institutions — so a missing value would put the cell back outside a
+denominator it belongs in, immediately after the denominator was widened to
+include it. `f1_best_value_source` records which of the four cases each row
+is.
 
 **The assembly session refuses to write a report over cells missing the
 column**, naming them and the command above, because a missing value would be
@@ -3556,8 +3711,8 @@ with the estimates below and no GPU quota consumed:
 | **A** | `train-isolated` — 96 boosters | the IBM dataset | 2.5-4 h | **done, 2.25 h, exit 0** |
 | **B** | `evaluate-isolated --targets 1.0,0.75` — 6 cells | dataset + A | **2.5-5.5 h** | **2 of 6 cells written** (`t100_s0`, `t100_s1`), then **stopped on the low-edge F1 tau rule at `t100_s2`**, derived from its own `eval_seconds`. Its exit code was never observed; the earlier "exit 3" was inferred and is withdrawn |
 | **C** | **superseded.** Its input check asserted six of B's cells and failed in 44s, correctly | — | — | replaced by sessions **C1-C3** in [§5n](backend/scripts/kaggle/run_on_kaggle.md) |
-| **C1** | `evaluate-isolated --targets 1.0 --seeds 2` | dataset + A | **~0.8 h** | next — the cell B stopped on, run alone so the policy change is observed on its own |
-| **C2** | `evaluate-isolated --targets 0.75,0.5` — 6 cells | dataset + A | **~4.6 h** | then |
+| **C1** | `evaluate-isolated --targets 1.0 --seeds 2` | dataset + A | **~0.8 h** | **done 2026-11-18 — [outcome (a)](#c1s-verdict-outcome-a-and-the-cell-next-to-it--2026-11-18), the pre-registered verdict that proceeds.** Institution 1 low-edge and degenerate as diagnosed; institution 2 excluded at the grid top with a curve flat at 0 and a **zero validation ceiling**, which is what the 2026-11-18 reason split came out of |
+| **C2** | `evaluate-isolated --targets 0.75,0.5` — 6 cells | dataset + A | **~4.6 h** | **running** |
 | **C3** | `evaluate-isolated` (plain) — 3 cells **and** the report over all twelve | dataset + A + B + C1 + C2 | **~2.5 h** | last |
 
 Session **C3** will exit **3** as well, and that is correct rather than a new
@@ -3611,6 +3766,11 @@ rather than the run.
 
 | Date | Decision | Reason | Evidence |
 |---|---|---|---|
+| 2026-11-18 | **DECIDED: a high-edge F1 tau is given one of THREE reasons, and the first-precedence one is a zero validation ceiling.** No exclusion, tau or pooled mean changes; the sentence beside each exclusion does, plus one diagnostic count. (D) val `n_oracle_reachable == 0` -> *no threshold is selectable by any rule*; (A) `f1_degenerate` with a real ceiling -> *the argmax is the tie-break, so no optimum exists*; otherwise `TAU_BEYOND_GRID`, unchanged. Rejected: **(B)** record-and-flag symmetric with the low edge, **(C)** exclude every degenerate F1 cell | C1 returned `t100_s2` institution 2 excluded under *"the optimum lies beyond it"* with a validation curve identically 0.0 at all 22 thresholds — a cell for which no optimum lies beyond the grid because none exists. Its **validation oracle reaches no campaign at all** (`n_oracle_reachable` 0), so the flat curve is forced by the split rather than being a property of the booster: on test the same institution detects 4 of 56 at its budget tau, second best of the eight. The precedent is already in `pooled_mean`, which drops a zero-ceiling cell from the relative mean for the same reason. **(B)** would need a ~46 min re-run per cell to publish a number chosen by `best_tau`'s tie-break; **(C)** reverses the approved 2026-11-16 policy and would drop institution 1 — the highest test recall of the seven — taking `t100_s2`'s F1 mean from 0.0944 to 0.0714. Keyed on the ceiling rather than the curve because the ceiling survives a cell's CSV round trip and the curve does not, so session B's cells can be reclassified without re-running them | §[DECIDED: a high-edge F1 tau has three reasons](#decided-a-high-edge-f1-tau-has-three-reasons-and-only-one-of-them-is-a-grid-problem--2026-11-18); `isolated.high_edge_reason`; `_reclassify_high_edge_reasons`; `test_the_three_reasons_a_high_edge_f1_tau_can_happen` |
+| 2026-11-18 | **`degenerate_summary` counts over ALL institutions in the cell, not over the survivors of the mean.** `t100_s2`'s pooled F1 row goes from **1 of 7** to **2 of 8**; `n_institutions` is added beside it. The one number this change moves | An institution excluded *for* its degeneracy took its own flag out of the count with it, so the figure that exists to warn a reader about flat-curve cells omitted precisely the cell it was warning about. A flag that hides the cell it exists to expose is worse than a count that moves. `binding_summary` is deliberately **not** changed: a budget binds or does not bind for the cells actually being averaged, which is the question it answers | §[the count now covers the panel](#the-count-now-covers-the-panel-not-the-survivors); `degenerate_summary`; `test_a_degenerate_count_is_over_all_institutions_not_the_survivors` |
+| 2026-11-18 | **CORRECTED: `t100_s0` institution 0's missing `f1_best_value` does NOT cost nothing, and it is derivable after all** | It was recorded as a harmless gap because the cell is excluded from every pooled mean either way. True when nothing keyed on the value; false once `f1_degenerate` decides which of three reasons the exclusion is given and the degeneracy count covers all eight institutions — a `None` would put the cell straight back outside a denominator that had just been widened to include it. It is also recoverable: a zero validation oracle ceiling forces campaign F1 to 0 at every tau for any scorer, so the curve maximum is exactly 0.0 by arithmetic on the ceiling. Recorded as `derived_from_zero_val_ceiling`, never as a measurement | §[the value is backfillable](#t100_s0-and-t100_s1-do-not-need-re-running--the-value-is-backfillable); `command_backfill_f1_value`; `test_a_zero_validation_ceiling_backfills_f1_best_value_as_zero` |
+| 2026-11-18 | **RECORDED, not fixed: the isolated arm's F1 mean is raised 12.5% relative on every split by the high-edge exclusion, and the F1 and budget points are means over different institution sets** | Both are consequences of keeping the exclusion, and both are stated where the numbers are read — in `phase4_isolated.md` beside the pooled table, not only here. The direction matters: an overstated isolated floor makes federation look *less* useful than it is, which is the safer way to be wrong, but it is still an overstatement. The differing panels matter because `f1` needs a campaign reachable on validation and a budget constraint does not, so **`total_10` is the primary point with complete membership** and an F1-vs-budget comparison inside one cell is a comparison across two panels | §[two consequences](#two-consequences-recorded-beside-the-pooled-numbers); the pooled-table preamble in `command_evaluate_isolated` |
+| 2026-11-18 | **C1's artifacts are filed session-scoped as `phase4_isolated_c1_t100_s2.*`** | They are the gate evidence for the pre-registered outcome (a) and are worth keeping, but under their own names they would collide with session C3's report over all twelve cells, which takes the plain `phase4_isolated.*` names | `docs/reference/`; §[Artifacts](#artifacts) |
 | 2026-11-16 | **The demo failure of 2026-11-15 was a stale backend, not a code defect — and four demo-readiness fixes were applied, all of them unable to change a number** | A `uvicorn --reload` worker started 2026-11-13 still held `127.0.0.1:8000`: 24 MB resident and ~36 CPU-hours burnt, accepting connections and answering none. `fetch` had no deadline, so the status chip sat on "Checking API" forever with no error to render. Killing it and starting a clean backend restored everything; `/api/health` then answered in 90 ms with `core_artifacts_available: true`. Fixed with it: a 20 s request deadline (verified against a listener that accepts and never answers — the chip now reaches "API unreachable" in 21.6 s instead of never), the page `<title>` (was `frontend`), 270 Cytoscape `institutionLabel` warnings (scoped the mapper to `node[institutionLabel]`, which is what the warning itself recommends), and the blank panel on `/campaigns/abc`. Each is an error path or a label; none can change a displayed figure | §[Testing](#testing) 2026-11-16 walk; `docs/demo_checklist.html`; `frontend/src/api/client.ts` `REQUEST_TIMEOUT_MS` |
 | 2026-11-16 | **The live panel's presentation is rebuilt in four steps, each committed separately: it opens where the two modes differ, shows both at once, collapses its apparatus, and leads its cluster tables with the match** | The panel was not demonstrable. It opened on `2022-09-06 18:00:00` / I0 — one campaign edge in the window, missed by both modes — so a viewer's first impression was *missed / 0% / 0% / no lead time*, and the comparison the panel exists to make required flipping a control and remembering the previous number. The opening setting is taken from the bundle's own `suggested_settings` rather than hard-coded, so it survives a rebuilt bundle, and a bundle with no such setting is reported on the page instead of silently shown. Nothing that qualifies a claim was collapsed — only the derivations — and the cluster tables truncate presentation without dropping a row. Committed as four separate changes so the work could be stopped after any of them | §[the live detection panel](#the-live-detection-panel--implemented-2026-11-15); `openingSetting` and `Comparison` in `LiveDemoPage.tsx`; three new tests in `liveDemo.render.test.tsx` |
 | 2026-11-16 | **The aggregate card becomes a deliberate empty state, and the endpoint will not serve a development artifact at all.** Chosen by the user over both the status quo and repairing the 500 as-is. `demo_compare_csv` now points at `artifacts/phase4/phase4_compare.csv`, which the finished sweep will write; `aggregate_table` refuses any `*_dev` path whatever it is pointed at; non-finite floats serialise as `null` so the endpoint cannot 500 again | A card reading "Could not reach the API. Is the backend running?" beside a healthy backend is the worst thing that can be on screen during a talk, and repairing the 500 as-is would have put **1%-sample** differences under the heading "And how often does it hold?" next to a live panel — the exact confusion this project exists to avoid. An empty state that says *why* it is empty is the same posture the Results page already takes, and it is true: the sweep is still running. The refusal is on the path rather than on the data so that re-wiring the server cannot leak the sample numbers, and it reads the repo's own `*_dev` naming rule rather than inventing a provenance marker | §[Artifacts](#artifacts); `demo_service.is_development_artifact`; `test_a_development_comparison_is_refused_not_displayed`; `test_a_nan_in_the_comparison_cannot_500_the_endpoint` |
@@ -4403,6 +4563,12 @@ project-root/
       phase4_chain_sample.{md,json}   the Phase 4 dry run on the 1% sample, DEVELOPMENT ONLY: evidence the chain runs end to end and its checks hold
       phase4_compare_sample.csv       every paired contrast from that dry run, with its denominators and seed-noise flags (sample, not a result)
       phase4_compare_sample_headline.csv  the primary-point view of the same
+      --- phase 4 stage 4.1, session C1 (2026-11-18): the gate evidence ---
+      phase4_isolated_c1_t100_s2.{md,json}  the one cell C1 evaluated, and the validation tau curves behind outcome (a)
+      phase4_isolated_c1_t100_s2_taus.csv   the chosen taus, f1_best_value and f1_degenerate per institution
+      phase4_isolated_c1_t100_s2_ceilings.csv  the per-institution oracle ceilings - institution 2's val ceiling of 0 is the whole 2026-11-18 decision
+      phase4_isolated_c1_t100_s2_{institutions,summary,pooled,union,outcomes}.csv  the rest of the cell, as written
+      (session-scoped on purpose: C3's report over all twelve cells takes the plain phase4_isolated.* names)
   backend/
     requirements.txt               Python dependencies: pandas, numpy, pyarrow, pyyaml, pytest, fastapi, uvicorn, pydantic
     pyproject.toml                 setuptools packaging for `fraudcamp` (src/ layout) + pytest `fulldata` marker
@@ -5857,7 +6023,7 @@ campaign_id)`:
     stubbed in these tests.
 
 **Current pass status (2026-11-16):**
-- Backend: `python -m pytest tests/` from `backend/` → **463 passed, 25
+- Backend: `python -m pytest tests/` from `backend/` → **469 passed, 25
   skipped**, 0 failed. The skips are the full-data suite, which needs the
   dataset that only exists on Kaggle; all 24 of its numbers passed there on
   2026-10-08/09.
@@ -6280,6 +6446,47 @@ Tagged points in the repository, newest first. Check one out with
 
 ## Changelog
 
+- **2026-11-18 (C1 returns outcome (a); a high-edge exclusion learns to say
+  which of three things happened)** — session C1 evaluated `t100_s2` and
+  returned the pre-registered verdict that proceeds: institution 1's F1 tau is
+  at the floor with `f1_best_value` 0.0027 and a curve that is 0 from tau 0.3
+  upward, exactly the flat objective the 2026-11-16 recording policy was
+  written for. C2 is running. The nine artifacts are committed as
+  `docs/reference/phase4_isolated_c1_t100_s2.*`, session-scoped so C3's
+  twelve-cell report can take the plain names.
+
+  The cell beside it is the finding. Institution 2 has campaign F1 **exactly
+  0.0 at all 22 thresholds**, so `best_tau`'s last tie-break key — *the higher
+  tau* — put its argmax at the top of the grid, where it was excluded with the
+  reason *"the optimum lies beyond it"*. That sentence is false for the cell:
+  there is no optimum beyond the grid and none anywhere. The reason is now
+  derived rather than assumed, in three cases with the **validation ceiling
+  first** — institution 2's validation oracle reaches no campaign at all, so
+  no threshold is selectable for it by any rule, and the flat curve is forced
+  by the split rather than being a property of the booster. The same
+  institution detects 4 of 56 campaigns on test at its budget tau, the second
+  best of the eight. Session B's `t100_s0` institution 0 is the same case,
+  confirmed from its own ceilings.
+
+  **No exclusion, tau, threshold, matching rule or pooled mean changes.**
+  Implemented at assembly time, so nothing is re-run: the two inputs the rule
+  needs survive a cell's CSV round trip, and the session that assembles the
+  report re-derives the reason for every cell it reloads and prints what
+  moved. One diagnostic count does move, with approval — `degenerate_summary`
+  now counts over all institutions in the cell rather than the survivors of
+  the mean, so `t100_s2` reads **2 of 8** where it read 1 of 7, the omitted
+  cell having been the very one the flag exists to warn about.
+
+  Two consequences are now stated beside the pooled numbers rather than left
+  implicit: the F1 point and the budget points are means over **different
+  institution sets**, so `total_10` is the primary point with complete
+  membership; and the exclusion **raises** the isolated arm's F1 mean by
+  **12.5% relative on every split**, which is accepted because the
+  alternative is to publish a number produced by a tie-break. The claim that
+  `t100_s0` institution 0's missing `f1_best_value` "costs nothing" is
+  withdrawn, and the value is derived from its zero validation ceiling.
+  Backend **469 passed, 25 skipped**.
+
 - **2026-11-17 (the live panel says when a setting is an agreeing one)** — a
   small addition to yesterday's rebuild. When the viewer moves off one of the
   settings the bundle lists, an inline note above the comparison reads *"At
@@ -6388,7 +6595,7 @@ Tagged points in the repository, newest first. Check one out with
   *Decided unchanged:* the CYCLE layout. It alters what is displayed and the
   run sheet's wording already handles it.
 
-  Backend **463 passed, 25 skipped**; frontend 52 passed, lint and build
+  Backend **469 passed, 25 skipped**; frontend 52 passed, lint and build
   clean.
 
 - **2026-11-16 (demo readiness: the failure diagnosed, four fixes, and the
